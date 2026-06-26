@@ -1,0 +1,161 @@
+/* Convoy — parties/convoys: invites, membership, chat.
+   Live mode delegates to the server (js/net.js); solo mode simulates locally. */
+(function () {
+  'use strict';
+  var A = (window.App = window.App || {});
+  var U = A.util, S = A.state, ST = A.store, D = A.data;
+
+  var MAX_MEMBERS = 6;
+
+  function isLive() { return A.net && A.net.isLive(); }
+
+  /* ================= create ================= */
+  function create(name, emoji) {
+    if (isLive()) {
+      A.net.sendCreate((name && name.trim()) || U.pick(D.CONVOY_NAMES), emoji || 0);
+      return;
+    }
+    S.party = {
+      id: U.uid(),
+      name: (name && name.trim()) || U.pick(D.CONVOY_NAMES),
+      emoji: (emoji != null && emoji !== '') ? emoji : 0,
+      isLeader: true,
+      members: [],
+      chat: []
+    };
+    systemMsg('Convoy created — invite riders from the Nearby tab');
+    ST.emit('party');
+    A.ui.toast('Convoy "' + S.party.name + '" created', 'success');
+  }
+
+  function ensure() {
+    if (!S.party) {
+      S.party = {
+        id: U.uid(),
+        name: (S.profile.name || 'My') + "'s convoy",
+        emoji: 0,
+        isLeader: true,
+        members: [],
+        chat: []
+      };
+      systemMsg('Convoy created');
+      ST.emit('party');
+    }
+    return S.party;
+  }
+
+  /* ================= invites ================= */
+  function invite(npcId) {
+    var npc = A.sim.getNpc(npcId);
+    if (!npc || npc.member || npc.invited) return;
+
+    if (isLive()) {
+      A.net.sendInvite(npcId);
+      A.ui.toast('Invite sent to ' + npc.name, 'info');
+      return;
+    }
+
+    var party = ensure();
+    if (party.members.length >= MAX_MEMBERS) {
+      A.ui.toast('Convoy is full (' + MAX_MEMBERS + ' riders max)', 'warn');
+      return;
+    }
+    npc.invited = true;
+    ST.emit('party');
+    A.ui.toast('Invite sent to ' + npc.name, 'info');
+
+    var partyId = S.party.id; // snapshot — if the user leaves/swaps convoys during
+                              // the accept window, the NPC must not join the wrong one.
+    setTimeout(function () {
+      npc.invited = false;
+      if (!S.party || S.party.id !== partyId) return;
+      if (U.chance(0.88) && S.party.members.length < MAX_MEMBERS) {
+        npc.member = true;
+        S.party.members.push(npc.id);
+        A.mapview.setNpcMember(npc.id, true);
+        systemMsg(npc.name + ' joined the convoy');
+        A.ui.toast(npc.name + ' joined your convoy', 'success');
+      } else {
+        A.ui.toast(npc.name + " can't make it right now", 'warn');
+      }
+      ST.emit('party');
+    }, U.randInt(1200, 2900));
+  }
+
+  /* ================= membership ================= */
+  function kick(npcId) {
+    if (isLive()) { A.net.sendKick(npcId); return; }
+    if (!S.party) return;
+    var i = S.party.members.indexOf(npcId);
+    if (i === -1) return;
+    S.party.members.splice(i, 1);
+    var npc = A.sim.getNpc(npcId);
+    if (npc) {
+      npc.member = false;
+      A.mapview.setNpcMember(npcId, false);
+      systemMsg(npc.name + ' left the convoy');
+    }
+    ST.emit('party');
+  }
+
+  function leave() {
+    if (isLive()) { A.net.sendLeave(); return; }
+    if (!S.party) return;
+    S.party.members.forEach(function (id) {
+      var npc = A.sim.getNpc(id);
+      if (npc) { npc.member = false; A.mapview.setNpcMember(id, false); }
+    });
+    S.party = null;
+    A.mapview.setLinksData(null);
+    ST.emit('party');
+    A.ui.toast('You left the convoy', 'info');
+  }
+
+  /* ================= chat ================= */
+  function systemMsg(text) {
+    if (!S.party) return;
+    if (isLive()) { A.net.sendPartySys(text); return; } // server mints the sys line
+    S.party.chat.push({ from: null, sys: true, text: text, t: Date.now() });
+    ST.emit('chat');
+  }
+
+  function sendChat(text) {
+    if (!S.party || !text.trim()) return;
+    if (isLive()) { A.net.sendChat(text.trim()); return; }
+
+    S.party.chat.push({ from: 'me', text: text.trim(), t: Date.now() });
+    ST.emit('chat');
+    if (S.party.members.length && U.chance(0.75)) {
+      var partyId = S.party.id;
+      setTimeout(function () {
+        if (!S.party || S.party.id !== partyId || !S.party.members.length) return;
+        var npc = A.sim.getNpc(U.pick(S.party.members));
+        if (!npc) return;
+        S.party.chat.push({ from: npc.name, emoji: npc.emoji, text: U.pick(D.CHAT_REPLIES), t: Date.now() });
+        ST.emit('chat');
+      }, U.randInt(900, 3600));
+    }
+  }
+
+  function setMode(mode) {
+    if (isLive()) { A.net.sendPartyMode(mode); return; }
+    if (S.party) { S.party.mode = mode; ST.emit('party'); }
+  }
+
+  function joinByCode(code) {
+    if (!isLive()) { A.ui.toast('Join codes need a live connection', 'warn'); return; }
+    A.net.sendPartyJoin(code);
+  }
+
+  A.party = {
+    create: create,
+    ensure: ensure,
+    invite: invite,
+    kick: kick,
+    leave: leave,
+    setMode: setMode,
+    joinByCode: joinByCode,
+    sendChat: sendChat,
+    systemMsg: systemMsg
+  };
+})();

@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" data-anim="on">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<title>Convoy</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 3 20 7.5 20 16.5 12 21 4 16.5 4 7.5Z' fill='none' stroke='%239aa3b0' stroke-width='2' stroke-linejoin='round'/><path d='M12 8 16 10.3 16 14.7 12 17 8 14.7 8 10.3Z' fill='none' stroke='%239aa3b0' stroke-width='2' stroke-linejoin='round'/></svg>"/>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.min.css" rel="stylesheet"/>
+<link rel="stylesheet" href="css/styles.css?v=cy36"/>
+</head>
+<body>
+
+<div id="map"></div>
+
+<!-- ======================= HUD ATMOSPHERE OVERLAYS ======================= -->
+<!-- faint scanlines + tech grid + edge vignette over the whole viewport. pointer-events:none
+     so they never block the map. Pure CSS, no shaders — cheap on a WebView. -->
+<div id="hud-scan" class="hud-overlay" aria-hidden="true"></div>
+<div id="hud-grid" class="hud-overlay" aria-hidden="true"></div>
+<div id="hud-vignette" class="hud-overlay" aria-hidden="true"></div>
+<div id="hud-boot" class="hud-boot" aria-hidden="true"></div>
+
+<!-- ======================= TOP BAR ======================= -->
+<header id="topbar">
+  <div class="brand" id="brand" title="Convoy">
+    <svg class="brand-logo" viewBox="0 0 32 32" aria-hidden="true">
+      <rect x="1.5" y="1.5" width="29" height="29" rx="9" style="fill:var(--accent)"/>
+      <rect x="1.5" y="1.5" width="29" height="29" rx="9" fill="url(#logoShine)"/>
+      <path d="M16 5.5 C 10 11, 22 16, 16 21.5 C 13 24.2, 13.5 25.5, 16 27"
+            fill="none" stroke="rgba(255,255,255,.95)" stroke-width="2.6"
+            stroke-linecap="round" stroke-dasharray="4 3.4"/>
+      <defs>
+        <linearGradient id="logoShine" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="rgba(255,255,255,.28)"/>
+          <stop offset=".55" stop-color="rgba(255,255,255,0)"/>
+          <stop offset="1" stop-color="rgba(0,0,0,.18)"/>
+        </linearGradient>
+      </defs>
+    </svg>
+    <span class="brand-name">CONVOY</span>
+  </div>
+
+  <div class="searchwrap" id="searchwrap">
+    <span class="search-icon">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16.6 16.6 4 4"/></svg>
+    </span>
+    <input id="search-input" type="text" placeholder="Search a destination…" autocomplete="off" spellcheck="false" aria-label="Search a destination"/>
+    <button id="search-clear" class="search-clear" hidden aria-label="Clear search">
+      <svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>
+    </button>
+    <div id="search-results" class="search-results" role="listbox" aria-label="Search results" hidden></div>
+  </div>
+
+  <div class="top-right">
+    <span id="gps-dot" class="gps-dot gps-none" title="GPS"></span>
+    <button id="btn-avatar" class="avatar-btn" title="Your profile"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 20 7.5 20 16.5 12 21 4 16.5 4 7.5Z"/><path d="M12 8 16 10.3 16 14.7 12 17 8 14.7 8 10.3Z"/></svg></button>
+  </div>
+</header>
+
+<!-- ======================= STATUS CHIPS ======================= -->
+<div id="chips" class="chips">
+  <button class="chip chip-live" id="chip-live" title="Riders near you — live">
+    <span class="dot dot-live"></span><span id="chip-live-text">LIVE · …</span>
+  </button>
+  <button class="chip chip-global" id="chip-global" title="Toggle global drivers (delayed feed)">
+    <span class="dot dot-global"></span><span>Global · ~5 min delay</span>
+  </button>
+  <button class="chip chip-scan" id="chip-scan" title="Police scanners near you">
+    <span class="dot" style="background:#ff5a3c;box-shadow:0 0 6px #ff5a3c"></span><span>Scanners</span>
+  </button>
+  <button class="chip chip-dragy" id="chip-dragy" title="Performance meter — GPS drag timer">
+    <span class="dot" style="background:#ffd23f;box-shadow:0 0 6px #ffd23f"></span><span>0–60</span>
+  </button>
+</div>
+
+<!-- ======================= MAP CONTROLS ======================= -->
+<div class="map-controls">
+  <div class="ctl-group">
+    <button class="ctl" id="ctl-zoom-in" title="Zoom in" aria-label="Zoom in">
+      <svg viewBox="0 0 24 24"><path d="M12 5.5v13M5.5 12h13"/></svg>
+    </button>
+    <button class="ctl" id="ctl-zoom-out" title="Zoom out" aria-label="Zoom out">
+      <svg viewBox="0 0 24 24"><path d="M5.5 12h13"/></svg>
+    </button>
+  </div>
+  <button class="ctl" id="ctl-compass" title="Reset north" aria-label="Reset north">
+    <svg viewBox="0 0 24 24" id="compass-svg">
+      <circle cx="12" cy="12" r="9.2" fill="none"/>
+      <g id="compass-needle">
+        <path d="M12 4.6 14.4 12H9.6Z" fill="#f87171" stroke="none"/>
+        <path d="M12 19.4 9.6 12h4.8Z" fill="currentColor" opacity=".55" stroke="none"/>
+      </g>
+    </svg>
+  </button>
+  <button class="ctl" id="ctl-locate" title="Use my location" aria-label="Use my location">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7.2"/><circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none"/><path d="M12 1.8v3M12 19.2v3M1.8 12h3M19.2 12h3"/></svg>
+  </button>
+  <button class="ctl" id="ctl-global" title="Toggle global drivers" aria-label="Toggle global drivers">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.8 2.6 4.2 5.6 4.2 9S14.8 18.4 12 21M12 3C9.2 5.6 7.8 8.6 7.8 12s1.4 6.4 4.2 9"/></svg>
+  </button>
+  <button class="ctl ctl-hazard" id="ctl-hazard" title="Report a hazard" aria-label="Report a hazard">
+    <svg viewBox="0 0 24 24"><path d="M12 3.6 21.5 20H2.5Z"/><path d="M12 10v4.4"/><path d="M12 17.4v.02"/></svg>
+  </button>
+  <button class="ctl ctl-accent" id="ctl-recenter" title="Resume follow camera" aria-label="Resume follow camera" hidden>
+    <svg viewBox="0 0 24 24"><path d="M12 3.5 18.5 20 12 16.2 5.5 20Z" fill="currentColor" stroke="none"/></svg>
+  </button>
+</div>
+
+<!-- ======================= LEFT CONTROL — ghost / radar toggle ======================= -->
+<div class="map-controls-left">
+  <button class="ctl ctl-ghost" id="ctl-ghost" title="Ghost mode — radar" aria-label="Toggle ghost mode radar">
+    <svg viewBox="0 0 24 24">
+      <path d="M5 21V10a7 7 0 0 1 14 0v11l-2.3-1.8-2.3 1.8-2.4-1.8-2.4 1.8L5 21Z"/>
+      <circle cx="9.5" cy="11" r="1.1" fill="currentColor" stroke="none"/>
+      <circle cx="14.5" cy="11" r="1.1" fill="currentColor" stroke="none"/>
+    </svg>
+  </button>
+</div>
+
+<!-- ======================= PANELS ======================= -->
+<section class="panel" data-panel="nearby" id="panel-nearby" aria-label="Nearby riders">
+  <header class="panel-head">
+    <div class="panel-titles"><h2>Nearby</h2><span class="panel-sub" id="nearby-sub">riders in range</span></div>
+    <button class="icon-btn panel-close" data-close aria-label="Close panel"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  </header>
+  <div class="panel-body" id="nearby-body"></div>
+</section>
+
+<section class="panel" data-panel="convoy" id="panel-convoy" aria-label="Convoy">
+  <header class="panel-head">
+    <div class="panel-titles"><h2>Convoy</h2><span class="panel-sub" id="convoy-sub">no active convoy</span></div>
+    <button class="icon-btn panel-close" data-close aria-label="Close panel"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  </header>
+  <div class="panel-body panel-body-flush" id="convoy-body"></div>
+</section>
+
+<section class="panel" data-panel="profile" id="panel-profile" aria-label="Profile">
+  <header class="panel-head">
+    <div class="panel-titles"><h2>Garage</h2><span class="panel-sub">vehicle · settings</span></div>
+    <button class="icon-btn" id="profile-settings-btn" aria-label="Open settings" title="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.1"/><path d="M12 2.8v2.5M12 18.7v2.5M21.2 12h-2.5M5.3 12H2.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8M18.4 18.4l-1.8-1.8M7.4 7.4 5.6 5.6"/></svg></button>
+    <button class="icon-btn panel-close" data-close aria-label="Close panel"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  </header>
+  <div class="panel-body" id="profile-body"></div>
+</section>
+
+<!-- ======================= ROUTE / TRIP CARD ======================= -->
+<div id="eta-card" class="eta-card" hidden></div>
+
+<!-- ======================= DOCK ======================= -->
+<nav id="dock" aria-label="Main navigation">
+  <button class="dock-btn active" data-dock="map" aria-label="Map">
+    <svg viewBox="0 0 24 24"><path d="M9 4 3.5 6v14L9 18l6 2 5.5-2V4L15 6 9 4Z"/><path d="M9 4v14M15 6v14"/></svg>
+    <span>Map</span>
+  </button>
+  <button class="dock-btn" data-dock="nearby" aria-label="Nearby riders">
+    <svg viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.4 19.2c.6-3.1 2.9-4.7 5.6-4.7s5 1.6 5.6 4.7"/><circle cx="17" cy="9.6" r="2.6"/><path d="M16.2 14.6c2.3.2 4 1.7 4.4 4.4"/></svg>
+    <span>Nearby</span>
+  </button>
+  <button class="dock-btn" data-dock="convoy" aria-label="Convoy">
+    <svg viewBox="0 0 24 24"><path d="M5 21V4"/><path d="M5 4.6c2-1.3 4-1.3 6 0s4 1.3 6 0v8.8c-2 1.3-4 1.3-6 0s-4-1.3-6 0"/></svg>
+    <span>Convoy</span>
+    <em id="dock-convoy-badge" class="dock-badge" hidden></em>
+  </button>
+  <button class="dock-btn" data-dock="profile" aria-label="Profile">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M4.6 20c1-3.7 4-5.5 7.4-5.5s6.4 1.8 7.4 5.5"/></svg>
+    <span>Profile</span>
+  </button>
+</nav>
+
+<!-- ======================= WALKIE-TALKIE (voice overlay, convoy-only) ======================= -->
+<div id="wt-overlay" hidden>
+  <button id="wt-ptt" class="wt-btn" data-mode="ptt" aria-label="Push to talk">
+    <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+  </button>
+  <div class="wt-meta">
+    <span id="wt-mode" class="wt-mode">PTT</span>
+    <button id="wt-cycle" class="wt-cycle" aria-label="Switch mic mode">
+      <svg viewBox="0 0 24 24"><path d="M6 6 18 6 18 18 6 18Z" fill="none"/><path d="M9 9h6v6H9z"/></svg>
+    </button>
+  </div>
+</div>
+
+<!-- ======================= GHOST RADAR HUD (Highway-Radar-style takeover) ======================= -->
+<!-- Shown only while body.radar-on (Ghost Mode). Containers ignore pointer events;
+     their inner cards/buttons re-enable them so the map stays pannable in the gaps. -->
+<div id="radar-alerts" aria-label="Radar alerts"></div>
+
+<aside id="radar-side" aria-label="Radar status">
+  <div class="rstat">
+    <span class="rstat-k">Scan</span>
+    <span class="rstat-v" id="radar-clock">--:--</span>
+  </div>
+  <div class="rstat">
+    <span class="rstat-k">Risk</span>
+    <span class="rstat-v"><b id="radar-risk">0</b><small>/25</small></span>
+    <span class="rrisk"><span class="rrisk-fill lo" id="radar-risk-bar"></span></span>
+  </div>
+  <div class="rstat">
+    <span class="rstat-k">Status</span>
+    <span class="rstat-icons">
+      <i id="rst-gps" class="rst" title="GPS fix"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="6.4"/><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/><path d="M12 2.4v3M12 18.6v3M2.4 12h3M18.6 12h3"/></svg></i>
+      <i id="rst-sat" class="rst" title="Satellites"><svg viewBox="0 0 24 24"><path d="M5 13 11 7M7 5 9 7M17 15l2 2M4.5 19.5a6 6 0 0 0 0-8.5M2.5 21.5a9 9 0 0 0 0-12.5"/><rect x="9.5" y="9.5" width="5" height="5" rx="1" transform="rotate(45 12 12)"/></svg></i>
+      <i id="rst-link" class="rst" title="Network link"><svg viewBox="0 0 24 24"><path d="M5 12.5a10 10 0 0 1 14 0M8 15.5a6 6 0 0 1 8 0"/><circle cx="12" cy="19" r="1.4" fill="currentColor" stroke="none"/></svg></i>
+      <i id="rst-voice" class="rst" title="Voice"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></i>
+    </span>
+  </div>
+</aside>
+
+<div id="radar-dock" aria-label="Radar controls">
+  <button class="rd-btn" id="radar-locate" title="Recenter on me" aria-label="Recenter on me">
+    <svg viewBox="0 0 24 24"><path d="M12 21s-6.5-6-6.5-10.5a6.5 6.5 0 0 1 13 0C18.5 15 12 21 12 21Z"/><circle cx="12" cy="10.4" r="2.3"/></svg>
+  </button>
+  <button class="rd-btn" id="radar-mute" title="Mute radar audio (proximity pings)" aria-label="Mute radar audio">
+    <svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9Z" fill="currentColor" stroke="none"/><g class="spk-on"><path d="M16 9a4 4 0 0 1 0 6"/></g><g class="spk-x"><path d="m17 9.5 4 5M21 9.5l-4 5"/></g></svg>
+  </button>
+  <div class="rd-speed"><b id="radar-speed">--</b><span id="radar-speed-unit">MPH</span></div>
+  <div class="rd-limit"><b id="radar-limit">65</b><span>limit</span></div>
+  <button class="rd-btn rd-stop" id="radar-stop" title="Exit radar (Ghost off)" aria-label="Exit radar">
+    <svg viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor" stroke="none"/></svg>
+  </button>
+  <button class="rd-btn" id="radar-mic" title="Convoy voice" aria-label="Convoy voice">
+    <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+  </button>
+  <button class="rd-btn" id="radar-hazard" title="Report a road hazard" aria-label="Report a road hazard">
+    <svg viewBox="0 0 24 24"><path d="M12 3 22 20H2L12 3Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 10v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="17" r="1" fill="currentColor"/></svg>
+  </button>
+</div>
+
+<!-- radar activation flourish (one-shot; plays when Ghost Mode engages) -->
+<div id="radar-fx" aria-hidden="true">
+  <div class="rfx-sweep"></div>
+  <div class="rfx-pulse"></div>
+  <div class="rfx-pulse rfx-pulse2"></div>
+  <div class="rfx-title">GHOST MODE<small>RADAR ENGAGED</small></div>
+</div>
+
+<!-- continuous rotating sweep line (persistent while radar is engaged; ties the
+     proximity sonar to a visible "scanning" motion. pointer-events:none so the
+     map stays pannable. hidden unless body.radar-on, and frozen by data-anim=off) -->
+<div id="radar-sweep" aria-hidden="true"></div>
+
+<div id="toasts" aria-live="polite"></div>
+<div id="onboarding" class="modal-backdrop" role="dialog" aria-modal="true" aria-label="Welcome to Convoy" hidden></div>
+
+<noscript>
+  <div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0e1116;color:#e6e9ef;font-family:system-ui,sans-serif;text-align:center;padding:24px">
+    <div>
+      <h1 style="font-size:22px;margin:0 0 8px">Convoy needs JavaScript</h1>
+      <p style="margin:0;opacity:.7">This map app runs entirely in your browser. Please enable JavaScript to continue.</p>
+    </div>
+  </div>
+</noscript>
+
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.min.js"></script>
+<script src="js/config.js?v=cy36"></script>
+<script src="js/data.js?v=cy36"></script>
+<script src="js/util.js?v=cy36"></script>
+<script src="js/state.js?v=cy36"></script>
+<script src="js/mapview.js?v=cy36"></script>
+<script src="js/sim.js?v=cy36"></script>
+<script src="js/net.js?v=cy36"></script>
+<script src="js/routing.js?v=cy36"></script>
+<script src="js/ghost.js?v=cy36"></script>
+<script src="js/radar.js?v=cy36"></script>
+<script src="js/overlays.js?v=cy36"></script>
+<script src="js/scanners.js?v=cy36"></script>
+<script src="js/dragy.js?v=cy36"></script>
+<script src="js/party.js?v=cy36"></script>
+<script src="js/voice.js?v=cy36"></script>
+<script src="js/ui.js?v=cy36"></script>
+<script src="js/auth.js?v=cy36"></script>
+<script src="js/native.js?v=cy36"></script>
+<script src="js/app.js?v=cy36"></script>
+</body>
+</html>

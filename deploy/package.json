@@ -1,0 +1,10 @@
+{
+  "name": "convoy-deploy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "One-command deploy of Convoy to a VPS over SSH",
+  "dependencies": {
+    "ssh2": "^1.16.0",
+    "ws": "^8.18.0"
+  }
+}

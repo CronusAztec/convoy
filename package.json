@@ -1,0 +1,21 @@
+{
+  "name": "convoy",
+  "version": "0.3.0",
+  "description": "Convoy — ride together. Passenger-side multiplayer map app.",
+  "private": true,
+  "scripts": {
+    "serve": "node server/server.js",
+    "copy-web": "node scripts/copy-web.js",
+    "android:add": "npm run copy-web && cap add android",
+    "android:sync": "npm run copy-web && cap sync android",
+    "android:open": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.0.0",
+    "@capacitor/core": "^8.0.0",
+    "@capacitor/geolocation": "^8.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.4.0"
+  }
+}

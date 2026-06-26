@@ -1,0 +1,43 @@
+# dependencies
+node_modules/
+
+# server runtime data — accounts & token secret, NEVER commit
+server/data/
+
+# self-hosted Piper TTS — binary + voice model, installed on the VPS by deploy/setup-tts.js
+tts/
+
+# deploy secrets & artifacts — NEVER commit these
+deploy/convoy_deploy_key
+deploy/convoy_deploy_key.pub
+deploy/*.pem
+deploy/id_*
+*.tgz
+
+# editor/OS
+.DS_Store
+Thumbs.db
+
+# stray Windows reserved-name file (from a misfired `> nul` redirect); git can't index it
+nul
+
+# runtime logs (server boot/run output, deploy diag, etc.) — never commit
+*.log
+logs/
+
+# Capacitor / Android build artifacts (the android/ source IS tracked; build outputs are not)
+www/
+android/app/build/
+android/.gradle/
+android/build/
+android/captures/
+android/local.properties
+*.apk
+*.aab
+*.keystore
+*.jks
+# Release signing secrets — NEVER commit (these are the app's permanent identity)
+android/key.properties
+android/convoy-release.credentials.txt
+!debug.keystore
+

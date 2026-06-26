@@ -1,0 +1,29 @@
+[Unit]
+Description=Convoy realtime server (riders, convoys, chat)
+After=network.target
+
+[Service]
+Type=simple
+User=convoy
+WorkingDirectory=/opt/convoy/server
+ExecStart=/usr/bin/node /opt/convoy/server/server.js
+Environment=PORT=5173
+Environment=BOTS=12
+Environment=NEARBY_KM=30
+# Account/token data lives OUTSIDE the app tree so deploys (scp/cp/tar) can never
+# overwrite or ship users.json or the .secret token key. Create + chown convoy:convoy
+# this dir before enabling the service (see DEPLOY.md §4).
+Environment=DATA_DIR=/var/lib/convoy
+# Optional keys — set only what you use:
+#   Environment=TOMTOM_KEY=...        (traffic-aware routing + traffic heatmap)
+#   Environment=TTS_DIR=...           (self-hosted Piper neural TTS for nav voice)
+Restart=always
+RestartSec=3
+
+# hardening (optional but free)
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target
