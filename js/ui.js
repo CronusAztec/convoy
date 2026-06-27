@@ -1040,6 +1040,8 @@
       mkToggle(S.settings.ghostAir, function (v) { ST.setSetting('ghostAir', v); })));
     body.appendChild(mkRow('Helicopters', null,
       mkToggle(S.settings.ghostHeli, function (v) { ST.setSetting('ghostHeli', v); })));
+    body.appendChild(mkRow('Police hotspots', 'Heatmap of where police are usually seen at this hour',
+      mkToggle(S.settings.ghostHotspots !== false, function (v) { ST.setSetting('ghostHotspots', v, 'ghosthotspots'); })));
 
     /* ---- Data overlays ---- */
     body.appendChild(U.el('div', 'section-label', 'Map overlays'));
@@ -1067,8 +1069,11 @@
     });
     body.appendChild(reset);
 
+    // Android download — only meaningful on the web; hidden inside the native shell.
+    var apkLink = (A.config && A.config.isNative) ? '' :
+      '<a class="apk-link" href="/convoy.apk" download="Convoy.apk">⬇ Get the Android app (.apk)</a><br>';
     var about = U.el('div', 'about',
-      'Convoy v0.3 · For passengers, never drivers.<br>' +
+      'Convoy v0.3 · For passengers, never drivers.<br>' + apkLink +
       'Maps © <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a> & ' +
       '<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OSM</a> · Routing by OSRM.');
     body.appendChild(about);

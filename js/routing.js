@@ -463,16 +463,16 @@
     return { pos: U.lerpPos(coords[i], coords[i + 1], t), brg: U.bearing(coords[i], coords[i + 1]) };
   }
 
-  // Project a REAL position onto the route line → distance-along-route (meters).
-  // Used by live-GPS trip mode: instead of advancing a fake dot, we measure how
-  // far along the route the rider actually is, so ETA + voice cues reflect real
-  // driving. Finds the nearest segment, then the closest point on it. Returns
-  // the snapped progress; clamped to [0, total]. Coarse (segment-level) is fine
-  // — voice cues have ~250m warning windows, so sub-meter accuracy isn't needed.
-  function progressAt(line, pos) {
+  // Snap a REAL position onto the route line. Returns BOTH the distance-along-
+  // route (meters — drives live-GPS progress, ETA, and voice cues) and the lateral
+  // deviation (meters — how far off the line the rider is, used for off-route
+  // detection / auto-reroute). Finds the nearest segment, then the closest point
+  // on it. Planar projection is fine at route scale; deviation is converted back
+  // to meters via haversine. Coarse (segment-level) is fine — cues warn ~250m out.
+  function nearestOnRoute(line, pos) {
     var coords = line.coords, cum = line.cum;
-    if (!coords || coords.length < 2) return 0;
-    var bestM = 0, bestD = Infinity;
+    if (!coords || coords.length < 2) return { m: 0, devM: 0 };
+    var bestM = 0, bestD = Infinity, bestPt = coords[0];
     for (var i = 0; i < coords.length - 1; i++) {
       var a = coords[i], b = coords[i + 1];
       // project pos onto segment ab (planar — fine at route scale)
@@ -486,10 +486,12 @@
       if (d < bestD) {
         bestD = d;
         bestM = cum[i] + t * Math.max(cum[i + 1] - cum[i], 0);
+        bestPt = [cx, cy];
       }
     }
-    return Math.max(0, Math.min(line.total, bestM));
+    return { m: Math.max(0, Math.min(line.total, bestM)), devM: U.haversine(pos, bestPt) };
   }
+  function progressAt(line, pos) { return nearestOnRoute(line, pos).m; }
 
   /* ---------------- route prompt (map click) ---------------- */
   function promptRoute(lngLat) {
@@ -670,6 +672,7 @@
       mult: 1,            // 1× = live GPS (real position drives the trip); >1 = preview playback
       live: true,         // follow the rider's REAL GPS position, not a simulated dot
       gotFix: false,      // flips true on the first real GPS fix; until then we play the sim dot
+      offSince: 0,        // perf-now ts when the rider first went off-route (0 = on route)
       follow: S.settings.followCam,
       camIntro: true,
       line: { coords: r.coords, cum: r.cum, total: r.distance, _idx: 0 },
@@ -686,14 +689,54 @@
     ST.emit('trip', S.trip);
   }
 
-  // Speed multiplier: 1× = live GPS (real driving); 2/5/20× = preview playback of
+  // Speed multiplier: 1× = live GPS (real driving); 5/20× = preview playback of
   // the route. Switching above 1× flips the trip into playback (live=false) so the
-  // simulated dot takes over; switching back to 1× re-engages real GPS.
+  // simulated dot takes over; switching back to 1× re-engages real GPS. Single
+  // source of truth — also reflects the active chip + refreshes the ETA readout.
   function setMult(m) {
     if (!S.trip || !S.trip.active) return;
     S.trip.mult = m;
     S.trip.live = (m === 1);
-    renderEtaCard();
+    var chips = document.querySelectorAll('.speed-chip');
+    chips.forEach(function (c) { c.classList.toggle('active', +c.dataset.mult === m); });
+    updateTripUI();
+  }
+
+  // Off-route auto-reroute (live-GPS nav). The rider drifted off the planned line
+  // (missed turn, detour, lane onto a different road) — recompute from the current
+  // real position to the SAME destination and swap the trip onto the new line
+  // without ending it. Guarded so overlapping triggers can't stack fetches.
+  var rerouting = false;
+  function reroute() {
+    if (rerouting || !S.trip || !S.trip.active || !S.route) return;
+    rerouting = true;
+    var dest = S.route.dest.slice(), label = S.route.label;
+    var from = A.sim.playerPos();
+    A.ui.toast('Off route — recalculating…', 'info');
+    fetchRoutes(from, dest).then(function (routes) {
+      if (!S.trip || !S.trip.active || !routes || !routes.length) return; // trip ended / no route
+      var r = routes[0];
+      S.route = {
+        label: label, dest: dest, distance: r.distance, duration: r.duration,
+        traffic: r.trafficDelay || 0, coords: r.coords, cum: cumulative(r.coords), steps: r.steps || []
+      };
+      A.mapview.setRouteData({
+        type: 'FeatureCollection',
+        features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: r.coords } }]
+      });
+      // Swap the trip onto the new line; progress restarts at the current origin.
+      S.trip.line = { coords: r.coords, cum: S.route.cum, total: r.distance, _idx: 0 };
+      S.trip.progress = 0;
+      S.trip.cueIdx = 0;
+      S.trip.warnedIdx = -1;
+      S.trip.offSince = 0;
+      S.trip.baseSpeed = r.distance / Math.max(r.duration, 1);
+      renderEtaCard();
+      speak('Recalculating route.');
+      ST.emit('route', S.route);
+      ST.emit('trip', S.trip);
+    }).catch(function () { /* keep the old line; next off-route tick retries */ })
+      .finally(function () { rerouting = false; });
   }
 
   function endTrip(arrived) {
@@ -747,12 +790,6 @@
     }
   }
 
-  function setMult(n) {
-    if (S.trip) S.trip.mult = n;
-    var chips = document.querySelectorAll('.speed-chip');
-    chips.forEach(function (c) { c.classList.toggle('active', +c.dataset.mult === n); });
-  }
-
   /* ---------------- ETA card ---------------- */
   function renderEtaCard() {
     var card = document.getElementById('eta-card');
@@ -776,17 +813,17 @@
       card.querySelector('#eta-start').addEventListener('click', startTrip);
       card.querySelector('#eta-clear').addEventListener('click', clearRoute);
     } else {
+      var mult = trip.mult || 1;
+      function chip(m, lbl) { return '<button class="speed-chip' + (m === mult ? ' active' : '') + '" data-mult="' + m + '">' + lbl + '</button>'; }
       card.innerHTML =
         '<div class="eta-main">' +
-        '  <div class="eta-dest">' + U.esc(r.label) + '</div>' +
+        '  <div class="eta-dest">' + U.esc(r.label) + ' <span class="eta-live" id="trip-live" hidden>● LIVE</span></div>' +
         '  <div class="eta-meta"><span id="trip-remain">—</span> · ETA <span id="trip-eta">—</span></div>' +
         '  <div class="progress"><i id="trip-bar"></i></div>' +
         '</div>' +
         '<div class="eta-actions">' +
-        '  <div class="speed-chips" title="Demo ride speed">' +
-        '    <button class="speed-chip" data-mult="1">1×</button>' +
-        '    <button class="speed-chip active" data-mult="5">5×</button>' +
-        '    <button class="speed-chip" data-mult="20">20×</button>' +
+        '  <div class="speed-chips" title="1× follows your real GPS; 5×/20× preview the route">' +
+        chip(1, 'Live') + chip(5, '5×') + chip(20, '20×') +
         '  </div>' +
         '  <button class="btn btn-end" id="eta-end">End</button>' +
         '</div>';
@@ -811,6 +848,9 @@
     if (remEl) remEl.textContent = U.fmtDist(remain, S.settings.units) + ' left';
     if (etaEl) etaEl.textContent = U.fmtClock(new Date(Date.now() + secs * 1000));
     if (bar) bar.style.width = U.clamp(trip.progress / trip.line.total * 100, 0, 100) + '%';
+    // LIVE badge: lit only once real GPS is actually driving the trip.
+    var liveEl = document.getElementById('trip-live');
+    if (liveEl) liveEl.hidden = !(trip.live && trip.gotFix);
   }
 
   A.routing = {
@@ -821,8 +861,10 @@
     startTrip: startTrip,
     endTrip: endTrip,
     setMult: setMult,
+    reroute: reroute,
     posAt: posAt,
     progressAt: progressAt,
+    nearestOnRoute: nearestOnRoute,
     updateTripUI: updateTripUI,
     renderEtaCard: renderEtaCard,
     announceCues: announceCues,

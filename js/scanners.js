@@ -74,12 +74,24 @@
   /* ===================== in-app live player ===================== */
   // One <audio> element streams calls back-to-back. We poll /calls for anything
   // newer than the last one we've queued and append it, so it stays "live".
-  var P = { audio: null, sys: null, queue: [], lastTime: 0, tg: {}, poll: null, paused: false, current: null, unlocked: false };
+  var P = { audio: null, sys: null, queue: [], lastTime: 0, tg: {}, poll: null, paused: false, current: null, unlocked: false, vol: loadVol(), fails: 0 };
+
+  var VOL_KEY = 'convoy.scanner.vol';
+  function loadVol() {
+    try { var v = parseFloat(localStorage.getItem(VOL_KEY)); return isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.9; }
+    catch (e) { return 0.9; }
+  }
+  function setVol(v) {
+    P.vol = Math.max(0, Math.min(1, v));
+    if (P.audio) P.audio.volume = P.vol;
+    try { localStorage.setItem(VOL_KEY, String(P.vol)); } catch (e) {}
+  }
 
   function audioEl() {
     if (!P.audio) {
       P.audio = new Audio();
       P.audio.preload = 'auto';
+      P.audio.volume = P.vol;
       P.audio.addEventListener('ended', playNext);
       P.audio.addEventListener('error', function () { P.current = null; playNext(); }); // skip a bad clip
     }
@@ -120,6 +132,7 @@
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (j) {
         if (!P.sys || P.sys.shortName !== sn || !j) return; // switched systems mid-flight
+        P.fails = 0; // recovered
         var calls = (j.calls || []).slice().sort(function (a, b) { return callTime(a) - callTime(b); });
         if (seed) {
           calls.slice(-SEED_CALLS).forEach(function (c) { P.queue.push(c); });
@@ -136,7 +149,12 @@
           updateStatus();
           if (added && !P.current && !P.paused) playNext();
         }
-      }).catch(function () {});
+      }).catch(function () {
+        // OpenMHz hiccup — the interval keeps polling, so this self-heals. Only
+        // surface it (and only when nothing is currently playing) after a couple
+        // of consecutive misses so a single blip doesn't flash the status.
+        if (P.sys && P.sys.shortName === sn && ++P.fails >= 2 && !P.current) setNow('Reconnecting…', false);
+      });
   }
 
   function playNext() {
@@ -172,7 +190,7 @@
   function resetPlayback() {
     if (P.poll) { clearInterval(P.poll); P.poll = null; }
     if (P.audio) { try { P.audio.pause(); } catch (e) {} P.audio.removeAttribute('src'); try { P.audio.load(); } catch (e) {} }
-    P.sys = null; P.queue = []; P.lastTime = 0; P.current = null; P.paused = false;
+    P.sys = null; P.queue = []; P.lastTime = 0; P.current = null; P.paused = false; P.fails = 0;
   }
 
   function stopListen() {
@@ -233,6 +251,7 @@
       '    <div class="sp-info"><b id="sp-title">—</b><small id="sp-now">—</small></div>' +
       '    <span class="sp-queue" id="sp-queue"></span>' +
       '    <span class="sp-live" id="sp-live"><span class="sp-dot"></span>LIVE</span>' +
+      '    <input type="range" class="sp-vol" id="sp-vol" min="0" max="1" step="0.05" aria-label="Scanner volume" title="Volume">' +
       '    <button class="sp-stop" id="sp-stop" aria-label="Stop"><svg viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor" stroke="none"/></svg></button>' +
       '  </div>' +
       '  <div class="scanner-foot">Live feeds via OpenMHz · plays in-app</div>' +
@@ -245,6 +264,8 @@
     overlay.querySelector('#scanner-close').addEventListener('click', close);
     overlay.querySelector('#sp-toggle').addEventListener('click', togglePause);
     overlay.querySelector('#sp-stop').addEventListener('click', stopListen);
+    var volEl = overlay.querySelector('#sp-vol');
+    if (volEl) { volEl.value = P.vol; volEl.addEventListener('input', function () { setVol(parseFloat(volEl.value)); }); }
     setToggle(true);
     // Esc closes (panels already handle their own Esc, but this overlay is separate).
     overlay.addEventListener('keydown', function (e) {

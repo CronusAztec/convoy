@@ -13,6 +13,8 @@
   var NEARBY_N = 14;
   var MAX_RANGE = 5200;
   var MAX_EXTRAP_S = 1.6;   // cap on dead-reckoning prediction past the last known point
+  var OFF_ROUTE_M = 55;     // lateral deviation (m) that counts as "off the planned route"
+  var OFF_ROUTE_MS = 5000;  // ...sustained this long before we auto-reroute (ignores GPS jitter)
 
   var player = { pos: S.playerStart.slice(), heading: 0 };
   var npcs = {};            // id -> rider
@@ -305,10 +307,20 @@
     var at;
     var liveDriven = trip.live && trip.gotFix;
     if (liveDriven) {
+      var snap = A.routing.nearestOnRoute(trip.line, player.pos);
       // Monotonic: GPS jitter must not drag progress backwards along the route.
-      trip.progress = Math.max(trip.progress, A.routing.progressAt(trip.line, player.pos));
+      trip.progress = Math.max(trip.progress, snap.m);
       at = A.routing.posAt(trip.line, trip.progress);
       A.mapview.setPlayer(player.pos, at.brg); // marker on the real fix, arrow down-route
+      // Off-route → debounced auto-reroute. Require the deviation to persist so GPS
+      // jitter or a brief lane straddle doesn't trigger a needless recalculation.
+      var nearEnd = (trip.line.total - trip.progress) < 40;
+      if (snap.devM > OFF_ROUTE_M && !nearEnd) {
+        if (!trip.offSince) trip.offSince = now;
+        else if (now - trip.offSince > OFF_ROUTE_MS) { trip.offSince = 0; A.routing.reroute(); }
+      } else {
+        trip.offSince = 0;
+      }
     } else {
       trip.progress += trip.baseSpeed * trip.mult * dt;
       at = A.routing.posAt(trip.line, trip.progress);

@@ -296,22 +296,29 @@
      from the live police layer: live sightings show "where they are now"; hotspots
      show "where they tend to be at this time of day". Empty until the server has
      gathered enough observations (day-1 is correctly empty — no fabricated data). */
-  function hotspotsOn() { return !!(A.config && A.config.routeCaps && A.config.routeCaps.hotspots); }
+  // Gated by BOTH the server capability and the user's "Police hotspots" toggle.
+  function hotspotsOn() {
+    return !!(A.config && A.config.routeCaps && A.config.routeCaps.hotspots) &&
+           (S.settings.ghostHotspots !== false);
+  }
   function hotBboxChanged(bb) {
     if (!lastHotBbox) return true;
     // Stats move slowly; refetch only on a substantial pan (wider than live sightings).
     var dLat = Math.abs(bb.minLat - lastHotBbox.minLat), dLng = Math.abs(bb.minLng - lastHotBbox.minLng);
     return dLat > 0.3 || dLng > 0.3;
   }
+  // null = "now" (live local hour); 0..23 = a previewed hour via the legend scrubber.
+  var hotPreviewHour = null;
+  function hotHour() { return hotPreviewHour == null ? new Date().getHours() : hotPreviewHour; }
   function fetchHotspots() {
     if (!running || !hotspotsOn()) return;
     var bb = viewBBox();
     if (!bb) return;
     if (lastHotBbox && !hotBboxChanged(bb)) return;
     lastHotBbox = bb;
-    // Pass the viewer's LOCAL hour — police patterns are local ("morning rush" =
-    // local morning), not UTC. The server folds ±1h for smoothness.
-    var hour = new Date().getHours();
+    // Pass the viewer's LOCAL hour (or a previewed hour) — police patterns are
+    // local ("morning rush" = local morning), not UTC. The server folds ±1h.
+    var hour = hotHour();
     fetch((A.config ? A.config.base : '') + '/api/hotspots', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -320,7 +327,73 @@
       .then(function (fc) {
         if (!running) return;
         if (A.mapview && A.mapview.setHotspotData) A.mapview.setHotspotData(fc || emptyFC());
+        updateLegendCount(fc && fc.features ? fc.features.length : 0);
       }).catch(function () { /* keep previous hotspots */ });
+  }
+  // Force an immediate refetch at the current preview hour (bypasses the pan gate).
+  function refreshHotspots() { lastHotBbox = null; updateLegendHour(); fetchHotspots(); }
+
+  /* ---------------- hotspot legend + hour scrubber ---------------- */
+  var legendEl = null;
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function ensureLegend() {
+    if (legendEl) return legendEl;
+    legendEl = document.createElement('div');
+    legendEl.className = 'hot-legend';
+    legendEl.hidden = true;
+    legendEl.innerHTML =
+      '<div class="hl-head"><span class="hl-title">Police hotspots</span>' +
+      '<span class="hl-hour" id="hl-hour">now</span></div>' +
+      '<div class="hl-bar"></div>' +
+      '<div class="hl-scale"><span>rare</span><span>likely</span><span>usual</span></div>' +
+      '<div class="hl-foot"><span class="hl-count" id="hl-count"></span>' +
+      '<span class="hl-scrub">' +
+      '<button class="hl-btn" id="hl-prev" type="button" aria-label="Earlier hour">‹</button>' +
+      '<button class="hl-now" id="hl-now" type="button" hidden>Now</button>' +
+      '<button class="hl-btn" id="hl-next" type="button" aria-label="Later hour">›</button>' +
+      '</span></div>';
+    document.body.appendChild(legendEl);
+    legendEl.querySelector('#hl-prev').addEventListener('click', function () { stepHour(-1); });
+    legendEl.querySelector('#hl-next').addEventListener('click', function () { stepHour(1); });
+    legendEl.querySelector('#hl-now').addEventListener('click', function () { hotPreviewHour = null; refreshHotspots(); });
+    return legendEl;
+  }
+  function stepHour(d) {
+    var h = hotHour();
+    hotPreviewHour = (((h + d) % 24) + 24) % 24;
+    refreshHotspots();
+  }
+  function updateLegendHour() {
+    if (!legendEl) return;
+    var hEl = legendEl.querySelector('#hl-hour');
+    var nowBtn = legendEl.querySelector('#hl-now');
+    if (hEl) hEl.textContent = hotPreviewHour == null ? 'now' : pad2(hotPreviewHour) + ':00';
+    if (nowBtn) nowBtn.hidden = (hotPreviewHour == null);
+  }
+  function updateLegendCount(n) {
+    if (!legendEl) return;
+    var c = legendEl.querySelector('#hl-count');
+    if (c) c.textContent = n ? (n + ' spot' + (n === 1 ? '' : 's')) : 'no data yet';
+  }
+  function showLegend(on) {
+    ensureLegend();
+    legendEl.hidden = !on;
+    if (on) updateLegendHour();
+  }
+  // React to the user toggling "Police hotspots" while ghost mode is already on.
+  if (A.store && A.store.on) {
+    A.store.on('ghosthotspots', function () {
+      if (!running) return;
+      if (hotspotsOn()) {
+        showLegend(true);
+        if (!hotTimer) hotTimer = setInterval(fetchHotspots, HOT_MS);
+        refreshHotspots();
+      } else {
+        showLegend(false);
+        if (hotTimer) { clearInterval(hotTimer); hotTimer = null; }
+        if (A.mapview && A.mapview.setHotspotData) A.mapview.setHotspotData(emptyFC());
+      }
+    });
   }
 
   function start() {
@@ -337,7 +410,7 @@
     pollOpenSky();
     fetchPolice();
     if (wazeOn()) fetchWaze();
-    if (hotspotsOn()) fetchHotspots();
+    if (hotspotsOn()) { fetchHotspots(); showLegend(true); }
     adTimer = setInterval(pollAdsbx, ADSBX_MS);
     osTimer = setInterval(pollOpenSky, OPENSKY_MS);
     poTimer = setInterval(fetchPolice, POLICE_MS);
@@ -352,6 +425,7 @@
     if (poTimer) { clearInterval(poTimer); poTimer = null; }
     if (wzTimer) { clearInterval(wzTimer); wzTimer = null; }
     if (hotTimer) { clearInterval(hotTimer); hotTimer = null; }
+    showLegend(false);
     acAdsbx = []; acOpenSky = [];
     policeOSM = []; policeWaze = [];
     // clear the layers so nothing lingers when ghost is off

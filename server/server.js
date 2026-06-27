@@ -1095,12 +1095,13 @@ const ROOT = path.resolve(__dirname, '..');
 // Explicit allowlist of top-level paths that may be served. Anything else 404s.
 // (Formerly a denylist, which silently served any new file added at the repo root —
 // a path-traversal-class bug waiting for the next config/backup file to land here.)
-const ALLOWED_TOP = ['/', '/index.html', '/js', '/css'];
+const ALLOWED_TOP = ['/', '/index.html', '/js', '/css', '/convoy.apk'];
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.json': 'application/json',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg',
-  '.ico': 'image/x-icon', '.md': 'text/markdown; charset=utf-8', '.map': 'application/json'
+  '.ico': 'image/x-icon', '.md': 'text/markdown; charset=utf-8', '.map': 'application/json',
+  '.apk': 'application/vnd.android.package-archive'  // downloadable Android build (/convoy.apk)
 };
 
 // Per-IP rate limit + concurrency cap for the CPU-bound /api/tts route (spawns piper).

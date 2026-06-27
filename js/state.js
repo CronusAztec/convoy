@@ -46,7 +46,8 @@
     ghostPolice: true,
     ghostCamera: true,
     ghostAir: true,
-    ghostHeli: true
+    ghostHeli: true,
+    ghostHotspots: true   // police probability "usually here" heatmap layer
   };
 
   // Demo spawn: Los Angeles (geolocation requires https/localhost; ⌖ button upgrades to real position)
