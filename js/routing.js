@@ -463,6 +463,34 @@
     return { pos: U.lerpPos(coords[i], coords[i + 1], t), brg: U.bearing(coords[i], coords[i + 1]) };
   }
 
+  // Project a REAL position onto the route line → distance-along-route (meters).
+  // Used by live-GPS trip mode: instead of advancing a fake dot, we measure how
+  // far along the route the rider actually is, so ETA + voice cues reflect real
+  // driving. Finds the nearest segment, then the closest point on it. Returns
+  // the snapped progress; clamped to [0, total]. Coarse (segment-level) is fine
+  // — voice cues have ~250m warning windows, so sub-meter accuracy isn't needed.
+  function progressAt(line, pos) {
+    var coords = line.coords, cum = line.cum;
+    if (!coords || coords.length < 2) return 0;
+    var bestM = 0, bestD = Infinity;
+    for (var i = 0; i < coords.length - 1; i++) {
+      var a = coords[i], b = coords[i + 1];
+      // project pos onto segment ab (planar — fine at route scale)
+      var ax = a[0], ay = a[1], bx = b[0], by = b[1], px = pos[0], py = pos[1];
+      var dx = bx - ax, dy = by - ay;
+      var segLen2 = dx * dx + dy * dy;
+      var t = segLen2 > 0 ? ((px - ax) * dx + (py - ay) * dy) / segLen2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      var cx = ax + t * dx, cy = ay + t * dy;
+      var d = (px - cx) * (px - cx) + (py - cy) * (py - cy);
+      if (d < bestD) {
+        bestD = d;
+        bestM = cum[i] + t * Math.max(cum[i + 1] - cum[i], 0);
+      }
+    }
+    return Math.max(0, Math.min(line.total, bestM));
+  }
+
   /* ---------------- route prompt (map click) ---------------- */
   function promptRoute(lngLat) {
     var card = U.el('div', 'pop-card pop-prompt');
@@ -639,7 +667,9 @@
       active: true,
       progress: 0,
       baseSpeed: r.distance / Math.max(r.duration, 1),
-      mult: 5,
+      mult: 1,            // 1× = live GPS (real position drives the trip); >1 = preview playback
+      live: true,         // follow the rider's REAL GPS position, not a simulated dot
+      gotFix: false,      // flips true on the first real GPS fix; until then we play the sim dot
       follow: S.settings.followCam,
       camIntro: true,
       line: { coords: r.coords, cum: r.cum, total: r.distance, _idx: 0 },
@@ -648,12 +678,22 @@
     };
     document.getElementById('ctl-recenter').hidden = S.trip.follow;
     renderEtaCard();
-    A.ui.toast('Passenger mode engaged', 'success');
+    A.ui.toast('Navigation started — following your drive', 'success');
     speak('Starting route to ' + (r.label || 'your destination') + '.');
     if (S.party && S.party.members.length) {
       A.party.systemMsg('Trip started — convoy rolling to ' + r.label);
     }
     ST.emit('trip', S.trip);
+  }
+
+  // Speed multiplier: 1× = live GPS (real driving); 2/5/20× = preview playback of
+  // the route. Switching above 1× flips the trip into playback (live=false) so the
+  // simulated dot takes over; switching back to 1× re-engages real GPS.
+  function setMult(m) {
+    if (!S.trip || !S.trip.active) return;
+    S.trip.mult = m;
+    S.trip.live = (m === 1);
+    renderEtaCard();
   }
 
   function endTrip(arrived) {
@@ -782,6 +822,7 @@
     endTrip: endTrip,
     setMult: setMult,
     posAt: posAt,
+    progressAt: progressAt,
     updateTripUI: updateTripUI,
     renderEtaCard: renderEtaCard,
     announceCues: announceCues,

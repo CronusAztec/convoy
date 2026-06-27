@@ -32,6 +32,7 @@
     global: emptyFC(),
     aircraft: emptyFC(),
     police: emptyFC(),
+    hotspots: emptyFC(),   // police probability hotspots (ghost mode)
     rings: emptyFC()    // ghost-mode radar range circles
   };
 
@@ -108,6 +109,7 @@
     addSrc('global', cache.global, { cluster: true, clusterRadius: 46, clusterMaxZoom: 9 });
     addSrc('aircraft', cache.aircraft);
     addSrc('police', cache.police);
+    addSrc('hotspots', cache.hotspots);
     addSrc('rings', cache.rings);
 
     // ----- ROUTE: stacked neon light-trail (bloom → core → hot center) -----
@@ -238,6 +240,25 @@
         'circle-opacity': 0.95
       }
     });
+    // Probability hotspots: soft blurred circles sized + colored by `prob`.
+    // Sits BENEATH the live police pins (added first → lower in the layer stack)
+    // so a hard live-sighting pin draws on top of the fuzzy "usually here" halo.
+    addLayer({
+      id: 'police-hotspots', type: 'circle', source: 'hotspots',
+      paint: {
+        // radius grows with probability; bigger = more sightings at this hour
+        'circle-radius': ['interpolate', ['linear'], ['get', 'prob'], 0, 10, 0.5, 20, 1, 34],
+        // green(low) → amber(mid) → red(high), heatmap-style
+        'circle-color': ['interpolate', ['linear'], ['get', 'prob'],
+          0, '#22c55e', 0.5, '#f59e0b', 1, '#ef4444'],
+        'circle-opacity': 0.28,
+        'circle-blur': 1.1,
+        'circle-stroke-color': ['interpolate', ['linear'], ['get', 'prob'],
+          0, '#22c55e', 1, '#ef4444'],
+        'circle-stroke-width': 1,
+        'circle-stroke-opacity': 0.4
+      }
+    });
     setGhostLayersVisible(!!(S.settings && S.settings.ghost));
 
     // Basemap (re)loaded → recompute landuse layer ids and reclassify global drivers
@@ -321,8 +342,9 @@
 
   function setAircraftData(fc) { cache.aircraft = fc || emptyFC(); setData('aircraft', cache.aircraft); }
   function setPoliceData(fc) { cache.police = fc || emptyFC(); setData('police', cache.police); }
+  function setHotspotData(fc) { cache.hotspots = fc || emptyFC(); setData('hotspots', cache.hotspots); }
   function setGhostLayersVisible(on) {
-    ['aircraft-points', 'police-points'].forEach(function (id) {
+    ['aircraft-points', 'police-points', 'police-hotspots'].forEach(function (id) {
       if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
     });
   }
@@ -635,16 +657,49 @@
     openPopup(lngLat, card);
   }
 
+  // A probability hotspot pin. Shows the likelihood + how many sightings back it,
+  // and roughly when it was last seen. Probabilities are derived from real
+  // accumulated sightings (server/hotspots.js), not a static dataset.
+  function showHotspotPopup(props, lngLat) {
+    var prob = Math.round((props.prob || 0) * 100);
+    var count = props.count || 0;
+    var hour = props.hour != null ? props.hour : -1;
+    var ago = props.latest ? 'last seen ' + relAgo(props.latest) : '';
+    var color = prob >= 67 ? '#ef4444' : (prob >= 34 ? '#f59e0b' : '#22c55e');
+    var card = U.el('div', 'pop-card');
+    card.innerHTML =
+      '<div class="pop-head">' +
+      '  <div class="u-ava" style="--paint:' + color + '">' + U.riderIcon(6, { size: 20 }) + '</div>' +
+      '  <div class="u-id"><div class="u-name">Police hotspot</div>' +
+      '  <div class="u-handle">~' + prob + '% likely here' + (hour >= 0 ? ' · ' + pad2(hour) + ':00' : '') + '</div></div>' +
+      '</div>' +
+      '<div class="pop-tags">' +
+        '<span class="tag"><span class="dot" style="background:' + color + '"></span>Based on ' + count + ' sighting' + (count === 1 ? '' : 's') + '</span>' +
+        (ago ? '<span class="tag tag-delayed">' + ago + '</span>' : '') +
+      '</div>';
+    openPopup(lngLat, card);
+  }
+
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function relAgo(ts) {
+    var mins = Math.round((Date.now() - ts) / 60000);
+    if (mins < 60) return mins + 'm ago';
+    var hrs = Math.round(mins / 60);
+    if (hrs < 24) return hrs + 'h ago';
+    return Math.round(hrs / 24) + 'd ago';
+  }
+
   /* =================== map click → route prompt =================== */
   function onMapClick(e) {
-    // ghost layers first (aircraft, police) — only present while ghost mode is on
-    var gLayers = ['aircraft-points', 'police-points'].filter(function (id) { return map.getLayer(id); });
+    // ghost layers first (aircraft, police, hotspots) — only present while ghost mode is on
+    var gLayers = ['aircraft-points', 'police-points', 'police-hotspots'].filter(function (id) { return map.getLayer(id); });
     if (gLayers.length) {
       var gf = map.queryRenderedFeatures(e.point, { layers: gLayers });
       if (gf.length) {
         var hit = gf[0];
         var ll = hit.geometry.coordinates.slice();
         if (hit.layer && hit.layer.id === 'police-points') showPolicePopup(hit.properties, ll);
+        else if (hit.layer && hit.layer.id === 'police-hotspots') showHotspotPopup(hit.properties, ll);
         else showAircraftPopup(hit.properties, ll);
         return;
       }
@@ -762,6 +817,7 @@
     setGlobalVisible: setGlobalVisible,
     setAircraftData: setAircraftData,
     setPoliceData: setPoliceData,
+    setHotspotData: setHotspotData,
     setGhostLayersVisible: setGhostLayersVisible,
     getGhostData: getGhostData,
     setRingsData: setRingsData,

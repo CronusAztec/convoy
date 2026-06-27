@@ -13,6 +13,10 @@
    a hidden traffic layer exactly as before. */
 'use strict';
 
+// Server-side only (never served to browsers), but still a billable secret — keep
+// it out of source control. Supply it via the environment (e.g. systemd
+// Environment=TOMTOM_KEY=… or a gitignored .env). Empty = routing/traffic disabled;
+// hasKey() lets the server degrade gracefully instead of calling with no key.
 const TOMTOM_KEY = process.env.TOMTOM_KEY || '';
 const ROUTE_URL = 'https://api.tomtom.com/routing/1/calculateRoute/';
 const TRAFFIC_TILE = 'https://api.tomtom.com/traffic/map/4/tile/flow/relative0/';

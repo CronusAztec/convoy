@@ -12,6 +12,10 @@
      latitude, longitude, street, city, num_thumbs_up, alert_reliability, ...} */
 'use strict';
 
+// RapidAPI key — a billable secret. Server-side only, but still keep it out of
+// source control: supply it via the environment (e.g. systemd
+// Environment=RAPIDAPI_KEY=… or a gitignored .env). Empty = the live Waze layer is
+// disabled; hasKey() makes the server fall back to keyless sources cleanly.
 const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY || '';
 const HOST = 'waze.p.rapidapi.com';
 const URL = 'https://' + HOST + '/alerts-and-jams';
@@ -66,4 +70,4 @@ async function alerts(bottomLeft, topRight, cb) {
   } catch (e) { cb(e); }
 }
 
-module.exports = { hasKey, alerts, WANTED, TOMTOM_KEY: RAPIDAPI_KEY };
+module.exports = { hasKey, alerts, WANTED };

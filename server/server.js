@@ -18,9 +18,12 @@ const store = require('./store');
 const auth = require('./auth');
 const tomtom = require('./tomtom');
 const waze = require('./waze');
+const hotspots = require('./hotspots');
 
 const PORT = parseInt(process.env.PORT || '5173', 10);
-const BOT_COUNT = parseInt(process.env.BOTS || '12', 10);
+// Fake/demo riders are OFF by default for the production build. Set BOTS=12 (or
+// any N) to repopulate the map with simulated riders for demos/dev/testing.
+const BOT_COUNT = parseInt(process.env.BOTS || '0', 10);
 const NEARBY_KM = parseFloat(process.env.NEARBY_KM || '30');
 const GLOBAL_DELAY_MS = parseInt(process.env.GLOBAL_DELAY_MS || '300000', 10); // ~5 min
 const MAX_PARTY = 6;            // members per convoy, leader included (matches client MAX_MEMBERS)
@@ -232,7 +235,7 @@ async function handleApi(req, res, urlPath) {
   // server has keys for, so it can opt in or fall back to keyless alternatives.
   // Cheap GET, no upstream call — safe to hit on every connect.
   if (req.method === 'GET' && urlPath === '/api/route/caps') {
-    return json(res, 200, { routing: tomtom.hasKey(), waze: waze.hasKey() });
+    return json(res, 200, { routing: tomtom.hasKey(), waze: waze.hasKey(), hotspots: true });
   }
 
   if (req.method !== 'POST') return json(res, 404, { error: 'not found' });
@@ -327,9 +330,37 @@ async function handleApi(req, res, urlPath) {
         if (!tomtom.isLngLat(bl) || !tomtom.isLngLat(tr)) return json(res, 400, { error: 'bad bbox' });
         waze.alerts(bl, tr, (err, status, fc) => {
           if (err) return json(res, 502, { error: 'Waze service unavailable' });
+          // Feed live police sightings into the probability model — they become
+          // the observations hotspot queries are scored from. Server time, since
+          // the sighting is "now" from the rider's perspective. Non-police alerts
+          // (hazards/accidents) are intentionally excluded from police hotspots.
+          if (fc && fc.features) {
+            const now = Date.now();
+            for (let i = 0; i < fc.features.length; i++) {
+              const f = fc.features[i];
+              if (f.properties && f.properties.kind === 'police' && f.geometry && f.geometry.coordinates) {
+                hotspots.record(f.geometry.coordinates[0], f.geometry.coordinates[1], now);
+              }
+            }
+          }
           return json(res, 200, fc);
         });
         return;
+      }
+
+      // Police probability hotspots for a bbox + hour. Derived from accumulated
+      // Waze + crowd police sightings (see server/hotspots.js). Anonymous, rate-
+      // limited. body: { bottomLeft:[lng,lat], topRight:[lng,lat], hour?:0..23 }.
+      // hour defaults to the current UTC hour server-side, but the client passes
+      // its LOCAL hour (police patterns are local — "morning rush" = local morning).
+      if (urlPath === '/api/hotspots') {
+        const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+        if (!rateOk(ip, 30, 60 * 1000)) return json(res, 429, { error: 'Too many requests — slow down' });
+        const bl = body && body.bottomLeft, tr = body && body.topRight;
+        if (!tomtom.isLngLat(bl) || !tomtom.isLngLat(tr)) return json(res, 400, { error: 'bad bbox' });
+        let hour = Number(body && body.hour);
+        if (!Number.isInteger(hour) || hour < 0 || hour > 23) hour = new Date().getHours();
+        return json(res, 200, hotspots.query(bl[0], bl[1], tr[0], tr[1], hour));
       }
       return json(res, 404, { error: 'not found' });
     } catch (e) {
@@ -905,8 +936,9 @@ const handlers = {
     }
   },
 
-  // Crowd hazard report (e.g. a live police sighting). Ephemeral — the server does
-  // NOT persist it; clients hold the pin for the session and cap their own array.
+  // Crowd hazard report (e.g. a live police sighting). The live pin is ephemeral
+  // (clients hold it for the session and cap their own array), BUT police reports
+  // are also recorded into the probability model so recurring spots become hotspots.
   // Coords are validated, the label sanitized, and the broadcast is SCOPED: only
   // riders within NEARBY_KM of the report receive it (a police spot on the other
   // side of the world is noise). The reporter's lite is attached so a client can
@@ -919,6 +951,9 @@ const handlers = {
     if (!rateOk(c.ip, 20, 60 * 1000)) return send(c, { t: 'err', msg: 'Too many reports — slow down' });
     const kind = str(m.kind, 24, 'hazard');
     const label = str(m.label, 48, '');
+    // A rider-reported police sighting feeds the probability model just like a
+    // Waze sighting would. Timestamped server-side ("now" from the rider's view).
+    if (kind === 'police') hotspots.record(m.lng, m.lat, Date.now());
     const payload = { t: 'crowd:report', from: liteOf(c), lat: m.lat, lng: m.lng, kind, label };
     const radius = NEARBY_KM * 1000;
     for (const other of clients.values()) {
@@ -985,13 +1020,16 @@ setInterval(() => {
 }, FAST_MS);
 
 /* ================= global feed (delayed) ================= */
-const ambient = B.makeAmbientGlobal();
+// Decorative ambient world dots (fake "always-on" global drivers) are OFF by
+// default in the production build so the global feed reflects only REAL riders.
+// Set AMBIENT=1 to repopulate them for demos/dev (independent of BOTS).
+const AMBIENT = parseInt(process.env.AMBIENT || '0', 10);
+const ambient = AMBIENT ? B.makeAmbientGlobal() : [];
 const snapshots = []; // ring buffer of {t, items}
 
 setInterval(() => {
-  // advance ambient drivers so they visibly move on the global feed
   const dt = 60;
-  for (const a of ambient) B.stepAmbient(a, dt);
+  if (ambient.length) for (const a of ambient) B.stepAmbient(a, dt);
 
   const items = [];
   for (const r of [...clients.values(), ...bots.values()]) {
@@ -1012,7 +1050,7 @@ setInterval(() => {
 
 function buildGlobalFC() {
   const features = [];
-  for (const a of ambient) {
+  if (ambient.length) for (const a of ambient) {
     if (!a.online) continue; // offline ambient drivers don't appear
     features.push({
       type: 'Feature',
@@ -1268,6 +1306,7 @@ function shutdown(sig) {
   try { wss.close(); } catch (e) {}            // no new ws; existing sockets get 1001
   httpServer.close(() => {
     try { store.flush(); } catch (e) {}
+    try { hotspots.flush(); } catch (e) {}   // persist accumulated observations
     console.log('[shutdown] done.');
     process.exit(0);
   });

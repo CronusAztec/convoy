@@ -144,15 +144,15 @@
     };
   }
 
+  // Solo simulation is DISABLED in the production build. Previously this spawned
+  // ~14 fake nearby riders + ambient global dots so the app felt populated when
+  // the server was unreachable. Now: no fake riders — offline/no-server shows an
+  // empty map (just the player marker), which is honest. No crash: the render
+  // loop iterates an empty npcOrder. netMode stays 'connecting' so the UI reads
+  // truthfully; net.js toasts the real situation.
   function enableSolo() {
-    if (solo) return;
-    solo = true;
-    S.netMode = 'solo';
-    clearRiders();
-    for (var i = 0; i < NEARBY_N; i++) addRider(spawnLocal(player.pos));
-    buildLocalGlobal();
-    if (!globalTimer) globalTimer = setInterval(buildLocalGlobal, GLOBAL_MS);
-    ST.emit('nearby:seeded', npcOrder.length);
+    S.netMode = 'connecting';
+    ST.emit('nearby:seeded', 0);
   }
 
   function disableSolo() {
@@ -297,15 +297,29 @@
     var trip = S.trip;
     if (!trip || !trip.active) return;
 
-    trip.progress += trip.baseSpeed * trip.mult * dt;
-    var at = A.routing.posAt(trip.line, trip.progress);
-    player.pos = at.pos;
-    player.heading = at.brg;
-    A.mapview.setPlayer(at.pos, at.brg);
+    // Live GPS navigation: once a real fix has arrived (trip.gotFix, set by the
+    // geolocation watch / native bridge), the rider's ACTUAL position drives
+    // progress — we snap it onto the route via progressAt. Until the first fix,
+    // or in preview playback (mult > 1, live=false), advance the simulated dot so
+    // the trip never freezes when there's no GPS (desktop demo, denied permission).
+    var at;
+    var liveDriven = trip.live && trip.gotFix;
+    if (liveDriven) {
+      // Monotonic: GPS jitter must not drag progress backwards along the route.
+      trip.progress = Math.max(trip.progress, A.routing.progressAt(trip.line, player.pos));
+      at = A.routing.posAt(trip.line, trip.progress);
+      A.mapview.setPlayer(player.pos, at.brg); // marker on the real fix, arrow down-route
+    } else {
+      trip.progress += trip.baseSpeed * trip.mult * dt;
+      at = A.routing.posAt(trip.line, trip.progress);
+      player.pos = at.pos;
+      player.heading = at.brg;
+      A.mapview.setPlayer(at.pos, at.brg);
+    }
 
     if (trip.follow) {
       camBearing = U.lerpAngle(camBearing, at.brg, 1 - Math.pow(0.004, dt));
-      var cam = { center: at.pos, bearing: camBearing };
+      var cam = { center: liveDriven ? player.pos : at.pos, bearing: camBearing };
       if (trip.camIntro) {
         var map = A.mapview.map();
         var z = U.lerp(map.getZoom(), 15.8, 1 - Math.pow(0.02, dt));
@@ -439,14 +453,17 @@
   function beginWatch() {
     if (watchId != null || !navigator.geolocation) return;
     watchId = navigator.geolocation.watchPosition(function (p) {
-      if (S.trip && S.trip.active) return;
+      // A simulated (preview) trip owns the camera/position; a LIVE trip is the
+      // opposite — it WANTS the real fix, so stepTrip can drive progress from it.
+      var liveTrip = S.trip && S.trip.active && S.trip.live;
+      if (S.trip && S.trip.active && !S.trip.live) return;
       var acc = p.coords.accuracy;
       updateGpsDot(acc);
       if (acc != null && acc > ACCURACY_THRESHOLD) return; // skip inaccurate readings
       var pos = [p.coords.longitude, p.coords.latitude];
       if (p.coords.heading != null && !isNaN(p.coords.heading)) player.heading = p.coords.heading;
       player.pos = pos;
-      A.mapview.setPlayer(pos, player.heading);
+      if (liveTrip) S.trip.gotFix = true; // stepTrip now snaps this real position onto the route
       // Feed the performance meter (dragy.js): GPS Doppler speed when the device
       // reports it, else null so the timer derives speed from position deltas.
       ST.emit('gpsfix', {
@@ -456,8 +473,12 @@
         heading: player.heading,
         t: p.timestamp || Date.now()
       });
-      // Follow my real position unless I've panned away or turned off follow-cam.
-      if (gpsFollow && S.settings.followCam) A.mapview.followPlayer(pos);
+      // Outside a trip we place the marker / follow here; during a live trip
+      // stepTrip owns the marker + follow camera (centred on the real fix).
+      if (!liveTrip) {
+        A.mapview.setPlayer(pos, player.heading);
+        if (gpsFollow && S.settings.followCam) A.mapview.followPlayer(pos);
+      }
     }, function (err) {
       if (err.code === 1) A.ui.toast('Location permission denied', 'warn');
       else if (err.code === 2) updateGpsDot(null);
@@ -491,12 +512,15 @@
   // and follow-cam behave identically whether the fix came from JS or native code.
   function externalFix(f) {
     if (!f || typeof f.lng !== 'number' || typeof f.lat !== 'number') return;
-    if (S.trip && S.trip.active) return;          // a simulated trip owns the camera/position
+    // A simulated (preview) trip owns the camera/position; a LIVE trip wants the
+    // real fix so stepTrip can drive progress from it (mirrors the watch handler).
+    var liveTrip = S.trip && S.trip.active && S.trip.live;
+    if (S.trip && S.trip.active && !S.trip.live) return;
     var pos = [f.lng, f.lat];
     if (f.bearing != null && !isNaN(f.bearing)) player.heading = f.bearing;
     player.pos = pos;
+    if (liveTrip) S.trip.gotFix = true;
     if (typeof f.accuracy === 'number') { lastAccuracy = f.accuracy; updateGpsDot(f.accuracy); }
-    A.mapview.setPlayer(pos, player.heading);
     ST.emit('gpsfix', {
       pos: pos,
       speed: (f.speed != null && f.speed >= 0) ? f.speed : null,
@@ -504,7 +528,10 @@
       heading: player.heading,
       t: f.time || Date.now()
     });
-    if (gpsFollow && S.settings.followCam) A.mapview.followPlayer(pos);
+    if (!liveTrip) {
+      A.mapview.setPlayer(pos, player.heading);
+      if (gpsFollow && S.settings.followCam) A.mapview.followPlayer(pos);
+    }
   }
 
   /* ---------------- api ---------------- */

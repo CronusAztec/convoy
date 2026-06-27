@@ -19,14 +19,17 @@
   var OPENSKY_MS = 12000;    // OpenSky anonymous — slower, rate-limit friendly; supplements ADSBx
   var POLICE_MS = 90000;     // 90s — POIs are static; refetch when bounds move
   var WAZE_MS = 60000;       // 60s — live Waze police sightings (transient; faster than static POIs)
+  var HOT_MS = 5 * 60 * 1000; // 5 min — probability stats change hourly, so slow is fine
   var MAX_BBOX_DEG = 4;      // never query more than a ~4° box (avoid hammering the API)
 
   var adTimer = null;
   var osTimer = null;
   var poTimer = null;
   var wzTimer = null;
+  var hotTimer = null;
   var lastPoliceBbox = null; // {minLat,minLng,maxLat,maxLng} last queried
   var lastWazeBbox = null;   // separate bbox gate — Waze refreshes faster than static POIs
+  var lastHotBbox = null;    // hotspots refetch on a wider pan than live sightings
   var running = false;
 
   // Per-source aircraft caches (raw normalized objects). Each source refreshes on its
@@ -287,6 +290,39 @@
     });
   }
 
+  /* ---------------- police probability hotspots (server-accumulated) ----------------
+     Where police are USUALLY seen at the current hour — derived server-side from
+     accumulated Waze + crowd police sightings (see server/hotspots.js). Distinct
+     from the live police layer: live sightings show "where they are now"; hotspots
+     show "where they tend to be at this time of day". Empty until the server has
+     gathered enough observations (day-1 is correctly empty — no fabricated data). */
+  function hotspotsOn() { return !!(A.config && A.config.routeCaps && A.config.routeCaps.hotspots); }
+  function hotBboxChanged(bb) {
+    if (!lastHotBbox) return true;
+    // Stats move slowly; refetch only on a substantial pan (wider than live sightings).
+    var dLat = Math.abs(bb.minLat - lastHotBbox.minLat), dLng = Math.abs(bb.minLng - lastHotBbox.minLng);
+    return dLat > 0.3 || dLng > 0.3;
+  }
+  function fetchHotspots() {
+    if (!running || !hotspotsOn()) return;
+    var bb = viewBBox();
+    if (!bb) return;
+    if (lastHotBbox && !hotBboxChanged(bb)) return;
+    lastHotBbox = bb;
+    // Pass the viewer's LOCAL hour — police patterns are local ("morning rush" =
+    // local morning), not UTC. The server folds ±1h for smoothness.
+    var hour = new Date().getHours();
+    fetch((A.config ? A.config.base : '') + '/api/hotspots', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bottomLeft: [bb.minLng, bb.minLat], topRight: [bb.maxLng, bb.maxLat], hour: hour })
+    }).then(function (r) { if (!r.ok) throw new Error('hotspots ' + r.status); return r.json(); })
+      .then(function (fc) {
+        if (!running) return;
+        if (A.mapview && A.mapview.setHotspotData) A.mapview.setHotspotData(fc || emptyFC());
+      }).catch(function () { /* keep previous hotspots */ });
+  }
+
   function start() {
     if (running) return;
     if (!S || !S.settings || !S.settings.ghost) return;
@@ -295,15 +331,18 @@
     policeOSM = []; policeWaze = [];
     lastPoliceBbox = null;   // force a refetch even if the view bbox hasn't changed
     lastWazeBbox = null;
+    lastHotBbox = null;
     // immediate first fetch, then per-source intervals (ADSBx fast, OpenSky slow)
     pollAdsbx();
     pollOpenSky();
     fetchPolice();
     if (wazeOn()) fetchWaze();
+    if (hotspotsOn()) fetchHotspots();
     adTimer = setInterval(pollAdsbx, ADSBX_MS);
     osTimer = setInterval(pollOpenSky, OPENSKY_MS);
     poTimer = setInterval(fetchPolice, POLICE_MS);
     if (wazeOn()) wzTimer = setInterval(fetchWaze, WAZE_MS);
+    if (hotspotsOn()) hotTimer = setInterval(fetchHotspots, HOT_MS);
   }
 
   function stop() {
@@ -312,12 +351,14 @@
     if (osTimer) { clearInterval(osTimer); osTimer = null; }
     if (poTimer) { clearInterval(poTimer); poTimer = null; }
     if (wzTimer) { clearInterval(wzTimer); wzTimer = null; }
+    if (hotTimer) { clearInterval(hotTimer); hotTimer = null; }
     acAdsbx = []; acOpenSky = [];
     policeOSM = []; policeWaze = [];
     // clear the layers so nothing lingers when ghost is off
     if (A.mapview) {
       if (A.mapview.setAircraftData) A.mapview.setAircraftData(emptyFC());
       if (A.mapview.setPoliceData) A.mapview.setPoliceData(emptyFC());
+      if (A.mapview.setHotspotData) A.mapview.setHotspotData(emptyFC());
     }
   }
 

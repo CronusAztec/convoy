@@ -130,11 +130,13 @@
     }
   }
 
+  // Server unreachable / offline. No fake riders — the map shows just the player
+  // until a real server connection is re-established (auto-retry continues).
   function fallbackSolo(hadConnection) {
     teardownLive();
-    A.sim.enableSolo();
-    if (hadConnection) A.ui.toast('Server unreachable — riding solo with simulated riders', 'warn');
-    else A.ui.toast('Solo mode — riders are simulated on this device', 'info');
+    A.sim.enableSolo(); // no-op for fake riders; just keeps netMode honest
+    if (hadConnection) A.ui.toast('Server unreachable — retrying… (no other riders shown)', 'warn');
+    else A.ui.toast('Offline — connect to see nearby riders', 'info');
   }
 
   function goLive(m) {
@@ -163,9 +165,13 @@
   function probeRoutingCaps() {
     if (A.config.routeCaps !== undefined) return;
     fetch(A.config.base + '/api/route/caps')
-      .then(function (r) { return r.ok ? r.json() : { routing: false }; })
-      .then(function (j) { A.config.routeCaps = { routing: !!j.routing }; })
-      .catch(function () { A.config.routeCaps = { routing: false }; })
+      .then(function (r) { return r.ok ? r.json() : { routing: false, waze: false, hotspots: false }; })
+      // Carry ALL caps through: ghost.js gates the live Waze police layer on
+      // routeCaps.waze and the probability-hotspots layer on routeCaps.hotspots.
+      // Dropping a cap here silently disables that feature even when the server
+      // advertises it, so every cap the server returns must be forwarded.
+      .then(function (j) { A.config.routeCaps = { routing: !!j.routing, waze: !!j.waze, hotspots: !!j.hotspots }; })
+      .catch(function () { A.config.routeCaps = { routing: false, waze: false, hotspots: false }; })
       .then(function () { ST.emit('routecaps', A.config.routeCaps); });
   }
 

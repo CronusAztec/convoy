@@ -407,9 +407,13 @@
   /* ---------------- alert stack ---------------- */
   function alertRow(t, idx) {
     var far = t.dist > FAR_M;
-    var stat = t.kind === 'police'
-      ? (far ? '(muted)' : 'STATION')
-      : (altStr(t.alt) || (far ? '(muted)' : 'AIRBORNE'));
+    // Only aircraft are aerial (altitude / AIRBORNE). Ground enforcement —
+    // police, speed cameras, ALPR — each gets its own ground status label.
+    var aerial = (t.kind === 'air' || t.kind === 'heli');
+    var stat = aerial
+      ? (altStr(t.alt) || (far ? '(muted)' : 'AIRBORNE'))
+      : far ? '(muted)'
+        : (t.kind === 'police' ? 'STATION' : t.kind === 'alpr' ? 'ALPR' : 'CAMERA');
     return '<button class="ralert ralert-' + t.kind + (far ? ' far' : '') + '" data-i="' + idx + '">' +
       '<span class="ralert-sig">' + sigPips(t) + '</span>' +
       '<span class="ralert-arr" style="transform:rotate(' + Math.round(t.rel) + 'deg)">' + ARROW + '</span>' +
