@@ -103,6 +103,20 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
+  // Paint colors land raw inside style="--paint:…"/background:…/value="…"
+  // attributes. The server already rejects anything but #hex (sanitizeProfile),
+  // but the client renders records it didn't necessarily get from this server
+  // version — mirror that regex at every sink so attribute breakout stays
+  // impossible even if one inbound path ever misses validation.
+  function safePaint(v, dflt) {
+    return (typeof v === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(v)) ? v : (dflt || '#4f8cff');
+  }
+  // Same idea for the car finish enum, which renders raw next to the paint.
+  var FINISHES = { Gloss: 1, Matte: 1, Metallic: 1, Satin: 1 };
+  function safeFinish(v) {
+    return FINISHES[v] ? v : 'Gloss';
+  }
+
   function el(tag, cls, html) {
     var n = document.createElement(tag);
     if (cls) n.className = cls;
@@ -180,13 +194,67 @@
 
   function deepClone(o) { return JSON.parse(JSON.stringify(o)); }
 
+  /* Sunrise/sunset for a lat/lng via the classic NOAA/almanac approximation
+     (accurate to a couple of minutes — plenty for theming). Returns {rise, set}
+     as Dates for today, or null in polar day/night when the sun never crosses
+     the horizon. */
+  function sunTimes(lat, lng, date) {
+    var d = date || new Date();
+    var rad = Math.PI / 180;
+    var n = Math.floor((Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) -
+      Date.UTC(d.getUTCFullYear(), 0, 0)) / 86400000);
+    function calc(rising) {
+      var lngHour = lng / 15;
+      var t = n + ((rising ? 6 : 18) - lngHour) / 24;
+      var M = (0.9856 * t) - 3.289;
+      var L = M + (1.916 * Math.sin(M * rad)) + (0.020 * Math.sin(2 * M * rad)) + 282.634;
+      L = (L % 360 + 360) % 360;
+      var RA = Math.atan(0.91764 * Math.tan(L * rad)) / rad;
+      RA = (RA % 360 + 360) % 360;
+      RA += (Math.floor(L / 90) * 90 - Math.floor(RA / 90) * 90);
+      RA /= 15;
+      var sinDec = 0.39782 * Math.sin(L * rad);
+      var cosDec = Math.cos(Math.asin(sinDec));
+      var cosH = (Math.cos(90.833 * rad) - sinDec * Math.sin(lat * rad)) / (cosDec * Math.cos(lat * rad));
+      if (cosH > 1 || cosH < -1) return null; // polar: no rise/set today
+      var H = (rising ? 360 - Math.acos(cosH) / rad : Math.acos(cosH) / rad) / 15;
+      var T = H + RA - (0.06571 * t) - 6.622;
+      var UT = ((T - lngHour) % 24 + 24) % 24;
+      var res = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+      res.setUTCMinutes(Math.round(UT * 60));
+      return res;
+    }
+    var rise = calc(true), set = calc(false);
+    return (rise && set) ? { rise: rise, set: set } : null;
+  }
+
+  // Is the sun up at this location right now? Polar day/night (no rise/set)
+  // falls back to the hemisphere's season.
+  function isDaylight(lat, lng, now) {
+    now = now || new Date();
+    var st = sunTimes(lat, lng, now);
+    if (!st) {
+      var summer = now.getUTCMonth() >= 3 && now.getUTCMonth() <= 8; // Apr–Sep
+      return lat >= 0 ? summer : !summer;
+    }
+    // rise/set are both stamped onto TODAY'S UTC calendar day. Wherever local
+    // sunset falls after UTC midnight — everything west of roughly 60°W, plus
+    // East Asia — `set` lands EARLIER in the day than `rise`, so the naive
+    // `now >= rise && now < set` window is empty and this returned false at
+    // local noon. (Europe/Africa happened to work, which is why it survived.)
+    // When the window wraps midnight, daylight is the UNION of the two ends.
+    var t = now.getTime(), r = st.rise.getTime(), s = st.set.getTime();
+    return (r <= s) ? (t >= r && t < s) : (t >= r || t < s);
+  }
+
   A.util = {
     haversine: haversine, bearing: bearing, destPoint: destPoint,
     relBearing: relBearing, crossTrack: crossTrack,
     lerp: lerp, lerpPos: lerpPos, lerpAngle: lerpAngle,
     clamp: clamp, rand: rand, randInt: randInt, pick: pick, chance: chance, uid: uid,
     fmtDist: fmtDist, fmtDur: fmtDur, fmtClock: fmtClock,
-    hexToRgb: hexToRgb, luma: luma, esc: esc, el: el, debounce: debounce, deepClone: deepClone,
+    hexToRgb: hexToRgb, luma: luma, esc: esc, safePaint: safePaint, safeFinish: safeFinish, el: el, debounce: debounce, deepClone: deepClone,
+    sunTimes: sunTimes, isDaylight: isDaylight,
     iconKey: iconKey, riderIcon: riderIcon, convoyFlag: convoyFlag, ICON_COUNT: ICON_PATHS.length
   };
 })();

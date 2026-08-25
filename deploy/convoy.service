@@ -8,15 +8,44 @@ User=convoy
 WorkingDirectory=/opt/convoy/server
 ExecStart=/usr/bin/node /opt/convoy/server/server.js
 Environment=PORT=5173
-Environment=BOTS=12
+# Simulated riders. MUST stay 0 in production: bots are indistinguishable from
+# real people in the UI (real-looking names and cars, they accept convoy invites
+# and reply to chat), so any non-zero value inflates the live rider count and
+# shows users other "drivers" who do not exist. Set BOTS=12 only on a demo box.
+Environment=BOTS=0
 Environment=NEARBY_KM=30
-# Account/token data lives OUTSIDE the app tree so deploys (scp/cp/tar) can never
-# overwrite or ship users.json or the .secret token key. Create + chown convoy:convoy
-# this dir before enabling the service (see DEPLOY.md §4).
+# Caddy terminates TLS and reverse-proxies to us over loopback, so its
+# X-Forwarded-For is the one we trust for per-IP rate limiting. Set this to an
+# empty value if you ever expose the node process directly — X-Forwarded-For is
+# client-controlled and honouring it from an untrusted peer disables every rate
+# limit in the server.
+Environment=TRUST_PROXY=loopback
+# Runtime cache (hotspots.json) lives OUTSIDE the app tree so deploys
+# (scp/cp/tar) can't clobber it. Accounts no longer live here — they moved to
+# Supabase. Create + chown convoy:convoy this dir before enabling the service.
 Environment=DATA_DIR=/var/lib/convoy
+#
+# ── Supabase (REQUIRED — the server exits at boot without these) ──
+# Accounts and identity both live in Supabase. Do NOT put the real values in this
+# file if it is tracked in git: use an EnvironmentFile with 0600 permissions
+# owned by the convoy user, e.g.
+#   EnvironmentFile=/etc/convoy/convoy.env
+# containing SUPABASE_URL, SUPABASE_SECRET_KEY and SUPABASE_DB_URL.
+#   Environment=SUPABASE_URL=https://<project-ref>.supabase.co
+#   Environment=SUPABASE_SECRET_KEY=sb_secret_...   (admin over Auth + database)
+#   Environment=SUPABASE_DB_URL=postgresql://...    (embeds the DB password)
+#
 # Optional keys — set only what you use:
 #   Environment=TOMTOM_KEY=...        (traffic-aware routing + traffic heatmap)
+#   Environment=OPENWEBNINJA_KEY=...  (live Waze police/hazard layer + hotspot data)
 #   Environment=TTS_DIR=...           (self-hosted Piper neural TTS for nav voice)
+#   Environment=SUPABASE_DB_CA=...    (path OR inline PEM - verify the DB TLS chain)
+#   Environment=SUPABASE_DB_STRICT_TLS=1  (refuse to boot without the CA above)
+#
+# NOTE: Supabase Auth rate-limits /token BY IP, and every call it sees comes from
+# this box. The server sends Sb-Forwarded-For automatically with an sb_secret_ key,
+# but it only takes effect once IP Address Forwarding is switched ON under
+# Dashboard -> Authentication -> Rate Limits. The boot log says which mode it is in.
 Restart=always
 RestartSec=3
 
@@ -24,6 +53,13 @@ RestartSec=3
 NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=read-only
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target

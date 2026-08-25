@@ -42,24 +42,25 @@
   // detector pushes a band/strength via setDetectorAlert(). Auto-expires after DET_TTL.
   var detectorAlert = null;
   var DET_TTL = 8000;
+  // Throttle map uploads so a sustained Ka alert doesn't spam the crowd feed —
+  // one upload per band per this window, keyed to roughly one spot.
+  var lastDetUpload = {};        // band -> { at, pos }
+  var DET_UPLOAD_MS = 90 * 1000; // 90s between uploads of the same band
+  var DET_UPLOAD_MOVE_M = 400;   // ...unless we've moved this far (a new location)
 
   /* ---------------- proximity sonar ----------------
      No asset files — everything is synthesized through the Web Audio API.
-     The sonar stays silent when the sky is clear (silence = safe) and pings
-     faster + sharper the closer the nearest threat is. Each threat kind gets
-     its own timbre so you can ID it by ear. Honors the existing mute button
-     and the global animation setting (anim off ⇒ quiet mode).
-     Spatial cues: a ping pans left/right by the threat's bearing relative to
-     the player's heading (you hear WHICH side it's on), and the pitch bends up
-     when a target is closing and down when it's receding (Doppler feel). A low
-     heartbeat thump quickens whenever something is inside the inner ring. */
+     The sonar stays silent when the sky is clear (silence = safe) and pings at
+     a STEADY cadence, pitch, and volume while a threat is in range — no
+     ramping up as it closes (the old proximity ramp read as the radar
+     "charging up" and got stressful). Each threat kind keeps its own timbre so
+     you can ID it by ear, and a ping still pans left/right by the threat's
+     bearing so you hear WHICH side it's on. Honors the existing mute button
+     and the global animation setting (anim off ⇒ quiet mode). */
   var snd = {
     ctx: null,       // lazily-created AudioContext (browsers gate audio behind a user gesture)
     nextPing: 0,     // ms timestamp the next ambient ping is due
     lastTopKey: null,// key of the closest threat last tick (to sting on a NEW contact)
-    lastSeq: -1,     // ping counter so successive blips walk up a little in pitch
-    dist: {},        // key -> last known distance (m), for closing/receding rate
-    beat: 0,         // heartbeat counter
     nextBeat: 0      // ms timestamp the next heartbeat is due
   };
 
@@ -78,6 +79,8 @@
   };
   // Ambient ping cadence multipliers (slow / normal / fast) on the base timing.
   var PING_RATE = { slow: 2.0, normal: 1.0, fast: 0.55 };
+  var PING_BASE_MS = 1200;  // steady ping interval (× the rate setting) — constant, never proximity-scaled
+  var BEAT_MS = 900;        // steady heartbeat interval while risk is above the gate
 
 
   var HEART_RING_M = 1.5 * 1609.344; // inside this the heartbeat quickens
@@ -178,23 +181,51 @@
     thud(t0 + 0.16, base * 1.5, vol * 0.6); // "dub"
   }
 
-  // Ambient "proximity tick": panned by bearing, pitch-bent by closing rate.
-  // Police plays its hi-lo yelp (two tones); other kinds get one character tone.
-  function ping(profile, nearness, pan, closing) {
-    var seq = (snd.lastSeq + 1) % 12;
-    snd.lastSeq = seq;
-    // closing>0 (approaching) raises pitch, <0 (leaving) lowers it. ±8% max.
-    var doppler = 1 + U.clamp(closing || 0, -1, 1) * 0.08;
-    var mul = (1 + seq * 0.012 + nearness * 0.3) * doppler;
-    var vol = (0.05 + 0.07 * nearness) * (profile.vol || 1);
-    tone({ type: profile.type, freq: profile.lo * mul, dur: profile.dur, gain: vol, pan: pan,
+  // Ambient tick: panned by bearing so you hear which side, but otherwise
+  // CONSTANT — same pitch and volume every time, no pitch walk, no Doppler
+  // bend, no proximity scaling. Police plays its hi-lo yelp (two tones);
+  // other kinds get one character tone.
+  function ping(profile, pan) {
+    var vol = 0.10 * (profile.vol || 1);
+    tone({ type: profile.type, freq: profile.lo, dur: profile.dur, gain: vol, pan: pan,
            chop: profile.chop, glide: profile.glide, snap: profile.snap });
     if (profile.dips > 1) {
       // the contrasting second tone — police: the "hi" half of the hi-lo yelp
       setTimeout(function () {
-        if (sonarArmed()) tone({ type: profile.type, freq: profile.hi * mul, dur: profile.dur, gain: vol * 0.9, pan: pan });
+        if (sonarArmed()) tone({ type: profile.type, freq: profile.hi, dur: profile.dur, gain: vol * 0.9, pan: pan });
       }, 150);
     }
+  }
+
+  /* ---------------- spoken contact callouts ----------------
+     Real radar detectors announce contacts out loud so your eyes stay on the
+     road. On a NEW closest contact we speak kind + side + distance through the
+     nav voice pipeline (Piper server TTS with on-device fallback). Throttled:
+     ≥8s between any two callouts, and the same contact isn't re-announced
+     within 2 minutes. Gated by the sonarSpoken setting. */
+  var spokeAt = 0;
+  var spokenKeys = {}; // contact key -> last announced ts
+  function spokenDist(m) {
+    // U.fmtDist gives display text ("1.2 mi", "800 ft") — expand for speech.
+    return U.fmtDist(m, S.settings.units)
+      .replace(/\bmi\b/, 'miles').replace(/\bft\b/, 'feet')
+      .replace(/\bkm\b/, 'kilometers').replace(/\bm\b/, 'meters');
+  }
+  function speakContact(t) {
+    if (!s('sonarSpoken', true)) return;
+    if (!A.routing || !A.routing.say) return;
+    var now = Date.now();
+    if (now - spokeAt < 8000) return;
+    if (spokenKeys[t.key] && now - spokenKeys[t.key] < 120000) return;
+    spokeAt = now;
+    spokenKeys[t.key] = now;
+    for (var k in spokenKeys) { if (now - spokenKeys[k] > 300000) delete spokenKeys[k]; }
+    var side = '';
+    if (t.rel != null) {
+      var a = Math.abs(t.rel);
+      side = a <= 45 ? ' ahead' : a >= 135 ? ' behind' : (t.rel > 0 ? ' to your right' : ' to your left');
+    }
+    A.routing.say(t.type + side + ', ' + spokenDist(t.dist) + '.');
   }
 
   // Two-tone "new contact" sting when a fresh threat becomes the closest.
@@ -210,70 +241,58 @@
   function resetSonar() {
     snd.nextPing = 0;
     snd.lastTopKey = null;
-    snd.dist = {};
     snd.nextBeat = 0;
-    snd.beat = 0;
-    snd.lastSeq = -1;
   }
 
-  // Heartbeat gates on the overall RISK factor (the same 0..25 score the HUD
-  // meter shows), not just the single nearest target's distance. Below the gate
-  // the radar is quiet-of-heart; above it the pulse rises with risk. Threshold
-  // Drive the sonar from the sorted target list each tick.
-  // Returns the proximity [0..1] of the nearest threat (for the ambient cadence).
-  // Honors the radar-audio settings: master volume, per-sound toggles, heartbeat
-  // sensitivity, and ping cadence.
+  // Drive the sonar from the sorted target list each tick. The heartbeat gates
+  // on the overall RISK factor (the same 0..25 score the HUD meter shows), not
+  // just the single nearest target's distance. Honors the radar-audio settings:
+  // master volume, per-sound toggles, heartbeat sensitivity, and ping cadence.
   function updateSonar(targets) {
-    if (!sonarArmed()) { resetSonar(); return 0; }
+    if (!sonarArmed()) { resetSonar(); return; }
     var now = Date.now();
     var wantHeart = s('sonarHeart', true);
     var wantPings = s('sonarPings', true);
     var wantStings = s('sonarStings', true);
 
-    // Heartbeat thresholds come from the sensitivity setting.
+    // Heartbeat thresholds come from the sensitivity setting. The pulse is a
+    // steady on/off signal now: it engages above the gate at ONE fixed depth and
+    // cadence instead of racing as risk climbs — presence of the pulse is the
+    // information, not its tempo.
     var sense = HEART_SENSE[s('heartSense', 'normal')] || HEART_SENSE.normal;
     var risk = computeRisk(targets);
-    // Heartbeat intensity from risk: 0 below the gate, ramping to 1 at "full".
-    var beatIntensity = (wantHeart && risk >= sense.gate)
-      ? U.clamp((risk - sense.gate) / (sense.full - sense.gate), 0, 1) * 0.6 + 0.4
-      : 0;
-    var heartActive = beatIntensity > 0;
+    var heartActive = wantHeart && risk >= sense.gate;
 
     if (heartActive) {
       if (now >= snd.nextBeat) {
-        heartbeat(beatIntensity);
-        // Calm (1.05s) → racing (0.40s) as risk climbs to maximum.
-        snd.nextBeat = now + Math.round(1050 - 650 * beatIntensity);
+        heartbeat(0.6);
+        snd.nextBeat = now + BEAT_MS;
       }
     } else {
       snd.nextBeat = 0;
     }
 
     // Ambient pings run only while the heartbeat is silent (and the ping toggle
-    // is on), so the two never layer. The ping-rate setting scales the cadence.
+    // is on), so the two never layer. Cadence is fixed — only the user's
+    // ping-rate setting scales it, never the threat's distance.
     if (targets.length && !heartActive && wantPings) {
       var top = targets[0];
       var prof = SND_PROFILE[top.kind] || SND_PROFILE.air;
-      var nearness = U.clamp(1 - top.dist / RANGE_M, 0, 1);
-      // Closing rate ∈ [-1..1]: how fast distance changed since last tick, normalized.
-      var prev = snd.dist[top.key];
-      var closing = prev != null ? U.clamp((prev - top.dist) / (0.4 * 1609.344), -1, 1) : 0;
-      snd.dist[top.key] = top.dist;
       if (now >= snd.nextPing) {
-        ping(prof, nearness, panFor(top), closing);
-        // Far ⇒ slow; on top of you ⇒ fast. pingRate multiplies the spread.
+        ping(prof, panFor(top));
         var rateMul = PING_RATE[s('pingRate', 'normal')] || 1;
-        snd.nextPing = now + Math.round((260 + (1 - nearness) * (1 - nearness) * 2340) * rateMul);
+        snd.nextPing = now + Math.round(PING_BASE_MS * rateMul);
       }
-      // New closest contact since last tick ⇒ one-shot sting (if enabled).
-      if (wantStings && top.key !== snd.lastTopKey && top.dist < FAR_M) contactSting(prof, panFor(top));
+      // New closest contact since last tick ⇒ one-shot sting + voice callout
+      // (each gated by its own setting).
+      if (top.key !== snd.lastTopKey && top.dist < FAR_M) {
+        if (wantStings) contactSting(prof, panFor(top));
+        speakContact(top);
+      }
       snd.lastTopKey = top.key;
-      return nearness;
     } else {
       snd.lastTopKey = null;   // clear → next appearance always stings
-      snd.dist = {};
       snd.nextPing = 0;
-      return 0;
     }
   }
 
@@ -328,6 +347,7 @@
   // counted toward risk/heartbeat. Reads from settings with safe defaults.
   function kindAllowed(kind) {
     if (kind === 'police') return s('ghostPolice', true);
+    if (kind === 'station') return s('ghostPolice', true); // stations ride with the police toggle
     if (kind === 'camera') return s('ghostCamera', true);
     if (kind === 'alpr')   return s('ghostAlpr', true);
     if (kind === 'heli')   return s('ghostHeli', true);
@@ -350,13 +370,28 @@
       var d = U.haversine(c, co);
       if (d > RANGE_M) continue;
       var heli = classifyHeli(p);
-      if (!kindAllowed(heli ? 'heli' : 'air')) continue; // ghost filter
-      // sub line: prefer ADS-B type/registration; fall back to OpenSky origin country.
-      var sub = p.acType ? (p.acType + (p.reg ? ' · ' + p.reg : '')) : (p.country || 'Aircraft');
-      if (p.mil) sub = '⚑ ' + sub; // military flag from ADS-B Exchange dbFlags
+      // Shape filter (airplane vs helicopter) — independent of ownership.
+      if (!kindAllowed(heli ? 'heli' : 'air')) continue;
+      // Ownership filter: the board ranks threats, so each class gates separately.
+      // Civilian defaults off (a passing airliner isn't a threat); mil/police/EMS
+      // default on. The map dot stays regardless — these only govern the board/sonar.
+      var owner = p.owner || (p.mil ? 'military' : 'civilian');
+      if (owner === 'civilian' && !s('ghostAirCiv', false)) continue;
+      if (owner === 'military' && !s('ghostAirMil', true)) continue;
+      if (owner === 'police' && !s('ghostAirPolice', true)) continue;
+      if (owner === 'ems' && !s('ghostAirEms', true)) continue;
+      // sub line: ownership badge first (⚑ mil / 🚔 police / ✚ ems), then type/reg.
+      var badge = owner === 'military' ? '⚑ ' : owner === 'police' ? '🚔 ' : owner === 'ems' ? '✚ ' : '';
+      var ownLabel = p.ownerName || (owner === 'military' ? 'Military' : owner === 'police' ? 'Police' : owner === 'ems' ? 'EMS' : 'Civilian');
+      var sub = badge + ownLabel + ' · ' + (p.acType ? (p.acType + (p.reg ? ' · ' + p.reg : '')) : (p.country || 'Aircraft'));
       out.push({
-        key: 'air:' + (p.icao || (co[0].toFixed(3) + ',' + co[1].toFixed(3))),
+        // Prefer the publisher's stable key (ICAO hex) so the board can track a
+        // contact across prediction repaints. The coordinate fallback only kicks in
+        // for sources without a hex, but it's quantized to ~111m (3 decimals) so it
+        // still holds together between 200ms prediction ticks.
+        key: 'air:' + (p.key || p.icao || (co[0].toFixed(3) + ',' + co[1].toFixed(3))),
         kind: heli ? 'heli' : 'air',
+        owner: owner,
         type: heli ? 'Helicopter' : 'Airplane',
         desc: (p.callsign && p.callsign !== '—') ? p.callsign : (p.reg || 'Unknown'),
         sub: sub,
@@ -370,12 +405,18 @@
       if (!pc) continue;
       var pd = U.haversine(c, pc);
       if (pd > RANGE_M) continue;
-      // Three enforcement kinds now (camera=amber, alpr=red, police=blue).
-      var ekind = gp.kind === 'camera' ? 'camera' : (gp.kind === 'alpr' ? 'alpr' : 'police');
+      // Enforcement kinds: camera=amber, alpr=red, station=slate (a building),
+      // police=blue (a LIVE sighting). Station vs live sighting are kept distinct so
+      // a permanent station never reads as an officer present (nor feeds hotspots).
+      var ekind = gp.kind === 'camera' ? 'camera'
+        : gp.kind === 'alpr' ? 'alpr'
+        : gp.kind === 'station' ? 'station'
+        : 'police';
       if (!kindAllowed(ekind)) continue; // ghost filter
       var eMeta = ekind === 'camera' ? { pre: 'cam', type: 'Speed camera', sub: 'Enforcement', def: 'Speed camera' }
         : ekind === 'alpr' ? { pre: 'alpr', type: 'ALPR camera', sub: 'Surveillance', def: 'ALPR / surveillance camera' }
-        : { pre: 'pol', type: 'Police', sub: 'Station', def: 'Police station' };
+        : ekind === 'station' ? { pre: 'sta', type: 'Police station', sub: 'Station', def: 'Police station' }
+        : { pre: 'pol', type: 'Police', sub: 'Live sighting', def: 'Police sighting' };
       out.push({
         key: eMeta.pre + ':' + (pc[0].toFixed(3) + ',' + pc[1].toFixed(3)),
         kind: ekind,
@@ -383,6 +424,29 @@
         desc: gp.name || eMeta.def,
         sub: eMeta.sub,
         coord: pc, dist: pd, rel: U.relBearing(c, hd, pc), alt: null
+      });
+    }
+
+    // Live hardware-detector contact → a synthetic board target so its findings
+    // drive the sonar, risk meter and alert stack like any geo target does. It
+    // has no map position, so we place it along the player's heading (front/rear
+    // per the V1's direction) at a distance derived from signal strength (a
+    // stronger reading reads as closer/hotter). Only real police-band contacts
+    // become threats; a likely-false X band still shows in the banner, not here.
+    if (detectorAlert && Date.now() - detectorAlert.at <= DET_TTL &&
+        detectorAlert.police && s('ghostPolice', true)) {
+      var dStr = detectorAlert.strength;
+      var synthD = U.clamp((1 - dStr / 9), 0, 1) * (2 * 1609.344) + 120; // bar9≈120m … bar0≈3.3km
+      var rel = detectorAlert.direction === 'rear' ? 180 : 0;
+      var synthCoord = U.destPoint(c, (hd + rel) % 360, synthD);
+      out.push({
+        key: 'det:' + detectorAlert.band,
+        kind: 'police',
+        type: detectorAlert.band + '-band radar',
+        desc: detectorAlert.band + ' band',
+        sub: 'Detector · ' + (detectorAlert.confidence >= 0.75 ? 'likely police' : 'possible') +
+          (detectorAlert.family ? ' · ' + detectorAlert.family : ''),
+        coord: synthCoord, dist: synthD, rel: rel, alt: null, detector: true
       });
     }
 
@@ -413,7 +477,7 @@
     var stat = aerial
       ? (altStr(t.alt) || (far ? '(muted)' : 'AIRBORNE'))
       : far ? '(muted)'
-        : (t.kind === 'police' ? 'STATION' : t.kind === 'alpr' ? 'ALPR' : 'CAMERA');
+        : (t.kind === 'police' ? 'POLICE' : t.kind === 'station' ? 'STATION' : t.kind === 'alpr' ? 'ALPR' : 'CAMERA');
     return '<button class="ralert ralert-' + t.kind + (far ? ' far' : '') + '" data-i="' + idx + '">' +
       '<span class="ralert-sig">' + sigPips(t) + '</span>' +
       '<span class="ralert-arr" style="transform:rotate(' + Math.round(t.rel) + 'deg)">' + ARROW + '</span>' +
@@ -437,10 +501,18 @@
     var n = U.clamp(Math.round(d.strength / 9 * 5), 1, 5), pips = '';
     for (var i = 0; i < 5; i++) pips += '<i class="' + (i < n ? 'on hot' : '') + '"></i>';
     var pct = Math.round(U.clamp(d.strength / 9, 0, 1) * 100);
+    // Classification subtitle: cop vs speed reader vs likely false.
+    var verdict = d.camera ? 'Speed camera'
+      : d.police && d.confidence >= 0.75 ? 'Likely POLICE'
+      : d.police ? 'Possible police'
+      : d.kind === 'falsable' ? 'Likely false (door/BSM)'
+      : 'Radar contact';
+    var dir = d.direction ? ' · ' + d.direction : '';
+    var fam = d.family ? ' · ' + d.family : '';
     return '<div class="ralert ralert-detector">' +
       '<span class="ralert-sig">' + pips + '</span>' +
       '<span class="ralert-mid"><span class="ralert-type">' + U.esc(d.band) + '-band <em>RADAR</em></span>' +
-      '<span class="ralert-sub">Detector contact</span></span>' +
+      '<span class="ralert-sub">' + U.esc(verdict + dir + fam) + '</span></span>' +
       '<span class="ralert-right"><span class="ralert-dist">' + pct + '%</span><span class="ralert-stat">SIGNAL</span></span>' +
       '</div>';
   }
@@ -505,11 +577,32 @@
     light('rst-voice', !!S.party);
   }
 
-  /* ---------------- bottom radar dock ---------------- */
+  /* ---------------- bottom radar dock ----------------
+     Live speed from the GPS stream — Doppler when the receiver reports it, else
+     derived from the position delta (the same ladder the speedometer uses).
+     This used to read S.trip.baseSpeed, which is the ROUTE'S PLANNED AVERAGE
+     (distance ÷ duration), so the radar's big speed number was a constant that
+     never moved while driving — and showed "--" entirely unless a route was
+     active, which is exactly when you'd be watching a radar HUD. */
+  var liveMs = null, liveAt = 0, liveFix = null;
+  function noteSpeed(ms) {
+    if (ms == null || isNaN(ms) || ms < 0 || ms > 150) return;
+    liveMs = ms;
+    liveAt = Date.now();
+  }
+  if (ST && ST.on) {
+    ST.on('gpsfix', function (f) {
+      if (f.speed != null) noteSpeed(f.speed);
+      else if (liveFix && f.pos) {
+        var dt = ((f.t || Date.now()) - liveFix.t) / 1000;
+        if (dt > 0.2 && dt < 6) noteSpeed(U.haversine(liveFix.pos, f.pos) / dt);
+      }
+      if (f.pos) liveFix = { pos: f.pos.slice(), t: f.t || Date.now() };
+    });
+  }
   function speedNow() {
-    var t = S.trip;
-    if (!t || !t.active) return null;
-    return Math.round((t.baseSpeed || 0) * (unit() === 'km' ? 3.6 : 2.23694));
+    if (liveMs == null || Date.now() - liveAt > 5000) return null; // stale → "--"
+    return Math.round(liveMs * (unit() === 'km' ? 3.6 : 2.23694));
   }
   function renderDock() {
     var v = speedNow();
@@ -581,13 +674,38 @@
   }
 
   /* ---------------- loop + wiring ---------------- */
+  // Signature of the last-rendered alert stack. tick() runs every 700ms and used
+  // to rebuild the whole #radar-alerts innerHTML + side panel every tick even when
+  // no target moved — pure DOM thrash. We skip the DOM writes when the target set
+  // (keys + distances + bearings, quantized) is unchanged; the sonar still runs
+  // every tick because its cadence is time-based, not state-based.
+  var lastUiSig = '';
+  function targetSig(targets) {
+    var s = '';
+    for (var i = 0; i < targets.length; i++) {
+      var t = targets[i];
+      // 3-digit dist (~11m) + rounded bearing — fine enough that sub-11m jitter
+      // doesn't churn the DOM, coarse enough that real movement still updates.
+      s += t.key + ':' + t.dist.toFixed(3) + '@' + Math.round(t.rel) + (t.alt != null ? ('a' + Math.round(t.alt)) : '') + '|';
+    }
+    return s;
+  }
+
   function tick() {
     if (!active) return;
     var targets = gatherTargets();
-    renderAlerts(targets);
-    renderSide(targets);
+    var sig = targetSig(targets);
+    if (sig !== lastUiSig) {
+      lastUiSig = sig;
+      renderAlerts(targets);
+      renderSide(targets);
+      renderLabels(targets);
+    } else {
+      // Distances/bearings are unchanged, but the clock + status lights can still
+      // tick — update only those cheap text fields, not the whole stack.
+      renderSide(targets);
+    }
     renderDock();
-    renderLabels(targets);
     updateSonar(targets);
     if (A.mapview && A.mapview.setRingsData) A.mapview.setRingsData(ringFC());
     positionSweep(); // 700ms catch-all (covers marker moving under a static camera)
@@ -597,7 +715,13 @@
   function build() {
     if (built) return;
     built = true;
-    wire('radar-locate', function () { var b = byId('ctl-locate'); if (b) b.click(); });
+    wire('radar-locate', function () {
+      // Resume the follow camera first — on phones the radar takeover hides the
+      // normal ⌖/recenter controls, so this button is the only "back to me"
+      // mid-drive. Then fall through to the regular locate (fresh fix + riders).
+      if (A.sim && A.sim.resumeFollow) A.sim.resumeFollow();
+      var b = byId('ctl-locate'); if (b) b.click();
+    });
     wire('radar-mute', function () {
       muted = !muted; renderDock();
       if (muted) {
@@ -613,7 +737,9 @@
     });
     wire('radar-stop', function () { if (A.ui && A.ui.applyGhost) A.ui.applyGhost(false); });
     wire('radar-mic', function () {
-      if (S.party && A.voice && A.voice.toggle) A.voice.toggle();
+      // talkToggle works from ANY mic mode (flips into toggle + live). The old
+      // handler called toggle(), a no-op unless the mode was already 'toggle'.
+      if (S.party && A.voice && A.voice.talkToggle) A.voice.talkToggle();
       else if (A.ui) A.ui.toast('Join a convoy to use voice', 'info');
     });
     // Report a road hazard at the player's position. Opens the same icon-button
@@ -646,6 +772,7 @@
       build();
       if (!was) playActivationFx(); // only on a real off→on transition (dedupes double-calls)
       if (A.mapview && A.mapview.setRingsVisible) A.mapview.setRingsVisible(true);
+      lastUiSig = ''; // force a full alert-stack render on (re)engage
       tick();
       if (!timer) timer = setInterval(tick, TICK_MS);
       // Keep the sweep glued to the driver every frame the camera/marker moves.
@@ -669,20 +796,75 @@
     }
   }
 
-  // Push a hardware radar-detector reading into the HUD (called by js/native.js when
-  // a real BLE detector emits a band/strength frame). Band e.g. 'X'|'K'|'Ka'|'Laser'.
-  function setDetectorAlert(band, strength) {
-    if (!band) return;
-    detectorAlert = { band: String(band), strength: U.clamp(strength | 0, 0, 9), at: Date.now() };
+  // Full BLE detector alert: { band, strength(0..9), freq?, direction?, family }.
+  // Classifies the contact (cop vs speed reader), drives the HUD + sonar, and
+  // uploads high-confidence police/camera contacts to the shared crowd map.
+  function onDetectorAlert(a) {
+    if (!a || !a.band) return;
+    var band = String(a.band);
+    var strength = U.clamp(a.strength | 0, 0, 9);
+    var cls = A.detectors ? A.detectors.classify(band, strength) : { kind: 'police', police: true, confidence: 0.5 };
+    detectorAlert = {
+      band: band, strength: strength, at: Date.now(),
+      freq: a.freq || null, direction: a.direction || null, family: a.family || null,
+      kind: cls.kind, police: !!cls.police, camera: !!cls.camera, confidence: cls.confidence
+    };
+    // Speak the contact through the nav voice (same pipeline as spoken alerts),
+    // e.g. "Ka band, likely police."
+    if (s('sonarSpoken', true)) speakDetector(detectorAlert, cls);
+    maybeUploadDetection(band, strength);
     if (active) renderAlerts(gatherTargets());
+  }
+
+  // Back-compat entry (older bridge): band + strength only.
+  function setDetectorAlert(band, strength) {
+    onDetectorAlert({ band: band, strength: strength });
   }
   function clearDetectorAlert() {
     detectorAlert = null;
     if (active) renderAlerts(gatherTargets());
   }
 
+  function speakDetector(d, cls) {
+    if (!A.routing || !A.routing.say) return;
+    var tail = cls.camera ? ', speed camera'
+      : cls.police && cls.confidence >= 0.75 ? ', likely police'
+      : cls.kind === 'falsable' ? ', probably a false' : '';
+    A.routing.say(d.band + ' band' + tail + '.');
+  }
+
+  // Upload to the shared map only when it's LIKELY a cop (or a speed camera) —
+  // not a door-opener X band or a weak K false. Uses detectors.uploadDecision
+  // for the gate, then the existing crowd-report path (server + SABRE host).
+  function maybeUploadDetection(band, strength) {
+    if (!s('detectorUpload', false)) return;   // opt-in; see DEFAULT_SETTINGS
+    var dec = A.detectors ? A.detectors.uploadDecision(band, strength) : null;
+    if (!dec || !dec.upload) return;
+    var pos = A.sim && A.sim.playerPos ? A.sim.playerPos() : null;
+    if (!pos) return;
+    // Per-band throttle: skip if we uploaded this band recently AND haven't moved.
+    var prev = lastDetUpload[dec.kind + ':' + band];
+    var now = Date.now();
+    if (prev && (now - prev.at) < DET_UPLOAD_MS && U.haversine(prev.pos, pos) < DET_UPLOAD_MOVE_M) return;
+    lastDetUpload[dec.kind + ':' + band] = { at: now, pos: pos.slice() };
+
+    var label = dec.label;
+    // The detection is at the player's own position → reportHazard drops the pin,
+    // relays to nearby riders (sendCrowdReport), and feeds the police hotspot model.
+    if (A.overlays && A.overlays.reportHazard) {
+      A.overlays.reportHazard(dec.kind, label);
+    } else if (A.net && A.net.isLive && A.net.isLive() && A.net.sendCrowdReport) {
+      A.net.sendCrowdReport(pos[1], pos[0], dec.kind, label);
+    }
+    // Also push to any on-device SABRE host so its network hears it too.
+    if (A.native && A.native.publishCrowd) {
+      A.native.publishCrowd({ lat: pos[1], lng: pos[0], kind: dec.kind, label: label, source: 'radar-detector' });
+    }
+  }
+
   A.radar = {
     setActive: setActive, isActive: function () { return active; },
-    setDetectorAlert: setDetectorAlert, clearDetectorAlert: clearDetectorAlert
+    setDetectorAlert: setDetectorAlert, onDetectorAlert: onDetectorAlert,
+    clearDetectorAlert: clearDetectorAlert
   };
 })();

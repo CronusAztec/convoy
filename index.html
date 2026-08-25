@@ -3,13 +3,26 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<!-- CSP mirrored from the server's Content-Security-Policy header (server.js).
+     The header covers the deployed site; this meta covers every OTHER way the
+     app can load (file://, python http.server, a static mirror), where without
+     it there would be no CSP at all and any markup-injection bug would become
+     script execution. frame-ancestors is header-only by spec (and prohibited
+     in meta — including it risks the whole policy being dropped), so anti-
+     framing relies on the server header. Keep in sync with the header. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob: https:; connect-src 'self' blob: data: https: wss:"/>
 <title>Convoy</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 3 20 7.5 20 16.5 12 21 4 16.5 4 7.5Z' fill='none' stroke='%239aa3b0' stroke-width='2' stroke-linejoin='round'/><path d='M12 8 16 10.3 16 14.7 12 17 8 14.7 8 10.3Z' fill='none' stroke='%239aa3b0' stroke-width='2' stroke-linejoin='round'/></svg>"/>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- Warm up the TLS/DNS to the CDNs we hit on first paint: the map library +
+     the basemap tile hosts. Shaves the handshake off the first tiles/script. -->
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="preconnect" href="https://basemaps.cartocdn.com" crossorigin>
+<link rel="preconnect" href="https://tiles.openfreemap.org" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.min.css" rel="stylesheet"/>
-<link rel="stylesheet" href="css/styles.css?v=cy38"/>
+<link href="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.min.css" rel="stylesheet"/>
+<link rel="stylesheet" href="css/styles.css?v=cy79"/>
 </head>
 <body>
 
@@ -104,6 +117,9 @@
   <button class="ctl ctl-hazard" id="ctl-hazard" title="Report a hazard" aria-label="Report a hazard">
     <svg viewBox="0 0 24 24"><path d="M12 3.6 21.5 20H2.5Z"/><path d="M12 10v4.4"/><path d="M12 17.4v.02"/></svg>
   </button>
+  <button class="ctl" id="ctl-loop" title="Cruise loop — plan a route that loops back here, avoiding police, stop signs &amp; lights" aria-label="Plan a cruise loop">
+    <svg viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.6-5.7"/><path d="M17.5 2.8v3.7h3.7"/></svg>
+  </button>
   <button class="ctl ctl-accent" id="ctl-recenter" title="Resume follow camera" aria-label="Resume follow camera" hidden>
     <svg viewBox="0 0 24 24"><path d="M12 3.5 18.5 20 12 16.2 5.5 20Z" fill="currentColor" stroke="none"/></svg>
   </button>
@@ -117,6 +133,9 @@
       <circle cx="9.5" cy="11" r="1.1" fill="currentColor" stroke="none"/>
       <circle cx="14.5" cy="11" r="1.1" fill="currentColor" stroke="none"/>
     </svg>
+  </button>
+  <button class="ctl ctl-park" id="ctl-park" title="Parking pin — drop it here / find your car" aria-label="Parking pin">
+    <svg viewBox="0 0 24 24"><rect x="3.2" y="3.2" width="17.6" height="17.6" rx="4.5"/><path d="M9.5 17V7h3.7a3.2 3.2 0 0 1 0 6.4H9.5"/></svg>
   </button>
 </div>
 
@@ -139,7 +158,7 @@
 
 <section class="panel" data-panel="profile" id="panel-profile" aria-label="Profile">
   <header class="panel-head">
-    <div class="panel-titles"><h2>Garage</h2><span class="panel-sub">vehicle · settings</span></div>
+    <div class="panel-titles"><h2>Profile</h2><span class="panel-sub">you · garage · settings</span></div>
     <button class="icon-btn" id="profile-settings-btn" aria-label="Open settings" title="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.1"/><path d="M12 2.8v2.5M12 18.7v2.5M21.2 12h-2.5M5.3 12H2.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8M18.4 18.4l-1.8-1.8M7.4 7.4 5.6 5.6"/></svg></button>
     <button class="icon-btn panel-close" data-close aria-label="Close panel"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   </header>
@@ -148,6 +167,9 @@
 
 <!-- ======================= ROUTE / TRIP CARD ======================= -->
 <div id="eta-card" class="eta-card" hidden></div>
+
+<!-- ======================= RACE HUD (live, during a drag race) ======================= -->
+<div id="race-hud" class="race-hud" hidden aria-label="Live race"></div>
 
 <!-- ======================= DOCK ======================= -->
 <nav id="dock" aria-label="Main navigation">
@@ -234,7 +256,7 @@
   <div class="rfx-sweep"></div>
   <div class="rfx-pulse"></div>
   <div class="rfx-pulse rfx-pulse2"></div>
-  <div class="rfx-title">GHOST MODE<small>RADAR ENGAGED</small></div>
+  <div class="rfx-title">GHOST MODE<small>RADAR ACTIVE</small></div>
 </div>
 
 <!-- continuous rotating sweep line (persistent while radar is engaged; ties the
@@ -254,25 +276,50 @@
   </div>
 </noscript>
 
-<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.min.js"></script>
-<script src="js/config.js?v=cy38"></script>
-<script src="js/data.js?v=cy38"></script>
-<script src="js/util.js?v=cy38"></script>
-<script src="js/state.js?v=cy38"></script>
-<script src="js/mapview.js?v=cy38"></script>
-<script src="js/sim.js?v=cy38"></script>
-<script src="js/net.js?v=cy38"></script>
-<script src="js/routing.js?v=cy38"></script>
-<script src="js/ghost.js?v=cy38"></script>
-<script src="js/radar.js?v=cy38"></script>
-<script src="js/overlays.js?v=cy38"></script>
-<script src="js/scanners.js?v=cy38"></script>
-<script src="js/dragy.js?v=cy38"></script>
-<script src="js/party.js?v=cy38"></script>
-<script src="js/voice.js?v=cy38"></script>
-<script src="js/ui.js?v=cy38"></script>
-<script src="js/auth.js?v=cy38"></script>
-<script src="js/native.js?v=cy38"></script>
-<script src="js/app.js?v=cy38"></script>
+<!-- defer everything: scripts download in parallel during parse and execute in
+     order right before DOMContentLoaded (which app.js waits on), so nothing is
+     render-blocking. maplibre stays first so its global is ready for mapview. -->
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.min.js" defer></script>
+<script src="js/config.js?v=cy79" defer></script>
+<script src="js/data.js?v=cy79" defer></script>
+<script src="js/util.js?v=cy79" defer></script>
+<script src="js/state.js?v=cy79" defer></script>
+<script src="js/themes.js?v=cy79" defer></script>
+<script src="js/detectors.js?v=cy79" defer></script>
+<script src="js/space.js?v=cy79" defer></script>
+<script src="js/mapview.js?v=cy79" defer></script>
+<script src="js/sim.js?v=cy79" defer></script>
+<script src="js/net.js?v=cy79" defer></script>
+<script src="js/routing.js?v=cy79" defer></script>
+<script src="js/ghost.js?v=cy79" defer></script>
+<script src="js/radar.js?v=cy79" defer></script>
+<script src="js/overlays.js?v=cy79" defer></script>
+<script src="js/scanners.js?v=cy79" defer></script>
+<script src="js/racetimer.js?v=cy79" defer></script>
+<script src="js/dragy.js?v=cy79" defer></script>
+<script src="js/wake.js?v=cy79" defer></script>
+<script src="js/places.js?v=cy79" defer></script>
+<script src="js/triplog.js?v=cy79" defer></script>
+<script src="js/speedo.js?v=cy79" defer></script>
+<script src="js/hud.js?v=cy79" defer></script>
+<script src="js/compass.js?v=cy79" defer></script>
+<script src="js/clock.js?v=cy79" defer></script>
+<script src="js/tripmeter.js?v=cy79" defer></script>
+<script src="js/gmeter.js?v=cy79" defer></script>
+<script src="js/quest.js?v=cy79" defer></script>
+<script src="js/weathernow.js?v=cy79" defer></script>
+<script src="js/battery.js?v=cy79" defer></script>
+<script src="js/coords.js?v=cy79" defer></script>
+<script src="js/destarrow.js?v=cy79" defer></script>
+<script src="js/speedalert.js?v=cy79" defer></script>
+<script src="js/dimmer.js?v=cy79" defer></script>
+<script src="js/tripextras.js?v=cy79" defer></script>
+<script src="js/party.js?v=cy79" defer></script>
+<script src="js/voice.js?v=cy79" defer></script>
+<script src="js/ui.js?v=cy79" defer></script>
+<script src="js/auth.js?v=cy79" defer></script>
+<script src="js/native.js?v=cy79" defer></script>
+<script src="js/race.js?v=cy79" defer></script>
+<script src="js/app.js?v=cy79" defer></script>
 </body>
 </html>

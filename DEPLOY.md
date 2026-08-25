@@ -91,8 +91,8 @@ npm install --omit=dev
 ## 3. Smoke test
 
 ```bash
-# Run as your current user. DATA_DIR outside the repo so accounts/secrets never
-# live in /opt/convoy (the data dir is created on first run if missing).
+# Needs the Supabase config (see §6) — the server exits at boot without it.
+# DATA_DIR holds the hotspot cache and is created on first run if missing.
 PORT=5173 DATA_DIR=/var/lib/convoy node /opt/convoy/server/server.js
 # → Convoy server → http://localhost:5173 (ws: /ws, bots: 12, nearby: 30km)
 ```
@@ -161,15 +161,185 @@ Set in `/etc/systemd/system/convoy.service` (then `sudo systemctl daemon-reload 
 | `GLOBAL_DELAY_MS` | `300000` | Delay of the global feed (5 min) |
 | `MAX_CLIENTS` | `200` | Total connection cap |
 | `MAX_PER_IP` | `10` | Per-IP socket ceiling (one source can't exhaust `MAX_CLIENTS`) |
-| `DATA_DIR` | `server/data` (in-repo) | Where accounts, the token secret, and `users.json` live. **Point this outside the app tree** (e.g. `/var/lib/convoy`) so a deploy/copy mistake can never leak user password hashes. |
-| `TOKEN_TTL_DAYS` | `30` | Auth token lifetime before clients must re-auth |
+| `SUPABASE_URL` | _(required)_ | Supabase project URL. Accounts and identity live here. |
+| `SUPABASE_SECRET_KEY` | _(required)_ | Supabase secret key (`sb_secret_…`) or a legacy `service_role` JWT. **Full admin over Auth and the database — server-side only, never in client JS or the APK.** |
+| `SUPABASE_DB_URL` | _(required)_ | Postgres connection string (embeds the DB password). Session pooler or direct. |
+| `SUPABASE_JWT_SECRET` | _(empty)_ | Only for legacy projects that still sign JWTs with HS256. Projects on asymmetric keys need nothing here. |
+| `SUPABASE_DB_CA` | _(empty)_ | The Supabase CA cert, as a **path or inline PEM**. Set it to verify the database TLS chain; without it the connection is encrypted but its certificate is **not verified**, and the server warns at every boot. |
+| `SUPABASE_DB_STRICT_TLS` | _(empty)_ | Set to `1` in production once `SUPABASE_DB_CA` is in place. Turns "no CA configured" from a warning into a refusal to boot. |
+| `SUPABASE_FORWARD_IP` | _(auto)_ | Set to `0` to stop sending `Sb-Forwarded-For` to Supabase Auth. On by default whenever `SUPABASE_SECRET_KEY` is a modern `sb_secret_…` key — see the note below. |
+| `AUTH_EMAIL_DOMAIN` | `users.convoy.local` | Accounts registered **without** an email get a synthetic `<username>@<domain>` address to satisfy Supabase Auth. It never receives mail — don't point it at a real domain. |
+| `RESEND_API_KEY` | _(empty)_ | Resend API key. **Empty is a supported configuration**: Convoy stays username + password + recovery code, and every mail-dependent route answers 503. Set it to unlock email sign-up, verification, reset-by-email, passwordless sign-in and email change. Server secret. |
+| `MAIL_FROM` | `Convoy <no-reply@odoreeci.tech>` | Sender address. Must be on a domain **verified in Resend** (Domains → Add), or every send is rejected with a 403. |
+| `MAIL_REPLY_TO` | _(empty)_ | Optional reply-to. Unset means replies bounce off the no-reply box. |
+| `APP_URL` | `https://odoreeci.tech` | Origin every emailed link and OAuth redirect points back at. **Required** whenever `RESEND_API_KEY` or `OAUTH_PROVIDERS` is set. Deliberately not derived from the `Host` header — otherwise anyone who can set `Host` chooses where a password-reset link lands. No trailing slash. |
+| `OAUTH_PROVIDERS` | `google` | Comma list of social sign-in providers: `google, apple, github, discord, facebook, azure, twitter, twitch, spotify, gitlab, linkedin_oidc`. **Set-but-empty means none.** Unknown names are dropped. Each still needs dashboard setup — see below. |
+| `OAUTH_NATIVE_REDIRECT` | `tech.odoreeci.convoy://auth` | Where the **APK's** sign-in comes back to. The Capacitor WebView's `https://localhost` origin is not a valid redirect target, so the app claims a scheme in its manifest instead. Changing it means changing `AndroidManifest.xml` and `AuthPlugin.java` too. A running server reports the value in use at `GET /api/auth/config`. |
+| `ANDROID_CERT_SHA256` | _(release keystore)_ | Comma list of APK signing-certificate SHA-256 fingerprints published at `/.well-known/assetlinks.json`. This is what lets the app claim the `/l/…` links Convoy emails. **Public values, not secrets.** Set to empty to stop publishing the file (App Links off; mailed links open in the browser). **With Play App Signing you must add Play's fingerprint** — see below. |
+| `ANDROID_PACKAGE` | `tech.odoreeci.convoy` | Package name in the same file. Only change it alongside `applicationId` in `android/app/build.gradle`. |
+| `DATA_DIR` | `server/data` (in-repo) | Runtime cache only (`hotspots.json`) now that accounts live in Supabase. Still worth pointing outside the app tree (e.g. `/var/lib/convoy`) so a deploy can't clobber it. |
 | `TOMTOM_KEY` | _(empty)_ | TomTom Web key. Set it to enable **traffic-aware routing** (`/api/route`) and the **live traffic heatmap** (`/api/traffic/*`). Empty → the client falls back to keyless OSRM routing and hides the traffic layer. **Never put this in client JS** — it's a server secret. Free tier (~2,500 routes/day) at https://developer.tomtom.com. |
+| `OVERPASS_URLS` | _(2 mirrors)_ | Comma list of Overpass endpoints, tried in order. The client cannot call Overpass directly — it serves no `Access-Control-Allow-Origin` header — so the server proxies and caches it at `/api/overpass`. No key needed. |
+| `OVERPASS_TTL_MS` | `1800000` | How long a cached Overpass answer serves everyone in that area (30 min). These are static POIs. |
+| `OVERPASS_MAX_SPAN_DEG` | `4` | Largest bounding box the proxy will run. **Must not be below what the clients clamp to** (`js/ghost.js` uses 4°), or their normal wide view is refused and the layer silently goes dark. |
 | `TTS_DIR` / `TTS_BIN` / `TTS_MODEL` | `../tts/...` | Self-hosted Piper neural TTS for spoken turn-by-turn nav. Absent → text nav cues only. Install via `node deploy/setup-tts.js`. |
 
-> **`DATA_DIR` recommendation:** on the VPS, keep accounts **out of the repo** — e.g.
-> `Environment=DATA_DIR=/var/lib/convoy` in the service file (create + chown the dir first).
-> That way `scp`/`cp` of a new build can never overwrite or ship `users.json` or the
-> `.secret` token-signing key.
+> **Two Supabase dashboard settings are part of this deployment**, and neither
+> has a code equivalent:
+>
+> 1. **Authentication → Rate Limits → IP Address Forwarding: ON.** Supabase Auth
+>    rate-limits `/token` *by IP address*, and every call it sees comes from this
+>    server. Without forwarding, every rider shares one bucket (capacity 30) —
+>    a few dozen sign-ins or hourly session refreshes and everyone gets 429s. The
+>    server already sends `Sb-Forwarded-For`; this toggle is what makes GoTrue
+>    honour it. Check the boot log: it says which mode it is in.
+> 2. **Authentication → Providers → Email → "Prevent use of leaked passwords": ON**
+>    (Pro plan and above). Rejects passwords found in known breaches. The server
+>    reports GoTrue's `weak_password` as a 400 the rider can act on, so this is
+>    safe to enable. The same page sets the minimum password length — keep it at
+>    6 or raise `validPassword` in server.js to match, or registrations fail the
+>    app's own check only after a round-trip.
+>
+> Convoy sends its own mail through Resend and does **not** use Supabase's SMTP,
+> so nothing under **Authentication → Emails** needs configuring.
+>
+> **The three `SUPABASE_*` values are required — the server exits at boot without
+> them**, rather than starting up and failing every sign-in. Keep them out of any
+> tracked file: use a systemd `EnvironmentFile=/etc/convoy/convoy.env` (mode 0600,
+> owned by the `convoy` user) instead of `Environment=` lines in `convoy.service`.
+> `SUPABASE_SECRET_KEY` is admin over both Auth and the database, and
+> `SUPABASE_DB_URL` embeds the database password.
+
+### Email (Resend) — optional
+
+Skip this whole section to keep the original behaviour: username + password,
+with a one-shot recovery code as the only way back into a locked-out account.
+
+1. **Verify a domain** in the Resend dashboard (Domains → Add), and add the DKIM
+   and SPF records it gives you to your DNS. An unverified domain means every
+   send comes back 403.
+2. Create an API key and set `RESEND_API_KEY`, plus `MAIL_FROM` on that domain
+   and `APP_URL` for the deployment's own origin.
+3. Restart. `GET /api/auth/config` now reports `"email": true`, which is what
+   makes the app draw the email fields at all.
+
+Existing accounts are untouched — they keep `email: null` and their recovery
+code, and can add an address later from Profile → Settings → Account.
+
+**Setting `RESEND_API_KEY` changes two behaviours**, so it is not a purely
+additive switch:
+
+1. **Registration requires an email.** Without a mailer it stays optional, since
+   an address that can never be confirmed would be a dead end.
+2. **Unconfirmed accounts see an anonymised map** — other riders show as
+   "Rider" with no name, handle, username, photo or stats. Cars, pins and
+   movement are unaffected. Opening the confirmation link lifts it live, over the
+   websocket, on whatever device has the map open. Not gated: guests, accounts
+   with `email: null` (everyone from before email support), and — because nobody
+   could confirm — every account when there is no mailer.
+
+### Social sign-in (Google and friends) — optional
+
+Per provider, three things have to line up, and a miss in any of them shows up
+as a button that dead-ends:
+
+1. **Supabase → Authentication → Providers → _provider_**: enable it and paste
+   the client ID and secret from that provider's own console.
+2. **In the provider's console**, the authorised redirect URI is *Supabase's*,
+   not yours: `https://<project-ref>.supabase.co/auth/v1/callback`
+3. **Supabase → Authentication → URL Configuration → Redirect URLs**: add
+   **both** targets — `https://your-domain/**` for the website (the wildcard
+   matters; the callback comes back with a query string) and
+   `tech.odoreeci.convoy://auth*` for the APK. A provider that works on the web
+   and fails in the app is almost always this line.
+
+Then list the provider in `OAUTH_PROVIDERS` and restart. The flow is PKCE with
+the verifier held server-side (`server/oauth.js`), so the app never handles a
+Supabase key and an intercepted redirect is useless on its own.
+
+**The boot log tells you whether steps 1–3 actually landed.** The server reads
+the project's provider settings at startup, and a provider listed in
+`OAUTH_PROVIDERS` but switched off in the dashboard is named, with the exact
+callback URI to paste into the provider's console:
+
+```
+[boot] OAUTH_PROVIDERS lists google, but Supabase Auth does
+[boot]   NOT have it enabled. Those buttons are hidden.
+[boot]   Fix: Dashboard → Authentication → Providers → enable + add the client
+[boot]   ID/secret, and set the redirect URI in the provider's own console to
+[boot]   https://<project-ref>.supabase.co/auth/v1/callback
+[boot] social sign-in: none available
+```
+
+Such a provider is **hidden rather than offered** — `/api/auth/config` leaves it
+out and `/api/oauth/start` answers 503. Without that check the button would
+navigate the browser to GoTrue and land the rider on a raw JSON error page
+reading `{"code":400,"error_code":"validation_failed","msg":"Unsupported
+provider: provider is not enabled"}`. Seeing that string means step 1 was
+skipped. The settings are re-read every 10 minutes, so enabling a provider in
+the dashboard takes effect without a restart.
+
+Two things worth knowing:
+
+- **Account linking** happens on Supabase's side, by matching a *confirmed*
+  email. Signing in with Google using the same confirmed address as an existing
+  Convoy account links the two rather than creating a second one. Convoy shows
+  what is linked under Profile → Settings → Account → Sign-in methods, and can
+  unlink; GoTrue itself refuses to remove the last method on an account.
+- **The Android build** takes a different route through the same flow, and it
+  needs no extra configuration beyond the redirect URL above. Two constraints
+  force it: Google refuses OAuth inside an embedded WebView (`disallowed_useragent`),
+  and the WebView's `https://localhost` origin is not somewhere a provider can
+  redirect back to. So the APK opens the provider in a **Chrome Custom Tab** —
+  the real browser, with the user's real session — and the round-trip returns as
+  a deep link on `tech.odoreeci.convoy://auth`, which Android hands to
+  `MainActivity` and `AuthPlugin` forwards into the same JS handler the web build
+  uses. Steps 1, 3 and 4 of the flow are identical on both.
+
+  The custom scheme is not treated as a secret: another installed app could in
+  principle claim it, which is exactly why the verifier stays on the server. An
+  intercepted redirect carries a code that cannot be redeemed without it.
+
+  Rebuilding the APK after a change here needs `npm run android:sync` first —
+  `www/` is generated, not tracked.
+
+### Mailed links opening the app (Android App Links)
+
+Password resets, email confirmations, sign-in links and email-change
+confirmations are ordinary `https://your-domain/l/<kind>?token=…` links. On a
+phone with the app installed, Android hands them to Convoy instead of a browser.
+Everywhere else — desktop, or a phone without the app — the same URL opens the
+site, which redirects into the in-page flow. Nothing breaks if this is not set
+up; the links just always open in a browser.
+
+**Why the `/l/` path**, rather than the root with a query: App Links match on
+**path only** — query strings are ignored — so claiming `/?cv=reset&token=…`
+would have meant claiming `/`, i.e. handing the app every link to the site, the
+APK download page included. The prefix keeps the claim to exactly those links.
+
+What has to be true:
+
+1. **`https://your-domain/.well-known/assetlinks.json` must be reachable** over
+   real HTTPS, no redirect. The server publishes it; the Caddy config above
+   proxies everything, so it works as-is. Check it with
+   `curl https://your-domain/.well-known/assetlinks.json`.
+2. **The fingerprint in it must match the certificate the installed APK is
+   signed with.** The default is the release keystore in `android/`. If you ship
+   through Play with Play App Signing, Play re-signs your upload and installs
+   carry *Play's* certificate — get it from Play Console → Setup → App
+   integrity → App signing key certificate and put **both** in
+   `ANDROID_CERT_SHA256`, comma separated. Symptom of getting this wrong: links
+   work from a sideloaded APK and open the browser for every Play install.
+3. Android verifies at install time. After changing the file, re-check on a
+   device with:
+
+   ```
+   adb shell pm verify-app-links --re-verify tech.odoreeci.convoy
+   adb shell pm get-app-links tech.odoreeci.convoy
+   ```
+
+   You want `verified` next to the domain. A user can also turn it on manually
+   under Settings → Apps → Convoy → Open by default.
 
 ## 7. Updating the app later
 
@@ -183,17 +353,22 @@ sudo systemctl restart convoy
 
 ## Heads-up (current limitations)
 
-- **Accounts exist, guests are open** — register/login/recovery are server-side (scrypt
-  hashing, stateless revocable tokens). Guests (no account) can still ride/route/convoy;
-  for a private group, add basic auth in the Caddyfile (`basic_auth`) or keep the URL quiet.
-  Anyone with the URL can join as a guest with any name.
+- **Accounts exist, guests are open** — register/login/recovery run through Supabase
+  Auth; the server proxies it so the secret key never ships to a client. Guests (no
+  account) can still ride/route/convoy; for a private group, add basic auth in the
+  Caddyfile (`basic_auth`) or keep the URL quiet. Anyone with the URL can join as a
+  guest with any name.
+- **A password change can lag by up to one token lifetime** — Supabase access tokens
+  stay cryptographically valid until they expire (1h by default). Convoy revokes every
+  session on a password change or recovery reset, which stops refresh tokens dead, but
+  an access token already in flight keeps working until it ages out. Shorten the JWT
+  expiry in the Supabase dashboard if that window matters.
 - **Positions are live by design** — users in the same 30 km bubble see each other's
   reported location in realtime, and the global feed shows everyone delayed ~5 min.
   Share the URL accordingly.
-- **Back up `DATA_DIR`** — it holds every account's password hash, the token-signing
-  secret (`.secret`), and friends/social state. Lose it and no one can sign in (and old
-  tokens stop validating). It's also the one directory that must never be committed or
-  bundled into a deploy tarball — which is why it should live outside the app tree.
+- **Back up Supabase, not `DATA_DIR`** — every account, password, friendship and
+  personal best now lives in the Supabase project. Enable Point-in-Time Recovery (or
+  take regular `pg_dump`s) there. `DATA_DIR` is just a hotspot cache and is disposable.
 - Chat/invites/auth are rate-limited and inputs sanitized server-side, but this is a
   friends-scale server, not hardened SaaS.
 

@@ -147,6 +147,38 @@
     A.net.sendPartyJoin(code);
   }
 
+  /* ================= rally point ================= */
+  // A shared meetup flag the whole convoy sees. Live mode relays through the
+  // server (any member may set/clear); solo mode just updates local state.
+  function setRally(lngLat, label) {
+    if (!S.party) { A.ui.toast('Join a convoy first', 'warn'); return; }
+    if (isLive()) { A.net.sendRally(lngLat[0], lngLat[1], label || 'Rally point'); return; }
+    S.party.rally = { lng: lngLat[0], lat: lngLat[1], label: label || 'Rally point', byName: 'You', t: Date.now() };
+    systemMsg('Rally point set — ' + S.party.rally.label);
+    ST.emit('party');
+  }
+  function clearRally() {
+    if (!S.party || !S.party.rally) return;
+    if (isLive()) { A.net.sendRallyClear(); return; }
+    S.party.rally = null;
+    systemMsg('Rally point cleared');
+    ST.emit('party');
+  }
+
+  // Keep the rally flag on the map in sync with party state (covers live party
+  // broadcasts, solo updates, and leaving/disbanding the convoy).
+  var lastRallySig = '';
+  ST.on('party', function () {
+    var r = S.party && S.party.rally;
+    var sig = r ? r.lng + ',' + r.lat + ',' + (r.label || '') : '';
+    if (sig === lastRallySig) return;
+    var had = !!lastRallySig;
+    lastRallySig = sig;
+    if (A.mapview && A.mapview.setRallyPoint) A.mapview.setRallyPoint(r || null);
+    if (r) A.ui.toast((r.byName || 'Convoy') + ' set a rally point — ' + (r.label || 'Rally point'), 'info');
+    else if (had) A.ui.toast('Rally point cleared', 'info');
+  });
+
   A.party = {
     create: create,
     ensure: ensure,
@@ -156,6 +188,8 @@
     setMode: setMode,
     joinByCode: joinByCode,
     sendChat: sendChat,
-    systemMsg: systemMsg
+    systemMsg: systemMsg,
+    setRally: setRally,
+    clearRally: clearRally
   };
 })();

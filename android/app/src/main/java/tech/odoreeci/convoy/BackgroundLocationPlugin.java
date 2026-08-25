@@ -35,10 +35,32 @@ public class BackgroundLocationPlugin extends Plugin {
 
     private boolean running = false;
 
+    /**
+     * LocationService.listener is STATIC, and this listener captures the plugin —
+     * which holds the Bridge, the Activity and the whole WebView. Leaving it set
+     * leaked an entire WebView instance on every Activity recreation (rotation,
+     * config change, process re-entry), and the stale listener kept receiving
+     * fixes and pushing them at a dead bridge.
+     */
+    @Override
+    protected void handleOnDestroy() {
+        if (LocationService.listener == fixListener) LocationService.listener = null;
+        // ALSO stop the service. Clearing the listener alone left the FGS alive
+        // with no consumer: its own null-listener guard only runs in
+        // onStartCommand (which never re-runs), so GPS stayed held at 2s/5m with
+        // every fix dropped — battery drain plus Play background-location policy
+        // exposure, and no JS left to call stop(). (Rotation is unaffected: the
+        // recreated plugin's load() re-binds, and js re-issues start().)
+        try { getContext().stopService(new Intent(getContext(), LocationService.class)); } catch (Exception e) { /* gone */ }
+        super.handleOnDestroy();
+    }
+
+    private LocationService.FixListener fixListener;
+
     @Override
     public void load() {
         // Pipe service fixes straight to JS as events.
-        LocationService.listener = new LocationService.FixListener() {
+        fixListener = new LocationService.FixListener() {
             @Override public void onFix(Location loc) {
                 JSObject o = new JSObject();
                 o.put("lat", loc.getLatitude());
@@ -50,6 +72,7 @@ public class BackgroundLocationPlugin extends Plugin {
                 notifyListeners("fix", o);
             }
         };
+        LocationService.listener = fixListener;
     }
 
     @PluginMethod

@@ -63,7 +63,17 @@ const tag = Math.random().toString(36).slice(2, 6);
   const me = await apiGet('/api/me', tokenA);
   console.log('   ->', me.status, me.body.username, '-', me.body.profile && (me.body.profile.car.make + ' ' + me.body.profile.car.model));
 
-  console.log('4) two authenticated clients convoy over wss');
+  // Supabase access tokens are short-lived, so the refresh path is now load-
+  // bearing: if it breaks, every rider is silently signed out about an hour in.
+  console.log('4) refresh the session, then use the NEW token');
+  const refreshed = await apiPost('/api/refresh', { refreshToken: reg.body.refreshToken });
+  const rotated = refreshed.status === 200 && refreshed.body.token && refreshed.body.token !== tokenA;
+  const meAfter = refreshed.body.token ? await apiGet('/api/me', refreshed.body.token) : { status: 0 };
+  const badRefresh = await apiPost('/api/refresh', { refreshToken: 'not-a-real-refresh-token' });
+  console.log('   ->', refreshed.status, rotated ? 'new token issued' : 'NO ROTATION',
+    '| /api/me with it ->', meAfter.status, '| bogus refresh ->', badRefresh.status);
+
+  console.log('5) two authenticated clients convoy over wss');
   const A = await wsHello(tokenA, [-118.25, 34.05], profA); A._live();
   // second account
   const userB = 'demo2_' + tag;
@@ -84,8 +94,11 @@ const tag = Math.random().toString(36).slice(2, 6);
 
   A.ws.close(); B.ws.close();
   const ok = tokenA && good.status === 200 && bad.status === 401 && me.status === 200 &&
+    rotated && meAfter.status === 200 && badRefresh.status === 401 &&
     A.account && A.account.username === userA && A.sees.has(B.id) && B.invite;
-  console.log('\n' + (ok ? 'RESULT: PASS — accounts work over production HTTPS (register, login, token ws, convoy).' : 'RESULT: check output above.'));
-  console.log('Demo accounts created: @' + userA + ' / @' + userB + ' (password demopass123) — delete from server/data/users.json if unwanted.');
+  console.log('\n' + (ok ? 'RESULT: PASS — accounts work over production HTTPS (register, login, refresh, token ws, convoy).' : 'RESULT: check output above.'));
+  console.log('Demo accounts created: @' + userA + ' / @' + userB + ' (password demopass123).');
+  console.log('To remove them: delete the users in Supabase → Authentication → Users');
+  console.log('(the public.profiles row and all friend/stat rows cascade away with them).');
   process.exit(0);
 })().catch((e) => { console.error('FAILED:', e.message); process.exit(1); });

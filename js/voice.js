@@ -2,11 +2,14 @@
    WebRTC P2P mesh between convoy members (low-latency Opus).
    Falls back to WebSocket PCM relay when P2P can't connect.
    Three mic modes: push-to-talk (hold), open mic (amplitude gate), toggle (tap).
-   Voice only flows within an active convoy — never globally. */
+   Voice flows within an active convoy, plus — when the "Auto voice chat"
+   setting is on — with riders around you (proximity voice: radius / in sight /
+   on your road, mirroring the Nearby filters). Never globally. */
 (function () {
   'use strict';
   var A = (window.App = window.App || {});
   var ST = A.store;
+  var U = A.util;
 
   var ICE_SERVERS = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
   var OPEN_MIC_THRESHOLD = 0.04;   // RMS amplitude that opens the gate
@@ -20,12 +23,21 @@
   var levelBuf = null;
 
   var mode = 'ptt';        // 'ptt' | 'open' | 'toggle'
-  var active = false;      // voice session running (convoy joined + mic acquired)
-  var members = [];        // [id, ...] of convoy peers
+  var active = false;      // voice session running (peers present + mic acquired)
+  var members = [];        // [id, ...] of ALL session peers (convoy ∪ proximity)
   var peers = {};          // id -> { pc, relayOnly, src, gain, snd }
   var toggleOn = false;    // toggle-mode mic state
   var pttHeld = false;
   var openHotUntil = 0;    // timestamp until which open mic stays open
+
+  /* ---- proximity voice (auto-connect, like proximity chat) ---- */
+  var proxMode = 'off';    // off | radius | sight | road (S.settings.proxVoice)
+  var partyIds = [];       // current convoy peer ids
+  var proxIds = [];        // riders auto-linked by proximity
+  var micDenied = false;   // mic failed once — stop auto-retrying until a user gesture
+  var lastProxCount = 0;   // for the "linked with N riders" toast (fires on 0 → N only)
+  var PROX_POLL_MS = 3000; // how often the proximity set is re-evaluated
+  var EXIT_MARGIN = 1.3;   // keep a linked peer until they're 30% beyond range (no flapping)
 
   var relayScriptNode = null;
   var relayEnc = null;     // AudioEncoder for fallback path (if available)
@@ -33,16 +45,29 @@
   /* ---------------- mic acquisition ---------------- */
   async function acquireMic() {
     if (stream) return true;
-    // The Android WebView surfaces its own permission dialog for getUserMedia as
-    // long as RECORD_AUDIO is declared in the manifest — no mic plugin needed.
-    // Inside Capacitor we still nudge the geolocation-style flow is not required here.
+    // Android: the WebView will only grant getUserMedia() if the app ALREADY holds
+    // the RECORD_AUDIO runtime permission. That used to be requested blindly in
+    // MainActivity.onCreate — a mic prompt on the launch screen with no context.
+    // Now it is requested here, at the moment the rider actually opens voice, so
+    // the prompt arrives when it makes sense. No-op on the web.
+    if (A.native && A.native.ensureMic) {
+      var okPerm = await A.native.ensureMic();
+      if (!okPerm) {
+        if (!micDenied && A.ui) A.ui.toast('Mic permission denied — voice off', 'warn');
+        micDenied = true;
+        return false;
+      }
+    }
     try {
       stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         video: false
       });
     } catch (e) {
-      if (A.ui) A.ui.toast('Mic permission denied — voice off', 'warn');
+      // Only toast the first failure — the proximity poll would otherwise
+      // re-attempt (and re-toast) every few seconds after a denial.
+      if (!micDenied && A.ui) A.ui.toast('Mic permission denied — voice off', 'warn');
+      micDenied = true;
       return false;
     }
     micTrack = stream.getAudioTracks()[0];
@@ -105,7 +130,11 @@
         if (micTrack) micTrack.enabled = on;
         announceMic(on);
         updateUi(on);
-        if (on && mode === 'open') ensureRelayIfNeeded();
+        // Any peer on the relay fallback needs the sender armed the moment we go
+        // live — not just in open-mic mode. The previous `mode === 'open'` guard
+        // meant PTT (the default) and toggle never sent relay audio, so voice was
+        // dead for any convoy where P2P couldn't connect (common on mobile NAT).
+        if (on) ensureRelayIfNeeded();
       }
     }, 33);
   }
@@ -136,8 +165,10 @@
 
     // Send our mic to them
     if (stream) {
-      try { stream.getTracks().forEach(function (t) { pc.addTrack(t, stream); }); }
-      catch (e) { peer.relayOnly = true; }
+      try {
+        stream.getTracks().forEach(function (t) { pc.addTrack(t, stream); });
+        peer.hasLocalTrack = true;
+      } catch (e) { peer.relayOnly = true; }
     }
 
     pc.onicecandidate = function (e) {
@@ -172,7 +203,16 @@
 
   async function onSignal(msg) {
     var id = msg.from;
-    if (members.indexOf(id) < 0) return;
+    if (members.indexOf(id) < 0) {
+      // Not a convoy member — maybe a proximity rider who linked to US first.
+      // Sight/road matching is asymmetric (the rider behind sees the one ahead,
+      // not vice-versa), so accept any opted-in rider inside the mode's range
+      // and adopt them into the session; reconcile() keeps them while in scope.
+      if (!adoptProxPeer(id)) return;
+    }
+    // Defense in depth: ignore signaling addressed to another member (the server
+    // routes on payload.to now, but an old server broadcasts to the whole party).
+    if (msg.payload && msg.payload.to && msg.payload.to !== myId()) return;
     var peer = ensurePeer(id);
     var pc = peer.pc;
     if (!pc) { peer.relayOnly = true; return; }
@@ -200,6 +240,15 @@
     if (!peer) return;
     if (peer.snd) { peer.snd.disconnect(); }
     if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.state === 'suspended') { try { ctx.resume(); } catch (e) {} }
+    // Chrome/WebView quirk: a remote WebRTC audio track is SILENT through
+    // WebAudio alone — the stream must also be bound to an HTMLAudioElement to
+    // start flowing. Bind a muted one (the audible path stays the gain graph,
+    // which keeps per-peer volume control).
+    var el = peer.el || (peer.el = new Audio());
+    el.muted = true;
+    el.srcObject = remoteStream;
+    var p = el.play(); if (p && p.catch) p.catch(function () {});
     var src = ctx.createMediaStreamSource(remoteStream);
     var gain = ctx.createGain();
     gain.gain.value = 1.0;
@@ -208,7 +257,12 @@
   }
 
   function playRelayChunk(fromId, b64, rate) {
+    // Scope check: convoy members always play; unknown senders only when they
+    // qualify as a proximity peer (the server relays coarsely — exact mode
+    // filtering is ours).
+    if (members.indexOf(fromId) < 0 && !adoptProxPeer(fromId)) return;
     if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.state === 'suspended') { try { ctx.resume(); } catch (e) {} }
     var peer = peers[fromId];
     if (!peer) peer = ensurePeer(fromId);
     if (peer.pc && peer.pc.connectionState === 'connected') return; // P2P wins
@@ -261,7 +315,13 @@
         if (f32.length && A.net && A.net.isLive()) A.net.sendVoiceRelay(encodeFloat32(f32), Math.round(ctx.sampleRate / step));
       };
       src.connect(node);
-      node.connect(ctx.destination); // needed for some browsers to run the processor
+      // The processor must be connected to destination to run on some engines,
+      // BUT connecting straight to ctx.destination pipes the mic back out through
+      // the speakers — full-throated echo/feedback. Tap it through a zero-gain
+      // node so the graph is pulled (keeping onaudioprocess firing) with no sound.
+      var mute = ctx.createGain();
+      mute.gain.value = 0;
+      node.connect(mute).connect(ctx.destination);
       relayScriptNode = node;
     } catch (e) { relayScriptNode = null; }
   }
@@ -281,7 +341,91 @@
     return btoa(bin);
   }
 
-  /* ---------------- party lifecycle ---------------- */
+  /* ---------------- proximity peers ---------------- */
+  // Distance-only acceptance test for a rider who signaled/relayed to us.
+  // Deliberately looser than the initiation filter: sight/road are asymmetric
+  // (FOV, heading), and requiring BOTH sides to match would deadlock the pair.
+  // Whoever "sees" the other initiates; the other side accepts by range alone.
+  function inAcceptScope(id) {
+    if (proxMode === 'off' || !A.sim || !A.sim.getNpc) return false;
+    var npc = A.sim.getNpc(id);
+    if (!npc) return false;
+    var pos = npc.livePos || npc.pos;
+    var me = A.sim.playerPos && A.sim.playerPos();
+    if (!me || !pos) return false;
+    var range = proxMode === 'road' ? 4000 : proxMode === 'sight' ? 600 : 2000;
+    return U.haversine(me, pos) <= range * EXIT_MARGIN;
+  }
+
+  // A proximity rider reached out first — take them into the session (and spin
+  // the session up if it wasn't running). Returns true when the sender is now
+  // a legitimate peer.
+  function adoptProxPeer(id) {
+    if (!inAcceptScope(id)) return false;
+    if (proxIds.indexOf(id) < 0) proxIds.push(id);
+    members = sessionIds();
+    if (!active && !micDenied) startParty(members); // async mic; answering works meanwhile
+    return true;
+  }
+
+  // Riders matching the chosen proximity mode right now, with hysteresis:
+  // already-linked peers stay until they leave the (larger) accept scope, so a
+  // pair riding at the edge of range doesn't connect/disconnect every poll.
+  function computeProxIds() {
+    if (proxMode === 'off') return [];
+    if (!A.net || !A.net.isLive()) return [];
+    if (A.state && A.state.settings && A.state.settings.ghost) return []; // ghosts stay silent + hidden
+    if (!A.sim || !A.sim.proximityIds) return [];
+    var keep = {};
+    A.sim.proximityIds(proxMode).forEach(function (id) { keep[id] = 1; });
+    proxIds.forEach(function (id) { if (!keep[id] && inAcceptScope(id)) keep[id] = 1; });
+    return Object.keys(keep);
+  }
+
+  // Union of convoy + proximity peers (deduped, never ourselves).
+  function sessionIds() {
+    var seen = {}, out = [];
+    partyIds.concat(proxIds).forEach(function (id) {
+      if (!id || seen[id] || id === myId()) return;
+      seen[id] = 1;
+      out.push(id);
+    });
+    return out;
+  }
+
+  // Single source of truth for who the voice session should include. Runs on
+  // every party change and on a slow poll (proximity sets drift as riders move).
+  function reconcile() {
+    partyIds = membersOf();
+    proxIds = computeProxIds();
+    var ids = sessionIds();
+    if (!ids.length) {
+      lastProxCount = 0;
+      if (active) stopParty();
+      return;
+    }
+    if (!active) { if (!micDenied) startParty(ids); }
+    else syncMembers(ids);
+    if (proxIds.length && !lastProxCount && A.ui) {
+      A.ui.toast('Voice linked — ' + proxIds.length + ' rider' + (proxIds.length === 1 ? '' : 's') + ' in range', 'info');
+    }
+    lastProxCount = proxIds.length;
+  }
+
+  function setProxMode(m) {
+    if (['off', 'radius', 'sight', 'road'].indexOf(m) < 0) return;
+    proxMode = m;
+    if (ST && ST.setSetting) ST.setSetting('proxVoice', m);
+    if (A.net && A.net.isLive() && A.net.sendVoiceProx) A.net.sendVoiceProx(m);
+    if (A.ui) {
+      A.ui.toast(m === 'off' ? 'Auto voice chat off — convoy voice only'
+        : 'Auto voice chat on — linking riders ' +
+          (m === 'radius' ? 'around you' : m === 'sight' ? 'in sight ahead' : 'on your road'), 'info');
+    }
+    reconcile();
+  }
+
+  /* ---------------- session lifecycle ---------------- */
   async function startParty(memberIds) {
     members = (memberIds || []).slice();
     if (!members.length) return;
@@ -291,7 +435,19 @@
     var ok = await acquireMic();
     if (!ok) return;
     active = true;
-    members.forEach(function (id) { ensurePeer(id); });
+    members.forEach(function (id) {
+      var peer = ensurePeer(id);
+      // A peer created before the mic existed (a proximity rider adopted while
+      // answering their signal) has no local track — add it and renegotiate,
+      // otherwise they'd hear nothing from us over P2P.
+      if (peer.pc && stream && !peer.hasLocalTrack) {
+        try {
+          stream.getTracks().forEach(function (t) { peer.pc.addTrack(t, stream); });
+          peer.hasLocalTrack = true;
+          makeOffer(id, peer);
+        } catch (e) { peer.relayOnly = true; }
+      }
+    });
     startGate();
     showOverlay(true);
   }
@@ -305,6 +461,7 @@
       var p = peers[id];
       try { if (p.pc) p.pc.close(); } catch (e) { }
       try { if (p.snd) p.snd.disconnect(); } catch (e) { }
+      try { if (p.el) { p.el.pause(); p.el.srcObject = null; } } catch (e) { }
     });
     peers = {};
     releaseMic();
@@ -319,6 +476,8 @@
       if (members.indexOf(id) < 0) {
         var p = peers[id];
         try { if (p.pc) p.pc.close(); } catch (e) { }
+        try { if (p.snd) p.snd.disconnect(); } catch (e) { }
+        try { if (p.el) { p.el.pause(); p.el.srcObject = null; } } catch (e) { }
         delete peers[id];
       }
     });
@@ -326,16 +485,58 @@
   }
 
   /* ---------------- PTT / toggle controls ---------------- */
+  // Browsers gate audio behind a user gesture — every control press is one, so
+  // use it to unstick a suspended AudioContext (startParty may have run from a
+  // network event where resume() silently failed).
+  function gestureResume() {
+    if (ctx && ctx.state === 'suspended') { try { ctx.resume(); } catch (e) { } }
+  }
+  // Voice couldn't start (mic denied, or the party event ran outside a user
+  // gesture so getUserMedia was blocked) — retry from this press, which IS one.
+  function retryStart() {
+    if (active) return true;
+    micDenied = false; // a user gesture may re-grant the mic — try again
+    partyIds = membersOf();
+    proxIds = computeProxIds();
+    var ids = sessionIds();
+    if (!ids.length || !A.net || !A.net.isLive()) {
+      if (A.ui) {
+        A.ui.toast(proxMode !== 'off'
+          ? 'No riders in voice range yet — voice links automatically when one is'
+          : 'Voice works in a live convoy — join one first', 'info');
+      }
+      return false;
+    }
+    startParty(ids);
+    return false;
+  }
+
   function pttDown() {
-    if (!active || mode !== 'ptt') return;
+    gestureResume();
+    if (!active) { retryStart(); return; }
+    if (mode !== 'ptt') return;
     pttHeld = true;
   }
   function pttUp() {
     pttHeld = false;
   }
   function toggle() {
-    if (!active || mode !== 'toggle') return;
+    gestureResume();
+    if (!active) { retryStart(); return; }
+    if (mode !== 'toggle') return;
     toggleOn = !toggleOn;
+    if (A.ui) A.ui.toast(toggleOn ? 'Mic on' : 'Mic off', 'info');
+  }
+
+  // One-press talk control for surfaces with a single button (the radar dock
+  // mic): whatever the current mode, flip into toggle mode and go live; press
+  // again to go quiet. PTT users keep PTT on the walkie-talkie overlay.
+  function talkToggle() {
+    gestureResume();
+    if (!active) { retryStart(); return; }
+    if (mode !== 'toggle') { setMode('toggle'); toggleOn = true; }
+    else toggleOn = !toggleOn;
+    if (A.ui) A.ui.toast(toggleOn ? 'Mic on — tap again to mute' : 'Mic off', 'info');
   }
 
   function setMode(m) {
@@ -346,6 +547,21 @@
     openHotUntil = 0;
     mode = m;
     updateModeLabel();
+    updateUi(lastMicState); // armed-ring state depends on the mode, not just transmit
+  }
+
+  var MODE_ORDER = ['ptt', 'open', 'toggle'];
+  var MODE_HINT = {
+    ptt: 'Push to talk — hold the mic button (or Space)',
+    open: 'Open mic — transmits when you speak',
+    toggle: 'Toggle — tap the mic button to talk / mute'
+  };
+  function cycleMode() {
+    gestureResume();
+    if (!active) { retryStart(); return; }
+    var next = MODE_ORDER[(MODE_ORDER.indexOf(mode) + 1) % MODE_ORDER.length];
+    setMode(next);
+    if (A.ui) A.ui.toast(MODE_HINT[next], 'info');
   }
 
   /* ---------------- UI ---------------- */
@@ -361,14 +577,26 @@
     var btn = document.getElementById('wt-ptt');
     if (!btn || btn.dataset.wired) return;
     btn.dataset.wired = '1';
-    // Hold to talk (pointer + keyboard space)
+    // Mode-aware main button: hold = PTT, tap = toggle-mode mic flip. (Open mic
+    // is hands-free; a tap there just reminds how it works.)
     var down = function (e) { e.preventDefault(); pttDown(); };
     var up = function () { pttUp(); };
     btn.addEventListener('pointerdown', down);
     btn.addEventListener('pointerup', up);
     btn.addEventListener('pointerleave', up);
     btn.addEventListener('pointercancel', up);
-    // Tap cycles mode in toggle, holds in ptt; mode switch handled by a small cycle button.
+    btn.addEventListener('click', function () {
+      if (mode === 'toggle') toggle();
+      else if (mode === 'open' && active && A.ui) A.ui.toast('Open mic — it transmits when you speak', 'info');
+    });
+    // The little mode chip cycles PTT → Open → Toggle. (It was never wired
+    // before, which left every mode except hold-to-talk unreachable.)
+    var cyc = document.getElementById('wt-cycle');
+    if (cyc && !cyc.dataset.wired) {
+      cyc.dataset.wired = '1';
+      cyc.addEventListener('click', function (e) { e.stopPropagation(); cycleMode(); });
+    }
+    // Keyboard space = PTT hold
     document.addEventListener('keydown', function (e) {
       if (!active) return;
       if (e.code === 'Space' && !isTyping(e)) { e.preventDefault(); pttDown(); }
@@ -385,7 +613,12 @@
 
   function updateUi(transmitting) {
     var btn = document.getElementById('wt-ptt');
-    if (btn) btn.classList.toggle('wt-live', !!transmitting);
+    if (!btn) return;
+    btn.classList.toggle('wt-live', !!transmitting);
+    // Armed-but-quiet state: toggle mode with the mic flipped on, or open mic
+    // waiting for speech — a steady ring so you know the mic is hot.
+    var armed = (mode === 'toggle' && toggleOn) || (mode === 'open' && active);
+    btn.classList.toggle('wt-on', !!armed && !transmitting);
   }
 
   function updateModeLabel() {
@@ -404,20 +637,19 @@
 
   /* ---------------- init ---------------- */
   function init() {
-    // Reconcile voice with convoy membership.
-    // - convoy ended (or left) → tear down mic + peers
-    // - convoy has members and voice isn't running → start it
+    // Adopt the persisted auto-voice mode (server opt-in is sent on connect by net.js).
+    var saved = A.state && A.state.settings && A.state.settings.proxVoice;
+    if (['radius', 'sight', 'road'].indexOf(saved) >= 0) proxMode = saved;
+
+    // Reconcile voice with convoy membership AND the proximity set.
+    // - all peers gone (left convoy, nobody in range) → tear down mic + peers
+    // - peers exist and voice isn't running → start it
     // - roster changed while running → sync peers
-    ST.on('party', function () {
-      var p = S_party();
-      var ids = membersOf();
-      if (!p || !ids.length) {
-        if (active) stopParty();
-        return;
-      }
-      if (!active) startParty(ids);
-      else syncMembers(ids);
-    });
+    ST.on('party', reconcile);
+    // Proximity drifts as riders move — re-evaluate on a slow poll.
+    setInterval(reconcile, PROX_POLL_MS);
+    // Ghost mode change: going invisible silences proximity voice immediately.
+    ST.on('ghost', reconcile);
   }
 
   // Local helpers reading app state without a hard import cycle.
@@ -437,6 +669,10 @@
     pttDown: pttDown,
     pttUp: pttUp,
     toggle: toggle,
+    talkToggle: talkToggle, // single-button talk control (radar dock mic)
+    cycleMode: cycleMode,
+    setProxMode: setProxMode,                      // auto voice chat: off | radius | sight | road
+    getProxMode: function () { return proxMode; },
     isActive: function () { return active; },
     onSignal: onSignal,
     onRelay: playRelayChunk,

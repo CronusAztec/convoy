@@ -63,9 +63,13 @@ public class SabrePlugin extends Plugin {
         };
         try {
             IntentFilter filter = new IntentFilter(ACTION_SABRE);
-            // Modern receivers must specify a package or export flag; target the SABRE host set.
+            filter.addCategory(CAT_PROXY);   // we are the proxy side of the protocol
+            // Android 13+ requires an explicit export flag. This receiver exists to
+            // hear broadcasts from a SEPARATE app (the SABRE host), so it must be
+            // EXPORTED — RECEIVER_NOT_EXPORTED means "same-app broadcasts only" and
+            // silently killed the entire feature on every device at API 33+.
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                getContext().registerReceiver(rx, filter, Context.RECEIVER_NOT_EXPORTED);
+                getContext().registerReceiver(rx, filter, Context.RECEIVER_EXPORTED);
             } else {
                 getContext().registerReceiver(rx, filter);
             }

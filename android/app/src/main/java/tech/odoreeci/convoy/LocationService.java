@@ -15,6 +15,9 @@ import android.os.Looper;
 import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Foreground location service: keeps high-accuracy GPS fixes flowing while the
  * app is backgrounded or the screen is off. Without this, Android throttles
@@ -63,8 +66,24 @@ public class LocationService extends Service {
         } else {
             startForeground(NOTIF_ID, n);
         }
+        // Nobody is listening — the app process died and Android relaunched a bare
+        // service. Holding GPS at 2s intervals for a consumer that no longer exists
+        // is pure battery drain (and, with POST_NOTIFICATIONS ungranted, invisible
+        // drain). Shut down instead; the plugin restarts us when the app comes back.
+        if (listener == null) { stopForeground(true); stopSelf(); return START_NOT_STICKY; }
         startGps();
-        return START_STICKY; // restart if killed
+        // NOT sticky: this service exists to feed the running app. START_STICKY
+        // resurrected it after a swipe-away or a process kill with listener == null,
+        // which is exactly the "background location with no user intent" pattern
+        // Play's location policy targets.
+        return START_NOT_STICKY;
+    }
+
+    /** Swipe the app away → stop tracking. */
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        stopSelf();
+        super.onTaskRemoved(rootIntent);
     }
 
     private void startGps() {
@@ -83,12 +102,43 @@ public class LocationService extends Service {
         // watchPosition still runs; this just guarantees the OS keeps sampling.
         try {
             if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_FINE_LOCATION)
-                    == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) { stopSelf(); return; }
+            // Pick the best provider(s). Android 12+ (API 31) exposes a FUSED provider
+            // that blends GPS + network + sensors: it cold-starts in ~1s and keeps
+            // delivering indoors / in tunnels / on emulators where raw GPS_PROVIDER
+            // stays silent — which is exactly why the camera never followed the driver.
+            // Older devices request GPS + NETWORK together so a fix arrives from
+            // whichever locks first, instead of waiting on raw GPS alone.
+            List<String> providers = new ArrayList<>();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                providers.add(LocationManager.FUSED_PROVIDER);
+            } else {
+                // Register even while a provider is disabled — that's legal, and updates
+                // start flowing the moment the user re-enables location. Gating on
+                // isProviderEnabled() here left the service registered with NOTHING when
+                // location was off at start, and (gpsListener != null guard above) no
+                // later call ever re-registered, so fixes never arrived.
+                providers.add(LocationManager.GPS_PROVIDER);
+                providers.add(LocationManager.NETWORK_PROVIDER);
+            }
+            Location seed = null;
+            for (String prov : providers) {
                 // Deliver callbacks on the main looper. (Do NOT call Looper.prepare() here —
                 // onStartCommand already runs on the main thread, which has a looper; preparing
                 // a second one throws RuntimeException and the service would crash on start.)
-                lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 2000, 5, gpsListener, Looper.getMainLooper());
+                try {
+                    lm.requestLocationUpdates(prov, 2000, 5, gpsListener, Looper.getMainLooper());
+                } catch (IllegalArgumentException e) { continue; } // provider absent on this device
+                Location l = lm.getLastKnownLocation(prov);
+                if (l != null && (seed == null || l.getTime() > seed.getTime())) seed = l;
             }
+            // Push the last-known fix immediately so the map snaps to the driver on
+            // launch instead of waiting up to ~30s for the first live update — but only
+            // a RECENT one: a cached fix from hours ago (possibly another city) must not
+            // be shown/broadcast as the rider's live position.
+            long MAX_SEED_AGE_MS = 2 * 60 * 1000;
+            if (seed != null && System.currentTimeMillis() - seed.getTime() > MAX_SEED_AGE_MS) seed = null;
+            if (seed != null && listener != null) { try { listener.onFix(seed); } catch (Exception e) { /* ignore */ } }
         } catch (SecurityException e) { /* permission revoked — stop */ stopSelf(); }
     }
 
@@ -96,7 +146,7 @@ public class LocationService extends Service {
         return new NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Convoy")
             .setContentText(text)
-            .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+            .setSmallIcon(R.drawable.ic_stat_convoy)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build();

@@ -7,6 +7,15 @@
   --accent: #9aa3b0;            /* neutral slate — desaturated from the old neon cyan */
   --accent-rgb: 154, 163, 176;
 
+  /* Map rider-dot colors. Defaults match the originals; each is overridable from
+     Settings → Map dots (state.applyDotColors writes these inline on :root).
+     Kept here as CSS fallbacks so dots render correctly before settings load. */
+  --dot-you: #2f80ff;        /* the player */
+  --dot-friend: #ffb000;     /* friends + convoy members */
+  --dot-near: #2faa55;       /* other riders — nearby/radius filter */
+  --dot-road: #36c065;       /* other riders — on your road */
+  --dot-sight: #3ce07a;      /* other riders — in sight ahead */
+
   /* Neutral near-blacks (no blue/violet cast) */
   --bg: #0c0d0f;
   --bg-2: #111317;
@@ -102,6 +111,10 @@ button svg, .ctl svg, .search-icon svg {
 
 #map { position: absolute; inset: 0; }
 #map canvas { outline: none; }
+
+/* Starfield behind the globe (js/space.js) — first child of #map, so the
+   MapLibre canvas (transparent around the globe) paints over it. */
+.space-canvas { position: absolute; inset: 0; pointer-events: none; }
 
 /* ============================== HUD ATMOSPHERE OVERLAYS ============================== */
 /* Fixed full-screen layers above the map but below the UI. pointer-events:none always. */
@@ -285,6 +298,13 @@ button svg, .ctl svg, .search-icon svg {
 .sr-text b { font-weight: 600; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sr-text i { font-style: normal; font-size: 12px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); }
 .sr-loading { padding: 13px 16px; color: var(--text-dim); font-size: 13px; font-family: var(--font-mono); }
+/* "Recent" section header above the history rows */
+.sr-head {
+  padding: 9px 14px 6px;
+  font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--text-dim); font-family: var(--font-mono);
+}
+.sr-head + .sr-item { border-top: none; }
 
 .avatar-btn {
   width: 44px; height: 44px;
@@ -394,7 +414,15 @@ button svg, .ctl svg, .search-icon svg {
 /* during the radar takeover the left edge belongs to #radar-side; exit via the orange STOP */
 body.radar-on .map-controls-left { display: none; }
 @media (max-width: 760px) {
-  .map-controls-left { left: 10px; top: auto; bottom: 180px; transform: none; }
+  /* Sits ABOVE the bottom overlay band (eta card tops out ~230px; walkie-talkie
+     and wt-meta live higher on the left). Previously at 180px the full-width
+     mobile eta card (z-index 6 > this z-index 5) covered it whenever a route
+     was up — "the ghost button disappeared" while navigating in a convoy. */
+  .map-controls-left {
+    left: 10px; top: auto;
+    bottom: calc(240px + env(safe-area-inset-bottom, 0px));
+    transform: none;
+  }
 }
 
 #compass-svg circle { stroke: currentColor; opacity: .4; }
@@ -619,8 +647,141 @@ body.radar-on .map-controls-left { display: none; }
   border: 2px solid var(--paint, var(--accent));
   box-shadow: 0 0 10px color-mix(in srgb, var(--paint, var(--accent)) 45%, transparent);
   cursor: pointer;
+  overflow: hidden; /* uploaded profile photos clip to the avatar shape */
 }
 .u-ava-sm { width: 32px; height: 32px; font-size: 15px; }
+/* uploaded profile photo inside any avatar container */
+.ava-img { width: 100%; height: 100%; object-fit: cover; display: block; border-radius: inherit; }
+.avatar-btn .ava-img { border-radius: var(--radius); }
+
+/* ============================== radar detector settings ============================== */
+.det-status {
+  display: flex; align-items: center; gap: 8px;
+  margin: 4px 0 8px; padding: 8px 11px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: rgba(var(--accent-rgb), .04);
+  font-size: 12px; color: var(--text-dim);
+}
+.det-status .det-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); flex: none; }
+.det-status.on { color: var(--text); }
+.det-status.on .det-dot { background: var(--good); box-shadow: 0 0 7px var(--good); }
+.det-picker { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+.det-scanning { padding: 12px; text-align: center; font-size: 12px; color: var(--text-dim); font-family: var(--font-mono); }
+.det-dev {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 11px; text-align: left;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text);
+  transition: border-color 140ms var(--ease), background 140ms var(--ease);
+}
+.det-dev.ok:hover { border-color: var(--accent); background: rgba(var(--accent-rgb), .08); }
+.det-dev:disabled { opacity: .5; cursor: default; }
+.det-dev-main { display: flex; flex-direction: column; min-width: 0; }
+.det-dev-main b { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.det-dev-main i { font-style: normal; font-size: 11px; color: var(--text-dim); }
+.det-dev.ok .det-dev-main i { color: var(--good); }
+.det-dev-rssi { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-dim); flex: none; }
+.det-compat { margin: 8px 0 2px; font-size: 12px; }
+.det-compat summary { cursor: pointer; color: var(--accent); font-weight: 600; padding: 4px 0; }
+.det-compat-grp { padding: 5px 0; border-top: 1px solid var(--line); }
+.det-compat-grp b { font-size: 12px; }
+.det-compat-grp span { font-size: 11px; color: var(--text-dim); font-family: var(--font-mono); }
+
+/* ============================== profile page (Instagram-style) ============================== */
+.pf-card {
+  display: flex; flex-direction: column;
+  padding: 16px 14px 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm), inset 0 0 24px rgba(var(--accent-rgb), .04);
+  margin-bottom: 10px;
+}
+/* top strip: photo left, counters right (the IG header layout) */
+.pf-ig-top { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
+.pf-ig-stats { flex: 1; display: flex; justify-content: space-around; text-align: center; }
+.pf-ig-stats .pf-stat b { font-size: 20px; }
+.pf-remove-tag { cursor: pointer; }
+.pf-remove-tag:hover { color: var(--bad); border-color: var(--bad); }
+
+/* car card → garage sub-page */
+.pf-garage-btn {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%; margin: 0 0 8px; padding: 12px 14px;
+  text-align: left;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  transition: border-color 160ms var(--ease), box-shadow 160ms var(--ease);
+}
+.pf-garage-btn:hover { border-color: var(--accent); box-shadow: var(--glow-sm); }
+.pf-garage-dot { flex: none; display: grid; place-items: center; }
+.pf-garage-txt { flex: 1; min-width: 0; }
+.pf-garage-txt b { display: block; font-size: 13.5px; font-weight: 700; }
+.pf-garage-txt i {
+  display: block; font-style: normal; font-size: 11.5px; color: var(--text-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px;
+}
+.pf-garage-chev { flex: none; color: var(--text-dim); }
+.pf-garage-chev svg { width: 16px; height: 16px; display: block; }
+
+/* garage sub-page back row */
+.pf-back { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.pf-back-title { font-family: var(--font-disp); font-weight: 700; font-size: 15px; letter-spacing: .04em; }
+
+/* awards */
+.pf-sec-count { color: var(--text-dim); font-weight: 400; margin-left: 6px; }
+.pf-badges { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+.pf-badge {
+  display: flex; flex-direction: column; align-items: center; gap: 5px;
+  padding: 12px 6px 10px; text-align: center;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: rgba(var(--accent-rgb), .04);
+}
+.pf-badge-ic {
+  width: 40px; height: 40px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: rgba(var(--accent-rgb), .12); color: var(--accent);
+  box-shadow: 0 0 10px rgba(var(--accent-rgb), .25);
+}
+.pf-badge-ic svg { width: 20px; height: 20px; }
+.pf-badge-name { font-size: 11px; font-weight: 700; }
+.pf-badge-desc { font-size: 9.5px; color: var(--text-dim); }
+.pf-badge.locked { opacity: .35; filter: saturate(.35); }
+.pf-times { display: block; }
+.pf-photo-wrap { position: relative; flex: none; }
+.pf-photo {
+  width: 78px; height: 78px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--surface-2, rgba(255, 255, 255, .04));
+  border: 2px solid var(--paint, var(--accent));
+  box-shadow: 0 0 14px color-mix(in srgb, var(--paint, var(--accent)) 40%, transparent);
+  cursor: pointer;
+}
+.pf-photo .rider-icon { color: var(--paint, var(--accent)); }
+.pf-cam {
+  position: absolute; right: -2px; bottom: -2px;
+  width: 28px; height: 28px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  background: var(--accent); color: #0a0f16;
+  border: 2px solid var(--bg-2);
+  cursor: pointer;
+  transition: transform 140ms var(--ease);
+}
+.pf-cam:hover { transform: scale(1.12); }
+.pf-id { flex: 1; min-width: 0; }
+.pf-name { font-family: var(--font-disp); font-size: 17px; font-weight: 700; letter-spacing: .02em; }
+.pf-handle { font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); }
+.pf-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.pf-carline { margin-top: 7px; font-size: 12.5px; font-weight: 600; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pf-stats { display: flex; gap: 16px; margin-top: 8px; }
+.pf-stat { font-size: 11px; color: var(--text-dim); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: .06em; }
+.pf-stat b { display: block; font-size: 16px; color: var(--text); font-family: var(--font-disp); }
+.pf-remove { margin-top: 8px; }
 /* Rider insignia glyphs are flat fills that tint with the paint ring / accent */
 .u-ava .rider-icon { color: var(--paint, var(--accent)); filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .45)); }
 .convoy-flag .rider-icon { color: var(--accent); }
@@ -817,6 +978,10 @@ body.radar-on .map-controls-left { display: none; }
   box-shadow: var(--glow-sm);
 }
 
+/* select + optional free-text input ('Custom…' entries — garage engine/mods) */
+.select-custom { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.select-custom .input[hidden] { display: none; }
+
 .segmented {
   display: flex;
   padding: 3px;
@@ -840,6 +1005,9 @@ body.radar-on .map-controls-left { display: none; }
   background: var(--accent);
   box-shadow: var(--glow-sm);
 }
+/* many-option segmented (theme picker) — chips flow onto extra rows */
+.segmented.wrap { flex-wrap: wrap; }
+.segmented.wrap .seg-btn { flex: 1 0 30%; padding: 0 8px; white-space: nowrap; }
 
 .toggle {
   width: 46px; height: 27px; flex: none;
@@ -895,6 +1063,26 @@ body.radar-on .map-controls-left { display: none; }
   cursor: pointer;
 }
 
+/* Map-dot color picker (Settings → Map dots). A round chip showing the live
+   color, with the native color input overlaid transparent so the whole chip is
+   the click target. Matches the .swatch look so it reads as a sibling control. */
+.dot-color {
+  width: 38px; height: 38px;
+  padding: 0;
+  border: 2px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface-2);
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  overflow: hidden;
+  transition: transform 160ms var(--ease), box-shadow 160ms var(--ease);
+}
+.dot-color:hover { transform: scale(1.12); box-shadow: 0 0 10px currentColor; }
+.dot-color::-webkit-color-swatch-wrapper { padding: 0; }
+.dot-color::-webkit-color-swatch { border: none; border-radius: 50%; }
+.dot-color::-moz-color-swatch { border: none; border-radius: 50%; }
+
 .emoji-grid { display: flex; flex-wrap: wrap; gap: 6px; }
 .emoji-btn {
   width: 34px; height: 34px;
@@ -926,6 +1114,7 @@ body.radar-on .map-controls-left { display: none; }
 .pp-name { font-family: var(--font-disp); font-weight: 700; font-size: 17px; letter-spacing: .04em; }
 .pp-handle { font-size: 12px; color: var(--text-dim); font-family: var(--font-mono); }
 .pp-carline { font-size: 13px; font-weight: 600; margin-top: 4px; }
+.pp-trim { font-weight: 400; color: var(--text-dim); }
 .pp-paint { font-size: 12px; color: var(--text-dim); display: flex; align-items: center; gap: 5px; }
 .pp-specs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
 .pp-tag {
@@ -1159,8 +1348,85 @@ body.radar-on .map-controls-left { display: none; }
 .account-info { flex: 1; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .account-info b { font-size: 13.5px; }
 .account-info span { font-size: 11px; color: var(--text-dim); font-family: var(--font-mono); }
-.account-actions { display: flex; gap: 8px; }
-.account-actions .btn { flex: 1; }
+.account-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.account-actions .btn { flex: 1; min-width: 120px; }
+
+/* an email that still needs confirming — the one account row that wants
+   attention rather than just stating a fact */
+.account-row-warn {
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 34%, transparent);
+}
+
+/* Unverified-email bar. Sits under the topbar and above the map controls, and
+   stays until the address is confirmed — it is the only thing explaining why
+   every other rider is called "Rider". */
+.verify-banner {
+  position: fixed;
+  top: 64px; left: 50%; transform: translateX(-50%);
+  z-index: 60;
+  display: flex; align-items: center; gap: 12px;
+  max-width: min(560px, calc(100vw - 24px));
+  padding: 9px 10px 9px 14px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warn) 14%, var(--surface-solid));
+  border: 1px solid color-mix(in srgb, var(--warn) 42%, transparent);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(8px);
+}
+.verify-banner[hidden] { display: none; }
+.verify-banner-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.verify-banner-text b { font-size: 13px; line-height: 1.3; }
+.verify-banner-text span {
+  font-size: 11px; color: var(--text-dim); font-family: var(--font-mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.verify-banner .btn { flex: none; }
+/* The radar HUD takes over the screen — the bar would sit on top of it. */
+body.radar-on .verify-banner { display: none; }
+@media (max-width: 560px) {
+  .verify-banner { top: 58px; padding: 8px 8px 8px 11px; gap: 8px; }
+  .verify-banner-text b { font-size: 12px; }
+}
+
+/* social sign-in */
+.oauth-row { display: flex; flex-direction: column; gap: 8px; }
+.btn-oauth {
+  height: 46px;
+  gap: 10px;
+  justify-content: center;
+  font-size: 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.btn-oauth svg { flex: none; }
+/* Providers without a bundled mark get a lettered badge — plain, but it never
+   misrepresents a brand. */
+.oauth-letter {
+  width: 18px; height: 18px; flex: none;
+  display: grid; place-items: center;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, .08);
+  font: 700 11px var(--font-mono);
+  color: var(--text-dim);
+}
+
+/* linked sign-in methods */
+.linked-list { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 2px; }
+.linked-row {
+  display: flex; align-items: center; gap: 11px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.linked-mark { display: grid; place-items: center; width: 20px; flex: none; }
+.linked-info { flex: 1; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.linked-info b { font-size: 13px; text-transform: capitalize; }
+.linked-info span {
+  font-size: 11px; color: var(--text-dim); font-family: var(--font-mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 /* recovery code */
 .recovery-box {
@@ -1267,12 +1533,14 @@ body.radar-on .map-controls-left { display: none; }
 }
 
 /* ----- category colors (override inline background-color) -----
-   You = blue · friends = amber · other riders = green, brighter with proximity. */
-.m-dot.c-you    { background-color: #2f80ff !important; }
-.m-dot.c-friend { background-color: #ffb000 !important; }
-.m-dot.c-near   { background-color: #2faa55 !important; }   /* radius */
-.m-dot.c-road   { background-color: #36c065 !important; }   /* on your road */
-.m-dot.c-sight  { background-color: #3ce07a !important; }   /* in sight ahead */
+   You = blue · friends = amber · other riders = green, brighter with proximity.
+   Each reads from a CSS var (default in :root, overridden inline by Settings →
+   Map dots) so a user can recolor the whole map's dots live without a reload. */
+.m-dot.c-you    { background-color: var(--dot-you) !important; }
+.m-dot.c-friend { background-color: var(--dot-friend) !important; }
+.m-dot.c-near   { background-color: var(--dot-near) !important; }   /* radius */
+.m-dot.c-road   { background-color: var(--dot-road) !important; }   /* on your road */
+.m-dot.c-sight  { background-color: var(--dot-sight) !important; }  /* in sight ahead */
 .m-car:hover .m-dot {
   transform: scale(1.3);
   box-shadow:
@@ -1329,10 +1597,10 @@ body.radar-on .map-controls-left { display: none; }
 }
 .pp-car .car-dot { border-width: 3px; box-shadow: 0 0 10px rgba(var(--accent-rgb), .5), 0 2px 8px rgba(0, 0, 0, .35); }
 
-/* destination marker — neon beacon + downward chevron + pulsing ground ring */
+/* destination marker — Google-style teardrop pin + pulsing ground ring */
 .m-dest-pin svg {
-  width: 38px; height: 38px;
-  filter: drop-shadow(0 0 8px rgba(var(--accent-rgb), .9)) drop-shadow(0 4px 6px rgba(0, 0, 0, .5));
+  width: 30px; height: 42px;
+  filter: drop-shadow(0 0 5px rgba(var(--accent-rgb), .55)) drop-shadow(0 3px 4px rgba(0, 0, 0, .55));
 }
 .m-dest-ring {
   position: absolute;
@@ -1427,6 +1695,7 @@ body.radar-on .map-controls-left { display: none; }
 .pop-actions .btn { flex: 1; }
 
 .pop-prompt { width: 235px; }
+.pop-sub { font-size: 12px; color: var(--text-dim); line-height: 1.45; }
 .prompt-label {
   display: flex; align-items: center; gap: 8px;
   font-weight: 600; font-size: 13.5px;
@@ -1509,6 +1778,12 @@ body.radar-on .map-controls-left { display: none; }
 }
 .wt-btn svg { width: 28px; height: 28px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .wt-btn:active { transform: scale(.93); }
+/* mic armed but not currently transmitting (toggle-on idle, open mic waiting) */
+.wt-btn.wt-on {
+  color: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .14), var(--shadow);
+}
 /* transmitting = comms burst: sharp neon pulse + scanline flicker ring */
 .wt-btn.wt-live {
   color: var(--accent);
@@ -1557,10 +1832,19 @@ body.radar-on .map-controls-left { display: none; }
   .brand-name { display: none; }
   .brand { padding: 8px 9px; }
   #topbar { top: 10px; left: 10px; right: 10px; gap: 8px; }
-  .chips { top: 66px; left: 10px; flex-direction: row; }
+  .chips { top: 66px; left: 10px; right: 10px; flex-direction: row; flex-wrap: wrap; }
   .chip span:last-child { font-size: 9.5px; }
 
-  .map-controls { right: 10px; top: auto; bottom: 180px; transform: none; }
+  /* Same band as the ghost button on the left: above the eta card / walkie-talkie
+     zone so nothing ever stacks on the control column while driving in a convoy. */
+  .map-controls {
+    right: 10px; top: auto;
+    bottom: calc(240px + env(safe-area-inset-bottom, 0px));
+    transform: none;
+  }
+  /* Phones: fewer on-map buttons = no overlap. Zoom is pinch (the +/- group is
+     redundant) and the Global toggle already exists as the "Global" status chip. */
+  .map-controls .ctl-group, #ctl-global { display: none; }
 
   .panel {
     top: auto;
@@ -1591,7 +1875,13 @@ body.radar-on .map-controls-left { display: none; }
 
   .eta-card { bottom: calc(82px + env(safe-area-inset-bottom)); flex-wrap: wrap; }
   .grid3 { grid-template-columns: 76px 1fr 1fr; }
-  #wt-overlay { right: 12px; bottom: calc(96px + env(safe-area-inset-bottom)); }
+  /* Walkie-talkie moves to the LEFT column, above the ghost button (which tops
+     out at ~282px) — clear of the eta card (~230px), the right control column,
+     and the bottom dock, so convoy voice never covers another control. */
+  #wt-overlay {
+    left: 12px; right: auto;
+    bottom: calc(310px + env(safe-area-inset-bottom, 0px));
+  }
   .wt-btn { width: 56px; height: 56px; }
   .wt-btn svg { width: 24px; height: 24px; }
 }
@@ -1632,6 +1922,7 @@ body.radar-on #radar-dock { display: flex; }
 .ralert-air    { background: linear-gradient(100deg, #1d5598, #143a68); }
 .ralert-heli   { background: linear-gradient(100deg, #235ca0, #16406f); }
 .ralert-police { background: linear-gradient(100deg, #8a4421, #5c2c13); }
+.ralert-station { background: linear-gradient(100deg, #3f4654, #272b33); } /* static building — muted slate */
 .ralert-camera { background: linear-gradient(100deg, #8a6d1e, #5a4711); }
 .ralert-detector { background: linear-gradient(100deg, #a32a2a, #6a1414); box-shadow: inset 0 0 0 1px rgba(255, 90, 60, .5); }
 .ralert-detector .ralert-type em { font-weight: 700; opacity: 1; color: #ffd9d2; letter-spacing: .04em; }
@@ -1768,6 +2059,7 @@ body.radar-on #radar-dock { display: flex; }
 .rl-t { display: block; font-size: 12px; font-weight: 700; }
 .rlabel-air .rl-t, .rlabel-heli .rl-t { color: #7db8ff; }
 .rlabel-police .rl-t { color: #ffae6a; }
+.rlabel-station .rl-t { color: #aab4c4; } /* muted slate — static police station */
 .rlabel-camera .rl-t { color: #ffd84d; }
 
 /* ---- activation flourish: one-shot radar power-on overlay (plays when ghost engages) ---- */
@@ -1845,6 +2137,22 @@ body.radar-on #radar-dock   { animation: rEnterBottom .5s var(--ease) .06s both;
   .rd-btn { width: 40px; height: 40px; }
   /* mobile dock isn't centered, so its entrance must not use translateX(-50%) */
   body.radar-on #radar-dock { animation: rEnterBottomM .5s var(--ease) .06s both; }
+
+  /* Phone radar takeover: the dock already carries locate + hazard + mic, so the
+     regular right control column only duplicates them while colliding with the
+     hotspot legend — hide it (pinch zooms; exit radar to reach compass/global). */
+  body.radar-on .map-controls { display: none; }
+  /* Convoy voice during radar: right side, stacked ABOVE the hotspot legend
+     (which sits right/bottom on phones — see .hot-legend) and the eta card. */
+  body.radar-on #wt-overlay {
+    left: auto; right: 12px;
+    bottom: calc(270px + env(safe-area-inset-bottom, 0px));
+  }
+  /* Navigating while in radar mode: the eta card (bottom ~116-250px, full width)
+     claims the lower band — lift the status stack above it and drop the legend
+     (the hour scrubber is a planning tool, not a driving tool). */
+  body.radar-on:has(#eta-card.show) #radar-side { bottom: calc(266px + env(safe-area-inset-bottom, 0px)); }
+  body.radar-on:has(#eta-card.show) .hot-legend { display: none; }
 }
 
 /* ---- continuous rotating sweep line (visible the whole time radar is on) ----
@@ -1956,13 +2264,23 @@ body.radar-on #radar-sweep {
 /* ============================== police-hotspot legend + hour scrubber ============================== */
 .hot-legend {
   position: fixed; left: 12px; bottom: calc(16px + env(safe-area-inset-bottom, 0px));
-  z-index: 5; width: 184px; padding: 10px 12px;
+  z-index: 5; width: 184px; max-width: calc(100vw - 24px); padding: 10px 12px;
   background: var(--surface-1, rgba(16, 20, 28, .92)); backdrop-filter: blur(8px);
   border: 1px solid var(--line); border-radius: var(--radius-sm);
   box-shadow: 0 8px 24px rgba(0, 0, 0, .42); color: var(--text);
   font-family: var(--font-mono); pointer-events: auto;
 }
 .hot-legend[hidden] { display: none; }
+/* Phones: the bottom-left corner belongs to #radar-side (radar status stack) and
+   the radar dock spans the full bottom — park the legend on the RIGHT, lifted
+   above the dock, so the two never stack. Slimmed so it fits beside the stack. */
+@media (max-width: 760px) {
+  .hot-legend {
+    left: auto; right: 12px;
+    bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+    width: 158px; padding: 8px 10px;
+  }
+}
 .hl-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 7px; }
 .hl-title { font-size: 11.5px; font-weight: 600; letter-spacing: .03em; }
 .hl-hour { font-size: 11px; color: var(--accent); }
@@ -1978,6 +2296,25 @@ body.radar-on #radar-sweep {
 .hl-btn { width: 22px; height: 22px; display: grid; place-items: center; font-size: 14px; line-height: 1; }
 .hl-now { height: 22px; padding: 0 8px; font-size: 10px; color: var(--accent); }
 .hl-btn:hover, .hl-now:hover { background: rgba(var(--accent-rgb), .14); }
+
+/* SOS beacon button in the convoy panel */
+.sos-btn {
+  margin: 10px 14px 0; width: calc(100% - 28px);
+  border: 1px solid rgba(255, 90, 60, .45);
+  background: rgba(255, 90, 60, .08);
+}
+.sos-btn:hover:not(:disabled) { background: rgba(255, 90, 60, .16); }
+.sos-btn:disabled { opacity: .7; cursor: default; }
+
+/* ============================== convoy rally flag ============================== */
+.rally-marker {
+  width: 34px; height: 34px; cursor: pointer;
+  color: #f59e0b;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, .6));
+}
+.rally-marker svg { width: 100%; height: 100%; }
+[data-anim="on"] .rally-marker { animation: rallyWave 2.4s ease-in-out infinite; transform-origin: 15% 95%; }
+@keyframes rallyWave { 0%, 100% { transform: rotate(0deg); } 50% { transform: rotate(-7deg); } }
 
 /* Android-app download link in Settings → About */
 .apk-link {
@@ -2178,3 +2515,377 @@ body.radar-on #radar-sweep {
 .hz-ic svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .hz-lb { font-size: 11.5px; font-weight: 600; text-align: center; letter-spacing: .02em; }
 @media (max-width: 760px) { .hazard-grid { grid-template-columns: repeat(2, 1fr); } }
+
+/* ===================== public profile overlay (Instagram-style) ===================== */
+/* View-only rider page reached by tapping a rider. Reuses modal-card + design
+   tokens; layout echoes renderProfileCard's header but adds PB + car sections. */
+.profile-overlay { width: min(520px, 100%); }
+
+.pf-po-head {
+  display: flex; align-items: center; gap: 16px; padding: 4px 2px 2px;
+}
+.pf-po-photo {
+  width: 84px; height: 84px; border-radius: 50%;
+  display: grid; place-items: center; color: #fff;
+  background: radial-gradient(circle at 30% 25%, rgba(255,255,255,.18), transparent 60%), var(--paint, var(--accent));
+  border: 2px solid var(--line-strong);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .12), var(--shadow);
+  flex-shrink: 0; overflow: hidden;
+}
+.pf-po-photo .ava-img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+.pf-po-photo .rider-icon { width: 44px; height: 44px; }
+.pf-po-id { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.pf-po-name {
+  font-family: var(--font-disp); font-size: 20px; font-weight: 700;
+  color: var(--text); letter-spacing: .01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pf-po-handle { font-size: 12.5px; color: var(--text-dim); }
+.pf-po-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 2px; }
+
+.pf-po-strip {
+  display: flex; justify-content: space-around; gap: 6px;
+  padding: 12px 6px; margin: 2px -2px 0;
+  border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+}
+.pf-po-stat { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11px; color: var(--text-dim); }
+.pf-po-stat b { font-family: var(--font-disp); font-size: 19px; color: var(--text); font-weight: 700; }
+
+.pf-po-bests { display: flex; flex-direction: column; gap: 6px; }
+.pf-pb-table { display: flex; flex-direction: column; gap: 4px; }
+.pf-pb-row {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 8px 11px; border-radius: 8px;
+  background: rgba(var(--accent-rgb), .05);
+  border: 1px solid var(--line);
+}
+.pf-pb-mode { font-size: 12.5px; color: var(--text-dim); flex: 1; }
+.pf-pb-time { font-family: var(--font-disp); font-size: 15px; font-weight: 700; color: var(--accent); }
+.pf-pb-row i { font-style: normal; font-size: 11px; color: var(--text-dim); }
+.pf-empty {
+  padding: 18px 12px; text-align: center; font-size: 12.5px; color: var(--text-dim);
+  border: 1px dashed var(--line); border-radius: 8px;
+}
+
+.pf-po-car {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px; border-radius: 10px;
+  background: rgba(var(--accent-rgb), .04);
+  border: 1px solid var(--line);
+}
+.pf-po-car-dot { flex-shrink: 0; display: grid; place-items: center; }
+.pf-po-car-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.pf-po-carline { font-weight: 600; font-size: 13.5px; color: var(--text); }
+.pf-po-paint { font-size: 11.5px; color: var(--text-dim); display: flex; align-items: center; gap: 5px; }
+.pf-po-specs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+
+.pf-po-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.pf-po-actions .btn { flex: 1 1 auto; min-width: 110px; }
+
+/* "more" affordance on the rider popup header → taps open the profile overlay */
+.pop-more { margin-left: auto; color: var(--text-dim); display: grid; place-items: center; padding: 2px 4px; cursor: pointer; }
+.pop-more:hover { color: var(--accent); }
+.pop-head { cursor: pointer; }
+
+/* ===================== drag racing ===================== */
+.race-overlay { width: min(440px, 100%); }
+
+/* mode pill in the lobby header */
+.race-mode-pill {
+  align-self: center; text-align: center;
+  font-family: var(--font-disp); font-size: 15px; font-weight: 700;
+  color: var(--accent); letter-spacing: .04em;
+  padding: 7px 16px; border-radius: 999px;
+  background: rgba(var(--accent-rgb), .08); border: 1px solid var(--line);
+}
+
+/* roster */
+.race-roster { display: flex; flex-direction: column; gap: 5px; }
+.race-member {
+  display: flex; align-items: center; gap: 9px;
+  padding: 8px 11px; border-radius: 9px;
+  background: rgba(var(--accent-rgb), .04); border: 1px solid var(--line);
+}
+.race-member-name { font-size: 13px; font-weight: 600; flex: 1; }
+.race-you { color: var(--text-dim); font-weight: 400; font-size: 11px; }
+.u-ava-mini {
+  width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0;
+  display: grid; place-items: center; color: #fff;
+  background: var(--paint, var(--accent));
+  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), .12);
+}
+
+.race-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.race-actions .btn { flex: 1 1 auto; min-width: 100px; }
+.race-hint { font-size: 11.5px; color: var(--text-dim); line-height: 1.5; text-align: center; padding: 4px 6px; }
+.race-countdown {
+  font-family: var(--font-disp); font-size: 42px; font-weight: 700;
+  color: var(--accent); text-align: center; padding: 14px 0;
+  text-shadow: var(--glow-sm);
+  animation: race-cd 1s var(--ease) infinite alternate;
+}
+@keyframes race-cd { from { transform: scale(1); } to { transform: scale(1.08); } }
+
+/* live HUD (during the run) */
+.race-hud {
+  position: fixed; left: 50%; bottom: 78px; transform: translate(-50%, 16px);
+  width: min(420px, calc(100vw - 24px));
+  background: var(--surface-solid);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow), inset 0 0 30px rgba(var(--accent-rgb), .05);
+  padding: 10px 12px 11px;
+  opacity: 0; transition: opacity 220ms var(--ease), transform 220ms var(--ease);
+  z-index: 50; pointer-events: auto;
+}
+.race-hud.show { opacity: 1; transform: translate(-50%, 0); }
+.race-hud-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-bottom: 7px;
+}
+.race-hud-mode {
+  font-family: var(--font-disp); font-size: 12px; font-weight: 700;
+  color: var(--accent); letter-spacing: .06em; text-transform: uppercase;
+}
+.race-hud-leave {
+  background: none; border: 1px solid var(--line); color: var(--text-dim);
+  font-size: 11px; padding: 3px 9px; border-radius: 6px; cursor: pointer;
+}
+.race-hud-leave:hover { color: var(--accent); border-color: var(--accent); }
+.race-hud-rows { display: flex; flex-direction: column; gap: 6px; }
+
+.race-row {
+  display: flex; align-items: center; gap: 9px; padding: 4px 4px;
+  border-radius: 7px;
+}
+.race-row-self { background: rgba(var(--accent-rgb), .08); }
+.race-row-main { flex: 1; min-width: 0; }
+.race-row-top {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 6px;
+  margin-bottom: 3px;
+}
+.race-row-name { font-size: 12.5px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.race-row-speed { font-family: var(--font-disp); font-size: 13px; font-weight: 700; color: var(--accent); }
+.race-row-bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.race-row-bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; transition: width 120ms linear; }
+.race-row-stat { font-size: 10.5px; color: var(--text-dim); font-weight: 600; min-width: 32px; text-align: right; }
+
+/* results overlay */
+.race-results-list { display: flex; flex-direction: column; gap: 6px; }
+.race-result {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: 9px;
+  background: rgba(var(--accent-rgb), .04); border: 1px solid var(--line);
+}
+.race-result-self { border-color: var(--accent); background: rgba(var(--accent-rgb), .1); }
+.race-result-dnf { opacity: .65; }
+.race-medal { font-size: 18px; width: 28px; text-align: center; flex-shrink: 0; }
+.race-result-name { flex: 1; font-size: 13.5px; font-weight: 600; }
+.race-result-time { font-family: var(--font-disp); font-size: 15px; font-weight: 700; color: var(--accent); }
+.race-result i { font-style: normal; font-size: 11px; color: var(--text-dim); margin-left: 4px; }
+
+/* ============================== speedometer HUD (js/speedo.js) ============================== */
+.speedo {
+  position: fixed;
+  left: 14px; bottom: 46px;
+  z-index: 6;
+  min-width: 88px;
+  padding: 8px 12px 7px;
+  text-align: center;
+  cursor: pointer;
+  border-radius: var(--radius);
+  user-select: none;
+  -webkit-user-select: none;
+}
+.speedo b {
+  display: block;
+  font: 700 26px/1 var(--font-mono);
+  color: var(--text);
+  letter-spacing: .02em;
+}
+.speedo span {
+  display: block;
+  font: 600 10px var(--font-body);
+  color: var(--accent);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  margin-top: 2px;
+}
+.speedo i {
+  display: block;
+  font: 400 10px var(--font-mono);
+  font-style: normal;
+  color: var(--text-dim);
+  margin-top: 3px;
+  white-space: nowrap;
+}
+
+/* ============================== parking pin (js/places.js) ============================== */
+/* Universal parking-sign blue, independent of theme so it always reads as "P". */
+.m-park {
+  width: 26px; height: 26px;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff;
+  background: #2f6df6;
+  border: 2px solid rgba(255, 255, 255, .92);
+  border-radius: 7px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .45);
+  cursor: pointer;
+}
+.ctl-park.active { color: var(--accent); box-shadow: var(--glow-sm); }
+.park-popup b { display: block; font: 700 13px var(--font-disp); }
+.park-popup i {
+  display: block;
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin: 2px 0 8px;
+}
+.park-actions { display: flex; gap: 6px; }
+
+/* ============================== ETA-card extras (js/tripextras.js) ============================== */
+.eta-wx {
+  font: 500 11px var(--font-body);
+  color: var(--text-dim);
+  margin-top: 3px;
+}
+#eta-save.saved { color: var(--warn); }
+
+/* ============================== drive log (js/triplog.js) ============================== */
+.drive-log { display: flex; flex-direction: column; gap: 6px; }
+.dl-odo { font: 600 12px var(--font-body); color: var(--text); }
+.dl-odo b { color: var(--accent); font: 700 14px var(--font-mono); }
+.dl-empty { color: var(--text-dim); font-size: 12px; }
+.dl-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.dl-main { flex: 1; min-width: 0; }
+.dl-main b {
+  display: block;
+  font: 600 12px var(--font-body);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dl-main i {
+  display: block;
+  font-style: normal;
+  font: 400 10.5px var(--font-mono);
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+.dl-clear { align-self: flex-start; margin-top: 2px; }
+
+/* ============================== instrument HUD rail (js/hud.js) ============================== */
+/* Top-RIGHT vertical stack of glass cards. The left column is taken by the status
+   chips (top:72px) and the ghost/parking buttons, so the rail lives on the right,
+   below the topbar avatar and above the vertically-centred map controls. Cards hug
+   the right edge; the rail scrolls internally (no visible scrollbar) if overfull. */
+.hud-rail {
+  position: fixed;
+  /* Clears the topbar (the profile button on the right reaches ~80px) so the first
+     card never sits under it, and stays above the vertically-centred map controls. */
+  top: 88px; right: 14px;
+  z-index: 6;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+  max-height: calc(100vh - 340px);
+  overflow-y: auto;
+  pointer-events: none;
+  scrollbar-width: none; -ms-overflow-style: none;
+}
+.hud-rail::-webkit-scrollbar { display: none; }
+/* Phones: the chips become a wrapping row across the top, so drop the rail below
+   them. Controls + dock sit at the bottom, so the mid-right band is clear. */
+@media (max-width: 760px) {
+  .hud-rail { top: 128px; right: 10px; max-height: calc(100vh - 430px); }
+}
+.hud-coords .hc-v { white-space: nowrap; }
+.hud-card {
+  pointer-events: auto;
+  min-width: 96px;
+  padding: 7px 11px 6px;
+  border-radius: var(--radius);
+  text-align: center;
+  line-height: 1.15;
+  user-select: none; -webkit-user-select: none;
+}
+.hud-card .hc-v {
+  display: block;
+  font: 700 18px/1 var(--font-mono);
+  color: var(--text);
+  letter-spacing: .02em;
+}
+.hud-card .hc-l {
+  display: block;
+  font: 600 9px var(--font-body);
+  color: var(--accent);
+  letter-spacing: .14em; text-transform: uppercase;
+  margin-top: 3px;
+}
+.hud-card .hc-s {
+  display: block;
+  font: 400 9.5px var(--font-mono); font-style: normal;
+  color: var(--text-dim);
+  margin-top: 3px; white-space: nowrap;
+}
+/* Top Speed Quest card — flashes when a new record lands. */
+.hud-quest.quest-flash { animation: questFlash 1.2s var(--ease); }
+@keyframes questFlash {
+  0% { box-shadow: 0 0 0 0 rgba(255, 210, 63, 0); }
+  25% { box-shadow: 0 0 18px 4px rgba(255, 210, 63, .55); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 210, 63, 0); }
+}
+[data-anim="off"] .hud-quest.quest-flash { animation: none; }
+/* Compass card — the needle rotates with heading. */
+.hud-compass .cmp-needle { display: block; margin: 0 auto 2px; transition: transform 180ms var(--ease); }
+/* Destination arrow — rotates toward the route target. */
+.hud-dest .dest-arrow { display: block; margin: 0 auto 2px; transition: transform 180ms var(--ease); }
+/* G-meter — a dot inside a ring, translated by the current g-vector. */
+.hud-gmeter .gm-ring {
+  position: relative;
+  width: 58px; height: 58px; margin: 1px auto 3px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: radial-gradient(circle, rgba(127,127,127,.08), transparent 70%);
+}
+.hud-gmeter .gm-cross-h, .hud-gmeter .gm-cross-v { position: absolute; background: var(--line); }
+.hud-gmeter .gm-cross-h { left: 6px; right: 6px; top: 50%; height: 1px; }
+.hud-gmeter .gm-cross-v { top: 6px; bottom: 6px; left: 50%; width: 1px; }
+.hud-gmeter .gm-dot {
+  position: absolute; left: 50%; top: 50%;
+  width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  transition: transform 120ms linear;
+}
+
+/* Night-drive glare dimmer (js/dimmer.js) — a scrim over the map, below all chrome. */
+.night-dim {
+  position: fixed; inset: 0;
+  z-index: 4;
+  background: #000;
+  pointer-events: none;
+  transition: opacity 400ms var(--ease);
+}
+
+/* Overspeed banner (js/speedalert.js) — top-center, hidden until triggered. */
+.overspeed-banner {
+  position: fixed;
+  top: 66px; left: 50%;
+  transform: translate(-50%, -12px);
+  z-index: 9;
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: rgba(220, 38, 38, .92);
+  border: 1px solid rgba(255, 255, 255, .35);
+  box-shadow: 0 6px 22px rgba(220, 38, 38, .5);
+  color: #fff;
+  opacity: 0; pointer-events: none;
+  transition: opacity 200ms var(--ease), transform 200ms var(--ease);
+}
+.overspeed-banner.on { opacity: 1; transform: translate(-50%, 0); }
+.overspeed-banner b { font: 800 12px var(--font-body); letter-spacing: .1em; }
+.overspeed-banner span { font: 700 13px var(--font-mono); }

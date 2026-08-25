@@ -20,6 +20,10 @@
   var npcs = {};            // id -> rider
   var npcOrder = [];
   var solo = false;
+  // Local player's dragy stats (PBs + race counters). Mirrors what the server
+  // stores; kept in sync via adoptStats() and read by the profile overlay. Stays
+  // null for guests.
+  var selfStats = null;
   var lastFrame = 0;
   var linksAt = 0;
   var linksSig = ''; // position signature of the last convoy-link build (skip no-op rebuilds)
@@ -35,9 +39,11 @@
       name: rec.name,
       handle: rec.handle,
       emoji: rec.emoji,
+      avatar: rec.avatar || null, // profile photo data URL (null = insignia glyph)
       vibe: rec.vibe,
       car: rec.car,
       account: rec.account || null, // username when this rider is a signed-in account
+      stats: rec.stats || null,     // dragy PBs + race win/run counters (null on guests/bots)
       pos: rec.pos.slice(),
       heading: rec.heading || 0,
       speed: rec.speed || 10,
@@ -123,9 +129,12 @@
   /* ---------------- solo source ---------------- */
   function randomCar() {
     var make = U.pick(D.MAKE_LIST);
+    var model = U.pick(D.MAKES[make]);
+    var trims = (D.VEHICLES && D.VEHICLES[make] && D.VEHICLES[make][model]) || [];
     var paint = U.pick(D.PAINTS);
     return {
-      year: U.randInt(1995, 2026), make: make, model: U.pick(D.MAKES[make]),
+      year: U.randInt(1995, 2026), make: make, model: model,
+      trim: trims.length ? U.pick(trims) : '',
       paint: paint.hex, paintName: paint.name, finish: U.pick(D.FINISHES)
     };
   }
@@ -283,6 +292,7 @@
     npc.name = profile.name;
     npc.handle = profile.handle;
     npc.emoji = profile.emoji;
+    npc.avatar = profile.avatar || null;
     npc.vibe = profile.vibe;
     npc.car = profile.car;
     A.mapview.removeNpc(id);
@@ -291,9 +301,19 @@
     ST.emit('nearby:seeded', npcOrder.length);
   }
 
+  // Stats arrived over the wire (a rider set a dragy PB). Update the NPC record
+  // and nudge any open profile view to refresh.
+  function remoteStats(id, stats) {
+    var npc = npcs[id];
+    if (!npc) return;
+    npc.stats = stats || null;
+    ST.emit('stats', { id: id, stats: stats });
+  }
+
   /* ---------------- trip motion + follow camera ---------------- */
   var camBearing = 0;
   var gpsFollow = true; // keep the camera centered on real GPS fixes (until the user pans)
+  var adaptivePauseUntil = 0; // manual zoom during a trip pauses adaptive zoom until this perf-time
 
   function stepTrip(now, dt) {
     var trip = S.trip;
@@ -306,12 +326,26 @@
     // the trip never freezes when there's no GPS (desktop demo, denied permission).
     var at;
     var liveDriven = trip.live && trip.gotFix;
+    var showPos = player.pos;
     if (liveDriven) {
-      var snap = A.routing.nearestOnRoute(trip.line, player.pos);
+      // Dead-reckon the displayed position between ~1 Hz fixes (same coast-down
+      // profile as the NPC extrapolation) so the car glides down the road while
+      // navigating instead of hopping fix-to-fix. player.pos (state/network)
+      // stays the last REAL fix; prediction drift is capped at MAX_EXTRAP_S and
+      // is far below OFF_ROUTE_M, so it can never trigger a bogus reroute.
+      if (gpsPred && gpsPred.speed != null && gpsPred.speed > MOVING_MS) {
+        var pAge = (Date.now() - gpsPred.at) / 1000;
+        if (pAge > 0 && pAge <= MAX_EXTRAP_S) {
+          var pSpd = gpsPred.speed * (1 - 0.4 * (pAge / MAX_EXTRAP_S));
+          var pBrg = gpsPred.heading != null ? gpsPred.heading : player.heading || 0;
+          showPos = U.destPoint(gpsPred.pos, pBrg, pSpd * pAge);
+        }
+      }
+      var snap = A.routing.nearestOnRoute(trip.line, showPos);
       // Monotonic: GPS jitter must not drag progress backwards along the route.
       trip.progress = Math.max(trip.progress, snap.m);
       at = A.routing.posAt(trip.line, trip.progress);
-      A.mapview.setPlayer(player.pos, at.brg); // marker on the real fix, arrow down-route
+      A.mapview.setPlayer(showPos, at.brg); // marker on the (predicted) fix, arrow down-route
       // Off-route → debounced auto-reroute. Require the deviation to persist so GPS
       // jitter or a brief lane straddle doesn't trigger a needless recalculation.
       var nearEnd = (trip.line.total - trip.progress) < 40;
@@ -331,13 +365,21 @@
 
     if (trip.follow) {
       camBearing = U.lerpAngle(camBearing, at.brg, 1 - Math.pow(0.004, dt));
-      var cam = { center: liveDriven ? player.pos : at.pos, bearing: camBearing };
+      var cam = { center: liveDriven ? showPos : at.pos, bearing: camBearing };
       if (trip.camIntro) {
         var map = A.mapview.map();
         var z = U.lerp(map.getZoom(), 15.8, 1 - Math.pow(0.02, dt));
         var p = U.lerp(map.getPitch(), 54, 1 - Math.pow(0.02, dt));
         cam.zoom = z; cam.pitch = p;
         if (Math.abs(z - 15.8) < 0.05 && Math.abs(p - 54) < 0.5) trip.camIntro = false;
+      } else if (S.settings.adaptiveZoom && now > adaptivePauseUntil) {
+        // Speed-adaptive follow zoom: ease out on the highway for lookahead, back
+        // in around town for detail. A manual wheel/pinch zoom pauses this for a
+        // while so the camera never fights the rider's fingers.
+        var v = liveDriven ? ((gpsPred && gpsPred.speed) || 0) : trip.baseSpeed * trip.mult;
+        var tz = U.clamp(16.4 - (v / 38) * 2.6, 13.8, 16.4); // 0 m/s → 16.4 … 38 m/s (~85 mph) → 13.8
+        var cz = A.mapview.map().getZoom();
+        if (Math.abs(cz - tz) > 0.08) cam.zoom = U.lerp(cz, tz, 1 - Math.pow(0.25, dt));
       }
       A.mapview.jumpCam(cam);
     }
@@ -410,24 +452,41 @@
       npc.liveBrg = brg;
     });
 
+    // Player dead-reckoning: glide the marker forward along the last GPS fix's
+    // velocity so the car moves smoothly between ~1 Hz fixes instead of hopping.
+    // Same coast-down profile as the NPC extrapolation above. Purely visual —
+    // player.pos (state, network, routing) stays the last REAL fix. Trips own
+    // the marker via stepTrip, so prediction only runs outside an active trip.
+    if (gpsPred && !(S.trip && S.trip.active)) {
+      var pAge = (Date.now() - gpsPred.at) / 1000;
+      if (gpsPred.speed != null && gpsPred.speed > MOVING_MS && pAge > 0 && pAge <= MAX_EXTRAP_S) {
+        var pSpd = gpsPred.speed * (1 - 0.4 * (pAge / MAX_EXTRAP_S));
+        A.mapview.setPlayer(U.destPoint(gpsPred.pos, gpsPred.heading || 0, pSpd * pAge), gpsPred.heading);
+      }
+    }
+
     stepTrip(now, dt);
 
     if (S.party && S.party.members.length && now - linksAt > 250) {
       linksAt = now;
       var feats = [];
+      // Signature for the no-op skip. Use the LAST SERVER POSITION (npc.pos), not
+      // the predicted livePos — livePos shifts every frame via dead-reckoning, so
+      // keying on it would force a setData every 250ms even when no rider actually
+      // moved. Drawing uses livePos (smooth tether); the gate uses real positions.
       var sig = player.pos[0].toFixed(5) + ',' + player.pos[1].toFixed(5) + '|' + (S.party.id || '') + '|' + S.party.members.length;
       S.party.members.forEach(function (id) {
         var npc = npcs[id];
         if (!npc) return;
-        var p = npc.livePos || npc.pos;
-        sig += ';' + p[0].toFixed(5) + ',' + p[1].toFixed(5);
+        sig += ';' + npc.pos[0].toFixed(5) + ',' + npc.pos[1].toFixed(5);
         feats.push({
           type: 'Feature',
-          geometry: { type: 'LineString', coordinates: [player.pos, p] }
+          geometry: { type: 'LineString', coordinates: [player.pos, npc.livePos || npc.pos] }
         });
       });
-      // Skip the map source setData when nothing moved since last build — that
-      // round-trips an empty change into the GPU layer every 250ms otherwise.
+      // Skip the map source setData when no rider's real position changed since
+      // the last build. The line still tracks livePos at rebuild time; between
+      // rebuilds the small prediction drift is invisible against a moving player.
       if (sig !== linksSig) {
         linksSig = sig;
         A.mapview.setLinksData({ type: 'FeatureCollection', features: feats });
@@ -438,7 +497,48 @@
   /* ---------------- real GPS ---------------- */
   var watchId = null;
   var lastAccuracy = null;
+  // player.pos starts at the demo spawn — flips true the first time a REAL
+  // position lands (GPS fix, native fix, or an explicit relocate), so consumers
+  // like the search bias can tell "the rider is here" from "nobody knows yet".
+  var hasRealPos = false;
+  // Last real GPS fix + velocity, for between-fix dead reckoning of the player
+  // marker (fixes land ~1/s; without prediction the car visibly hops fix-to-fix).
+  var gpsPred = null; // { pos, speed (m/s|null), heading, at }
   var ACCURACY_THRESHOLD = 100; // reject GPS points worse than 100m
+  var deniedToldOnce = false;   // "permission denied" is a once-per-session message
+
+  /* ---------------- stationary jitter filter ----------------
+     A parked phone's GPS wanders ±5–25m fix to fix, which made the car dot
+     dance (and the heading spin) while standing dead still. Hold the dot at an
+     anchor until either the receiver reports real Doppler speed — instant on
+     launch, so timed runs never start late — or the fix escapes an
+     accuracy-scaled hold radius (covers devices that never report speed).
+     Only the DISPLAYED/shared position is filtered; dragy and the other
+     gpsfix consumers still get the raw fix. */
+  var MOVING_MS = 1.2; // m/s of speed that counts as actually moving (~2.7 mph)
+  var holdPos = null;  // [lng,lat] anchor while parked
+  // Last raw fix, used to derive speed when the receiver reports no Doppler.
+  var lastRaw = null;  // { pos, t }
+  function steadyFix(pos, acc, speed, t) {
+    t = t || Date.now();
+    // Derive speed from the position delta when Doppler is missing. Without this
+    // the hold gate never released on Doppler-less hardware: a car doing 20 mph
+    // covers ~9 m between 1 Hz fixes, under the 12–30 m gate, so the marker sat
+    // frozen and only jumped once it had drifted a whole gate-width down the road.
+    var eff = speed;
+    if (eff == null && lastRaw) {
+      var dt = (t - lastRaw.t) / 1000;
+      if (dt > 0.2 && dt < 6) eff = U.haversine(lastRaw.pos, pos) / dt;
+    }
+    lastRaw = { pos: pos.slice(), t: t };
+
+    if (eff != null && eff > MOVING_MS) { holdPos = null; return pos; }
+    if (!holdPos) { holdPos = pos.slice(); return pos; }
+    var gate = Math.max(12, Math.min(30, acc != null ? acc : 20));
+    if (U.haversine(holdPos, pos) <= gate) return holdPos; // parked — hold still
+    holdPos = pos.slice(); // walked/coasted out of the hold circle — re-anchor
+    return pos;
+  }
 
   function updateGpsDot(accuracy) {
     lastAccuracy = accuracy;
@@ -472,15 +572,23 @@
       var acc = p.coords.accuracy;
       updateGpsDot(acc);
       if (acc != null && acc > ACCURACY_THRESHOLD) return; // skip inaccurate readings
-      var pos = [p.coords.longitude, p.coords.latitude];
-      if (p.coords.heading != null && !isNaN(p.coords.heading)) player.heading = p.coords.heading;
+      var raw = [p.coords.longitude, p.coords.latitude];
+      // Doppler speed first — heading + the jitter filter both key off it.
+      var fixSpeed = (p.coords.speed != null && !isNaN(p.coords.speed) && p.coords.speed >= 0) ? p.coords.speed : null;
+      // Heading only updates while actually moving — stationary GPS courses are
+      // noise and used to spin the car marker at a stoplight.
+      if (fixSpeed != null && fixSpeed > MOVING_MS &&
+          p.coords.heading != null && !isNaN(p.coords.heading)) player.heading = p.coords.heading;
+      var pos = steadyFix(raw, acc, fixSpeed, p.timestamp);
       player.pos = pos;
+      hasRealPos = true;
       if (liveTrip) S.trip.gotFix = true; // stepTrip now snaps this real position onto the route
-      // Feed the performance meter (dragy.js): GPS Doppler speed when the device
-      // reports it, else null so the timer derives speed from position deltas.
+      gpsPred = { pos: pos, speed: fixSpeed, heading: player.heading, at: Date.now() };
+      // Feed the performance meter (dragy.js) the RAW fix: the timer needs true
+      // position deltas; only the displayed/shared position is jitter-held.
       ST.emit('gpsfix', {
-        pos: pos,
-        speed: (p.coords.speed != null && !isNaN(p.coords.speed) && p.coords.speed >= 0) ? p.coords.speed : null,
+        pos: raw,
+        speed: fixSpeed,
         acc: acc,
         heading: player.heading,
         t: p.timestamp || Date.now()
@@ -489,16 +597,27 @@
       // stepTrip owns the marker + follow camera (centred on the real fix).
       if (!liveTrip) {
         A.mapview.setPlayer(pos, player.heading);
+        // Globe boot: the first real fix lands the intro even with follow-cam off.
+        if (A.mapview.landIntro) A.mapview.landIntro(pos, 15);
         if (gpsFollow && S.settings.followCam) A.mapview.followPlayer(pos);
       }
     }, function (err) {
-      if (err.code === 1) A.ui.toast('Location permission denied', 'warn');
-      else if (err.code === 2) updateGpsDot(null);
+      // 1 = denied, 2 = position unavailable, 3 = timeout. Timeout was unhandled,
+      // so the GPS pill kept showing the last good accuracy indefinitely after the
+      // receiver stopped answering — it read "fix healthy" with no fix at all.
+      // watchPosition can re-fire PERMISSION_DENIED on every attempt, so say it once.
+      if (err.code === 1) {
+        if (!deniedToldOnce) { deniedToldOnce = true; A.ui.toast('Location permission denied', 'warn'); }
+        updateGpsDot(null);
+      } else updateGpsDot(null);
     }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 });
   }
 
   function relocatePlayer(pos) {
     player.pos = pos.slice();
+    holdPos = null; // fresh location — drop the stationary anchor
+    lastRaw = null; // ...and the delta baseline, so the jump isn't read as speed
+    hasRealPos = true; // an explicit relocate is as good as a fix for "the rider is here"
     A.mapview.setPlayer(pos, player.heading);
     if (solo) {
       npcOrder.forEach(function (id) {
@@ -528,20 +647,33 @@
     // real fix so stepTrip can drive progress from it (mirrors the watch handler).
     var liveTrip = S.trip && S.trip.active && S.trip.live;
     if (S.trip && S.trip.active && !S.trip.live) return;
-    var pos = [f.lng, f.lat];
-    if (f.bearing != null && !isNaN(f.bearing)) player.heading = f.bearing;
+    var raw = [f.lng, f.lat];
+    var fixSpeed = (f.speed != null && f.speed >= 0) ? f.speed : null;
+    // Same stationary gates as the in-WebView watch: heading + position hold.
+    if (fixSpeed != null && fixSpeed > MOVING_MS &&
+        f.bearing != null && !isNaN(f.bearing)) player.heading = f.bearing;
+    var pos = steadyFix(raw, (typeof f.accuracy === 'number') ? f.accuracy : null, fixSpeed, f.time);
     player.pos = pos;
+    hasRealPos = true;
+    gpsPred = {
+      pos: pos,
+      speed: fixSpeed,
+      heading: player.heading,
+      at: Date.now()
+    };
     if (liveTrip) S.trip.gotFix = true;
     if (typeof f.accuracy === 'number') { lastAccuracy = f.accuracy; updateGpsDot(f.accuracy); }
     ST.emit('gpsfix', {
-      pos: pos,
-      speed: (f.speed != null && f.speed >= 0) ? f.speed : null,
+      pos: raw,
+      speed: fixSpeed,
       acc: (typeof f.accuracy === 'number') ? f.accuracy : null,
       heading: player.heading,
       t: f.time || Date.now()
     });
     if (!liveTrip) {
       A.mapview.setPlayer(pos, player.heading);
+      // Globe boot: the first real fix lands the intro even with follow-cam off.
+      if (A.mapview.landIntro) A.mapview.landIntro(pos, 15);
       if (gpsFollow && S.settings.followCam) A.mapview.followPlayer(pos);
     }
   }
@@ -554,6 +686,14 @@
     A.mapview.createPlayerMarker(player.pos);
     tickTimer = setInterval(tick, TICK_MS);
     requestAnimationFrame(frame);
+    // A manual wheel/pinch zoom wins over adaptive zoom for a while (see stepTrip).
+    try {
+      var cc = A.mapview.map().getCanvasContainer();
+      cc.addEventListener('wheel', function () { adaptivePauseUntil = performance.now() + 12000; }, { passive: true });
+      cc.addEventListener('touchmove', function (e) {
+        if (e.touches && e.touches.length > 1) adaptivePauseUntil = performance.now() + 12000;
+      }, { passive: true });
+    } catch (e) { }
     // Pause the solo physics tick while the tab is hidden: it used to keep
     // running in the background, so NPC tAt timestamps drifted and riders
     // visibly "jumped" on refocus. The rAF loop already no-ops when hidden.
@@ -575,12 +715,47 @@
       .sort(function (a, b) { return a.dist - b.dist; });
   }
 
+  /* ---------------- proximity matching ----------------
+     Shared definition of "around the driver" — the Nearby panel filters, the
+     filter-aware map dot colors, and proximity voice chat all use this so a
+     rider shown as "in sight" is exactly the rider voice auto-connects to.
+       radius — within 2 km in any direction
+       road   — same street corridor (small cross-track) up to 4 km ahead/behind
+       sight  — inside the forward field of view within 400 m */
+  var PROX = {
+    radius: { range: 2000 },
+    road:   { range: 4000, cross: 60 },
+    sight:  { range: 400,  fov: 70 }
+  };
+
+  // margin (default 1) scales the distance limits — voice passes >1 as an exit
+  // threshold so peers don't flap in/out of scope right at the boundary.
+  function proximityMatch(npc, mode, margin) {
+    var cfg = PROX[mode];
+    if (!cfg || !npc) return false;
+    var m = margin || 1;
+    var pos = npc.livePos || npc.pos;
+    if (!pos || !player.pos) return false;
+    if (U.haversine(player.pos, pos) > cfg.range * m) return false;
+    if (mode === 'road') return U.crossTrack(player.pos, player.heading, pos) <= cfg.cross * m;
+    if (mode === 'sight') return Math.abs(U.relBearing(player.pos, player.heading, pos)) <= cfg.fov;
+    return true;
+  }
+
+  function proximityIds(mode, margin) {
+    var out = [];
+    for (var i = 0; i < npcOrder.length; i++) {
+      var npc = npcs[npcOrder[i]];
+      if (npc && proximityMatch(npc, mode, margin)) out.push(npc.id);
+    }
+    return out;
+  }
+
   A.sim = {
     start: start,
     enableSolo: enableSolo,
     disableSolo: disableSolo,
     isSolo: function () { return solo; },
-    playerPos: function () { return player.pos.slice(); },
     playerHeading: function () { return player.heading; },
     getNpc: function (id) { return npcs[id]; },
     getByUsername: function (username) {
@@ -592,15 +767,35 @@
       return null;
     },
     getNearbySorted: getNearbySorted,
+    proximityMatch: proximityMatch,   // shared "around the driver" test (nearby filters + voice)
+    proximityIds: proximityIds,
     count: function () { return npcOrder.length; },
     relocatePlayer: relocatePlayer,
     externalFix: externalFix,
+    ensureWatch: startWatch,   // start the foreground GPS watch on demand (idempotent)
+    playerPos: function () { return player.pos ? player.pos.slice() : null; }, // live rider position, for nearby search bias
+    hasRealPos: function () { return hasRealPos; }, // false until a real fix/relocate replaces the demo spawn
     lastAccuracy: function () { return lastAccuracy; },
     breakFollow: breakFollow,
     resumeFollow: resumeFollow,
     remoteAdd: remoteAdd,
     remoteRemove: remoteRemove,
     remoteTick: remoteTick,
-    remoteProfile: remoteProfile
+    remoteProfile: remoteProfile,
+    remoteStats: remoteStats,
+    // Stats for a rider by NPC id; pass 'self' (or null) for the local player's
+    // own stats. The player's own stats aren't stored on an NPC — they live in a
+    // dedicated slot kept in sync by adoptStats().
+    getStats: function (id) {
+      if (id == null || id === 'self') return selfStats;
+      var npc = npcs[id];
+      return npc ? npc.stats : null;
+    },
+    // Adopt authoritative stats for the local player (from /api/dragy/pb or a
+    // dragy:pb echo) and notify any open profile view.
+    adoptStats: function (stats) {
+      selfStats = stats || null;
+      ST.emit('stats', { id: 'self', stats: selfStats });
+    }
   };
 })();

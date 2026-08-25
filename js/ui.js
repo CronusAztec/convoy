@@ -50,7 +50,8 @@
     if (name === 'nearby') renderNearby();
     if (name === 'convoy') renderConvoy();
     if (name === 'profile') {
-      fillProfileForm();
+      profileView = 'main'; // panel always reopens on the profile page (garage is a sub-page)
+      buildProfilePanel();
       buildSettings(document.getElementById('settings-host')); // rebuild so toggles reflect current state
     }
   }
@@ -132,6 +133,38 @@
     return s;
   }
 
+  // Select with a trailing 'Custom…' option that reveals a free-text input —
+  // lets riders enter engines/mods that aren't in the preset list. Returns the
+  // wrapper element with getValue()/setValue() (mirrors mkSegmented's API).
+  var SELECT_CUSTOM = 'Custom…';
+  function mkSelectCustom(options, value, placeholder, maxLen, onChange) {
+    var w = U.el('div', 'select-custom');
+    var s = mkSelect(options.concat([SELECT_CUSTOM]), value);
+    var t = mkText('', placeholder || 'Type your own…');
+    t.maxLength = maxLen || 24;
+    t.hidden = true;
+    w.appendChild(s);
+    w.appendChild(t);
+    w.getValue = function () {
+      if (s.value !== SELECT_CUSTOM) return s.value;
+      return t.value.trim() || options[0];
+    };
+    w.setValue = function (v) {
+      v = v == null ? '' : String(v);
+      var preset = options.some(function (o) { return String(o) === v; });
+      if (preset || !v) { s.value = preset ? v : options[0]; t.value = ''; t.hidden = true; }
+      else { s.value = SELECT_CUSTOM; t.value = v.slice(0, t.maxLength); t.hidden = false; }
+    };
+    s.addEventListener('change', function () {
+      t.hidden = s.value !== SELECT_CUSTOM;
+      if (!t.hidden) t.focus();
+      if (onChange) onChange(w.getValue());
+    });
+    t.addEventListener('input', function () { if (onChange) onChange(w.getValue()); });
+    w.setValue(value);
+    return w;
+  }
+
   function mkSegmented(options, value, onChange) {
     var w = U.el('div', 'segmented');
     options.forEach(function (o) {
@@ -193,7 +226,7 @@
     });
     custom = U.el('label', 'swatch swatch-custom');
     custom.title = 'Custom color';
-    custom.innerHTML = '<input type="color" value="' + value + '"/><span>+</span>';
+    custom.innerHTML = '<input type="color" value="' + U.safePaint(value) + '"/><span>+</span>';
     custom.querySelector('input').addEventListener('input', function (e) {
       setActive('');
       if (onChange) onChange(e.target.value, 'Custom');
@@ -212,6 +245,7 @@
       (function (key) {
         var b = U.el('button', 'emoji-btn' + (key === active ? ' active' : ''));
         b.type = 'button';
+        b.dataset.key = String(key);
         b.innerHTML = U.riderIcon(key, { size: 18 });
         b.addEventListener('click', function () {
           w.querySelectorAll('.emoji-btn').forEach(function (x) { x.classList.remove('active'); });
@@ -221,9 +255,13 @@
         w.appendChild(b);
       }(k));
     }
+    // Read the key off the button's dataset. This used to pass the BUTTON ELEMENT
+    // to U.iconKey, which stringified it to "[object HTMLButtonElement]" and
+    // hashed that — the same constant for every icon. Signup's avatar picker
+    // therefore looked interactive but always saved one fixed glyph.
     w.getValue = function () {
       var a = w.querySelector('.emoji-btn.active');
-      return a ? U.iconKey(a) : active;
+      return a ? U.iconKey(a.dataset.key) : active;
     };
     return w;
   }
@@ -240,28 +278,15 @@
   var nearbyTab = 'nearby';
   var nearbyFilter = 'radius';      // radius | road | sight
   var nearbyShownIds = [];
-  var NEARBY_RADIUS_M = 2000;       // "in a radius around the driver"
-  var ROAD_CROSS_M = 60;            // same street/freeway corridor half-width
-  var ROAD_RANGE_M = 4000;          // how far up/down the road to look
-  var SIGHT_FOV_DEG = 70;           // forward field of view (± degrees)
-  var SIGHT_RANGE_M = 400;          // line-of-sight distance
+  var NEARBY_RADIUS_M = 2000;       // radius-filter label only — geometry lives in sim.proximityMatch
 
-  // Riders matching the active Nearby filter, relative to the driver's position + heading.
+  // Riders matching the active Nearby filter, relative to the driver's position
+  // + heading. The actual geometry lives in A.sim.proximityMatch so the panel,
+  // the map dot colors and proximity voice all agree on who is "around you".
   function filteredNearby() {
-    var rows = A.sim.getNearbySorted();
-    var ppos = A.sim.playerPos();
-    var phead = A.sim.playerHeading();
-    if (nearbyFilter === 'road') {
-      return rows.filter(function (r) {
-        return r.dist <= ROAD_RANGE_M && U.crossTrack(ppos, phead, r.npc.livePos || r.npc.pos) <= ROAD_CROSS_M;
-      });
-    }
-    if (nearbyFilter === 'sight') {
-      return rows.filter(function (r) {
-        return r.dist <= SIGHT_RANGE_M && Math.abs(U.relBearing(ppos, phead, r.npc.livePos || r.npc.pos)) <= SIGHT_FOV_DEG;
-      });
-    }
-    return rows.filter(function (r) { return r.dist <= NEARBY_RADIUS_M; });
+    return A.sim.getNearbySorted().filter(function (r) {
+      return A.sim.proximityMatch(r.npc, nearbyFilter);
+    });
   }
 
   function sameIdSet(a, b) {
@@ -328,21 +353,31 @@
       var npc = r.npc;
       var row = U.el('div', 'row user-row');
       row.innerHTML =
-        '<div class="u-ava" style="--paint:' + npc.car.paint + '">' + U.riderIcon(npc.emoji, { size: 20 }) + '</div>' +
+        '<div class="u-ava" style="--paint:' + U.safePaint(npc.car.paint) + '">' + avaInner(npc, 20) + '</div>' +
         '<div class="u-info">' +
         '  <div class="u-name">' + U.esc(npc.name) + ' <span class="u-handle">@' + U.esc(npc.handle) + '</span></div>' +
         '  <div class="u-car">' + npc.car.year + ' ' + U.esc(npc.car.make) + ' ' + U.esc(npc.car.model) +
-        '   <i class="paint-dot" style="background:' + npc.car.paint + '"></i></div>' +
+        (npc.car.trim ? ' ' + U.esc(npc.car.trim) : '') +
+        '   <i class="paint-dot" style="background:' + U.safePaint(npc.car.paint) + '"></i></div>' +
         '</div>' +
         '<div class="u-side"><div class="u-dist"></div><div class="u-status"></div></div>';
 
       var btn = U.el('button', 'btn btn-small');
       row.appendChild(btn);
 
+      // Tap the row → fly + popup; tap the avatar/name → Instagram-style profile.
       row.addEventListener('click', function (e) {
         if (e.target === btn) return;
         A.mapview.flyToUser(npc.livePos || npc.pos);
         A.mapview.showNpcPopup(npc.id);
+      });
+      row.querySelector('.u-ava').addEventListener('click', function (e) {
+        e.stopPropagation();
+        openProfileOverlay(npc.id);
+      });
+      row.querySelector('.u-name').addEventListener('click', function (e) {
+        e.stopPropagation();
+        openProfileOverlay(npc.id);
       });
       btn.addEventListener('click', function () {
         if (!npc.member && !npc.invited) A.party.invite(npc.id);
@@ -388,7 +423,7 @@
       S.friendReqs.forEach(function (rq) {
         var row = U.el('div', 'row friend-row');
         row.innerHTML =
-          '<div class="u-ava" style="--paint:' + (rq.paint || '#888') + '">' + U.riderIcon(rq.emoji, { size: 20 }) + '</div>' +
+          '<div class="u-ava" style="--paint:' + U.safePaint(rq.paint, '#888') + '">' + U.riderIcon(rq.emoji, { size: 20 }) + '</div>' +
           '<div class="u-info"><div class="u-name">' + U.esc(rq.name) + '</div>' +
           '<div class="u-handle">@' + U.esc(rq.username) + ' wants to be friends</div></div>';
         var side = U.el('div', 'friend-actions');
@@ -415,7 +450,7 @@
     sorted.forEach(function (f) {
       var row = U.el('div', 'row friend-row');
       row.innerHTML =
-        '<div class="u-ava" style="--paint:' + (f.paint || '#888') + '">' + U.riderIcon(f.emoji, { size: 20 }) +
+        '<div class="u-ava" style="--paint:' + U.safePaint(f.paint, '#888') + '">' + U.riderIcon(f.emoji, { size: 20 }) +
         '<span class="online-dot' + (f.online ? ' on' : '') + '"></span></div>' +
         '<div class="u-info"><div class="u-name">' + U.esc(f.name) + '</div>' +
         '<div class="u-handle">@' + U.esc(f.username) + ' · ' +
@@ -447,7 +482,7 @@
   function applyGhost(on) {
     ST.setGhost(on);              // persists + emits 'ghost' → the listener reacts
     if (A.net && A.net.sendGhost) A.net.sendGhost(on);
-    A.ui.toast(on ? 'Ghost mode on — radar engaged, you are invisible to other riders' : 'Ghost mode off', 'info');
+    A.ui.toast(on ? 'Ghost mode on — radar active. You are hidden from other riders.' : 'Ghost mode off', 'info');
   }
 
   function updateGhostChip() {
@@ -562,6 +597,22 @@
     head.appendChild(leaveBtn);
     body.appendChild(head);
 
+    // SOS beacon: one tap drops a "needs help" pin for riders nearby AND tells
+    // the convoy chat — for breakdowns, flats, or losing the group.
+    var sosBtn = U.el('button', 'btn btn-block btn-danger-text sos-btn', 'SOS — I\'m stopped and need help');
+    sosBtn.addEventListener('click', function () {
+      var who = (S.profile && S.profile.name) || 'A rider';
+      if (A.overlays && A.overlays.reportHazard) A.overlays.reportHazard('stopped', who + ' needs help');
+      A.party.sendChat('🆘 I\'m stopped and need help — check my pin on the map');
+      sosBtn.textContent = 'SOS sent — convoy + nearby riders alerted';
+      sosBtn.disabled = true;
+      setTimeout(function () {
+        sosBtn.textContent = 'SOS — I\'m stopped and need help';
+        sosBtn.disabled = false;
+      }, 8000);
+    });
+    body.appendChild(sosBtn);
+
     if (A.net && A.net.isLive()) {
       var privacy = U.el('div', 'convoy-privacy');
       var modeLabels = { invite: 'Invite-only', code: 'Open · anyone with the code', locked: 'Locked' };
@@ -600,7 +651,7 @@
       var chip = U.el('div', 'member-chip');
       chip.dataset.member = id; // voice module toggles .wt-speaking here
       chip.innerHTML =
-        '<div class="u-ava u-ava-sm" style="--paint:' + npc.car.paint + '">' + U.riderIcon(npc.emoji, { size: 16 }) + '</div>' +
+        '<div class="u-ava u-ava-sm" style="--paint:' + npc.car.paint + '">' + avaInner(npc, 16) + '</div>' +
         '<div class="member-info"><b>' + U.esc(npc.name) + '</b><span class="member-dist"></span></div>';
       if (S.party.isLeader) {
         var kickBtn = U.el('button', 'icon-btn icon-btn-sm', '<svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>');
@@ -611,6 +662,9 @@
       chip.querySelector('.u-ava').addEventListener('click', function () {
         A.mapview.flyToUser(npc.livePos || npc.pos);
       });
+      // Tap the member's name for the Instagram-style profile.
+      var nameEl = chip.querySelector('.member-info b');
+      if (nameEl) nameEl.addEventListener('click', function () { openProfileOverlay(id); });
       members.appendChild(chip);
       convoyMemberRefs[id] = chip.querySelector('.member-dist');
     });
@@ -686,24 +740,668 @@
   /* ============================== profile panel ============================== */
   var pf = {}; // profile form controls
 
+  // Avatar inner markup: the uploaded photo when present, else the insignia glyph.
+  // Only data:image URLs ever render (belt & braces on top of the server regex).
+  // Mirrors the server's sanitizeAvatar(). A prefix test alone (/^data:image\//)
+  // would let `data:image/x",onerror="…` out of the src="…" attribute below.
+  var AVATAR_RE = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/;
+  function avaInner(r, size) {
+    var a = r && r.avatar;
+    if (typeof a === 'string' && a.length <= 24000 && AVATAR_RE.test(a)) {
+      return '<img class="ava-img" src="' + a + '" alt=""/>';
+    }
+    return U.riderIcon(r ? r.emoji : 0, { size: size });
+  }
+
+  /* ---------------- profile photo: upload + content screen ----------------
+     Pipeline: pick file → center-crop → screen for NSFW → compress to a small
+     JPEG data URL (≤ ~19KB so it fits the server's avatar/frame caps) → save +
+     sync. Screening runs CLIENT-side with NSFWJS (TensorFlow.js MobileNet,
+     loaded from CDN only when a photo is actually chosen). If the model can't
+     load (offline/native WebView), a conservative skin-exposure heuristic
+     gates instead — when in doubt the photo is rejected, never auto-approved. */
+  var nsfwModel = null, nsfwLoading = null;
+  function loadScript(src) {
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = src; s.async = true;
+      s.onload = resolve; s.onerror = function () { s.remove(); reject(new Error('load ' + src)); };
+      document.head.appendChild(s);
+    });
+  }
+  function loadNsfwModel() {
+    if (nsfwModel) return Promise.resolve(nsfwModel);
+    if (nsfwLoading) return nsfwLoading;
+    nsfwLoading = Promise.resolve()
+      .then(function () {
+        if (window.tf) return null;
+        return loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js');
+      })
+      .then(function () {
+        if (window.nsfwjs) return null;
+        // dist name differs across nsfwjs releases — try both UMD bundles
+        return loadScript('https://cdn.jsdelivr.net/npm/nsfwjs@4.2.1/dist/browser.min.js')
+          .catch(function () { return loadScript('https://cdn.jsdelivr.net/npm/nsfwjs@2.4.2/dist/nsfwjs.min.js'); });
+      })
+      .then(function () {
+        // default hosted model first; fall back to the copy shipped in the npm package
+        return window.nsfwjs.load().catch(function () {
+          return window.nsfwjs.load('https://cdn.jsdelivr.net/npm/nsfwjs@4.2.1/models/mobilenet_v2/model.json', { size: 224 });
+        });
+      })
+      .then(function (m) { nsfwModel = m; return m; })
+      .catch(function (e) { nsfwLoading = null; throw e; });
+    return nsfwLoading;
+  }
+
+  // Fallback gate when the ML model is unreachable: fraction of skin-toned
+  // pixels. Portraits with background sit well under 0.6; wall-to-wall skin
+  // (the images we must block) sits far above it.
+  function skinRatio(canvas) {
+    try {
+      var ctx = canvas.getContext('2d');
+      var d = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      var skin = 0, total = 0;
+      for (var i = 0; i < d.length; i += 16) { // sample every 4th pixel
+        var r = d[i], g = d[i + 1], b = d[i + 2];
+        total++;
+        if (r > 95 && g > 40 && b > 20 && r > g && r > b &&
+            (Math.max(r, g, b) - Math.min(r, g, b)) > 15 && Math.abs(r - g) > 15) skin++;
+      }
+      return total ? skin / total : 0;
+    } catch (e) { return 1; } // unreadable canvas → treat as unverifiable
+  }
+
+  // → 'ok' | 'explicit' | 'suggestive' | 'unverified'
+  function screenPhoto(canvas) {
+    return loadNsfwModel().then(function (model) {
+      return model.classify(canvas).then(function (preds) {
+        var p = {};
+        (preds || []).forEach(function (x) { p[x.className] = x.probability; });
+        if ((p.Porn || 0) >= 0.25 || (p.Hentai || 0) >= 0.3) return 'explicit';
+        if ((p.Sexy || 0) >= 0.5) return 'suggestive';
+        return 'ok';
+      });
+    }).catch(function () {
+      return skinRatio(canvas) > 0.6 ? 'unverified' : 'ok';
+    });
+  }
+
+  function loadImageFile(file) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function () { URL.revokeObjectURL(url); resolve(img); };
+      img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('bad image')); };
+      img.src = url;
+    });
+  }
+
+  function squareCanvas(img, size) {
+    var side = Math.min(img.naturalWidth || img.width, img.naturalHeight || img.height);
+    var sx = ((img.naturalWidth || img.width) - side) / 2;
+    var sy = ((img.naturalHeight || img.height) - side) / 2;
+    var cv = document.createElement('canvas');
+    cv.width = cv.height = size;
+    cv.getContext('2d').drawImage(img, sx, sy, side, side, 0, 0, size, size);
+    return cv;
+  }
+
+  // Compress until the data URL fits the transport caps (server rejects >24000
+  // chars; we stop at ~19.5K for headroom). Returns '' if even 96px won't fit.
+  function encodeAvatar(img) {
+    var steps = [[128, 0.8], [128, 0.65], [128, 0.5], [96, 0.6], [96, 0.45]];
+    for (var i = 0; i < steps.length; i++) {
+      var url = squareCanvas(img, steps[i][0]).toDataURL('image/jpeg', steps[i][1]);
+      if (url.length <= 19500) return url;
+    }
+    return '';
+  }
+
+  var pfpInput = null;
+  function pickPhoto() {
+    if (!pfpInput) {
+      pfpInput = document.createElement('input');
+      pfpInput.type = 'file';
+      pfpInput.accept = 'image/*';
+      pfpInput.style.display = 'none';
+      document.body.appendChild(pfpInput);
+      pfpInput.addEventListener('change', function () {
+        var f = pfpInput.files && pfpInput.files[0];
+        pfpInput.value = ''; // same file can be re-picked later
+        if (f) handlePhotoFile(f);
+      });
+    }
+    pfpInput.click();
+  }
+
+  function handlePhotoFile(file) {
+    if (!/^image\//.test(file.type)) { toast('That is not an image file', 'warn'); return; }
+    toast('Checking photo…', 'info');
+    loadImageFile(file).then(function (img) {
+      return screenPhoto(squareCanvas(img, 384)).then(function (verdict) {
+        if (verdict !== 'ok') {
+          toast(verdict === 'explicit' ? 'Photo rejected — explicit content is not allowed'
+            : verdict === 'suggestive' ? 'Photo rejected — too suggestive for a profile photo'
+            : 'Could not verify that photo is appropriate — try a different one', 'warn');
+          return;
+        }
+        var dataUrl = encodeAvatar(img);
+        if (!dataUrl) { toast('Could not compress that image — try a simpler photo', 'warn'); return; }
+        S.profile.avatar = dataUrl;
+        ST.saveProfile(S.profile);
+        if (A.auth && A.auth.isLoggedIn()) A.auth.saveProfileToServer(S.profile);
+        refreshAvatarBtn();
+        renderProfileCard();
+        renderAwards(); // "Photogenic" badge
+        toast('Profile photo updated', 'success');
+      });
+    }).catch(function () { toast('Could not read that image', 'warn'); });
+  }
+
+  function removePhoto() {
+    S.profile.avatar = '';
+    ST.saveProfile(S.profile);
+    if (A.auth && A.auth.isLoggedIn()) A.auth.saveProfileToServer(S.profile);
+    refreshAvatarBtn();
+    renderProfileCard();
+    renderAwards();
+    toast('Profile photo removed', 'info');
+  }
+
+  // Own-profile stats: dragy runs/wins from the server when synced, topped up
+  // with the local run log so guests see their numbers too.
+  function selfStats() {
+    var stats = (A.sim && A.sim.getStats) ? (A.sim.getStats('self') || {}) : {};
+    var hist = [];
+    try { hist = JSON.parse(localStorage.getItem('convoy.dragy.v1') || '[]'); } catch (e) { }
+    return {
+      raw: stats,
+      runs: Math.max(stats.runs || 0, hist.length),
+      wins: stats.wins || 0,
+      friends: (S.friends || []).length
+    };
+  }
+
+  // Instagram-style profile header: photo + runs/wins/friends counters beside
+  // it, then name / handle / car "bio" line. Re-rendered on photo change, save,
+  // stats and friends updates.
+  function renderProfileCard() {
+    var card = document.getElementById('pf-card');
+    if (!card) return;
+    var c = S.profile.car;
+    var carLine = c.year + ' ' + c.make + ' ' + c.model + (c.trim ? ' ' + c.trim : '');
+    var loggedIn = A.auth && A.auth.isLoggedIn && A.auth.isLoggedIn();
+    var st = selfStats();
+    card.innerHTML =
+      '<div class="pf-ig-top">' +
+      '  <div class="pf-photo-wrap">' +
+      '    <div class="pf-photo" style="--paint:' + U.safePaint(c.paint) + '">' + avaInner(S.profile, 34) + '</div>' +
+      '    <button class="pf-cam" id="pf-cam" title="Change profile photo" aria-label="Change profile photo">' +
+      '      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-2.5h6L17 8h3v11H4Z"/><circle cx="12" cy="13" r="3.2"/></svg>' +
+      '    </button>' +
+      '  </div>' +
+      '  <div class="pf-ig-stats">' +
+      '    <span class="pf-stat"><b>' + st.runs + '</b>runs</span>' +
+      '    <span class="pf-stat"><b>' + st.wins + '</b>wins</span>' +
+      '    <span class="pf-stat"><b>' + st.friends + '</b>friends</span>' +
+      '  </div>' +
+      '</div>' +
+      '<div class="pf-name">' + U.esc(S.profile.name) + '</div>' +
+      '<div class="pf-handle">@' + U.esc(S.profile.handle) + '</div>' +
+      '<div class="pf-carline">' + U.esc(carLine) + '</div>' +
+      '<div class="pf-tags">' +
+      (loggedIn ? '<span class="tag tag-live"><span class="dot dot-live"></span>Synced</span>'
+        : '<span class="tag">Guest — local only</span>') +
+      (S.profile.avatar ? '<button class="tag pf-remove-tag" id="pf-remove" type="button">Remove photo</button>' : '') +
+      '</div>';
+    card.querySelector('#pf-cam').addEventListener('click', pickPhoto);
+    card.querySelector('.pf-photo').addEventListener('click', pickPhoto);
+    var rm = card.querySelector('#pf-remove');
+    if (rm) rm.addEventListener('click', removePhoto);
+  }
+
+  /* ---------------- awards (client-derived achievement badges) ----------------
+     Computed from what the app already tracks: dragy runs + personal bests,
+     race wins, friends, account state. Locked badges render dimmed so the page
+     doubles as a goal list. */
+  var AWARD_ICONS = {
+    flag:   '<path d="M6 21V4"/><path d="M6 4h11l-2 3.5L17 11H6"/>',
+    gauge:  '<circle cx="12" cy="13" r="8"/><path d="M12 13l4.2-4.2"/>',
+    trophy: '<path d="M8 4h8v5a4 4 0 0 1-8 0Z"/><path d="M8 5H5a3 3 0 0 0 3 4M16 5h3a3 3 0 0 1-3 4M12 13v4M8.5 20h7M10 17h4"/>',
+    crown:  '<path d="M4 17 3 7l5 4 4-6 4 6 5-4-1 10Z"/>',
+    bolt:   '<path d="M13 3 5 13h5l-1 8 9-11h-6l1-7Z"/>',
+    timer:  '<circle cx="12" cy="13" r="7.5"/><path d="M12 13V8.5M10 2.5h4"/>',
+    wind:   '<path d="M3 8h11a2.5 2.5 0 1 0-2.5-2.6M3 16h15a2.5 2.5 0 1 1-2.5 2.6M3 12h9"/>',
+    users:  '<circle cx="9" cy="8.5" r="3.2"/><path d="M3.4 19.2c.6-3.1 2.9-4.7 5.6-4.7s5 1.6 5.6 4.7"/><circle cx="17" cy="9.6" r="2.6"/><path d="M16.2 14.6c2.3.2 4 1.7 4.4 4.4"/>',
+    camera: '<path d="M4 8h3l2-2.5h6L17 8h3v11H4Z"/><circle cx="12" cy="13" r="3.2"/>',
+    shield: '<path d="M12 3 5 6v5c0 4 3 7 7 8 4-1 7-4 7-8V6Z"/>'
+  };
+
+  function computeAwards() {
+    var st = selfStats();
+    var rows = bestsFromStats(st.raw, true);
+    var pb = {};
+    var bestTrap = 0;
+    rows.forEach(function (r) { pb[r.modeId] = r; if (r.trap > bestTrap) bestTrap = r.trap; });
+    var MPH120 = 120 / 2.23694; // traps are stored in m/s
+    return [
+      { name: 'First Launch',   desc: 'Complete a timed run',  icon: 'flag',   got: st.runs >= 1 },
+      { name: 'Track Rat',      desc: '25 timed runs',         icon: 'gauge',  got: st.runs >= 25 },
+      { name: 'Race Winner',    desc: 'Win a race',            icon: 'trophy', got: st.wins >= 1 },
+      { name: 'Podium Regular', desc: 'Win 5 races',           icon: 'crown',  got: st.wins >= 5 },
+      { name: 'Launch Master',  desc: '0–60 mph under 5s', icon: 'bolt',  got: !!(pb['0-60'] && pb['0-60'].time < 5) },
+      { name: '12-Second Car',  desc: '¼ mile under 12s', icon: 'timer',  got: !!(pb.quarter && pb.quarter.time < 12) },
+      { name: 'Speed Demon',    desc: 'Trap 120+ mph',         icon: 'wind',   got: bestTrap >= MPH120 },
+      { name: 'Crew',           desc: 'Make 5 friends',        icon: 'users',  got: st.friends >= 5 },
+      { name: 'Photogenic',     desc: 'Set a profile photo',   icon: 'camera', got: !!S.profile.avatar },
+      { name: 'On the Grid',    desc: 'Create an account',     icon: 'shield', got: !!(A.auth && A.auth.isLoggedIn && A.auth.isLoggedIn()) }
+    ];
+  }
+
+  function renderAwards() {
+    var el = document.getElementById('pf-awards');
+    if (!el) return;
+    var list = computeAwards();
+    var got = list.filter(function (a) { return a.got; }).length;
+    var head = document.getElementById('pf-awards-count');
+    if (head) head.textContent = got + ' / ' + list.length;
+    el.innerHTML = list.map(function (a) {
+      return '<div class="pf-badge' + (a.got ? '' : ' locked') + '">' +
+        '<span class="pf-badge-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + AWARD_ICONS[a.icon] + '</svg></span>' +
+        '<span class="pf-badge-name">' + U.esc(a.name) + '</span>' +
+        '<span class="pf-badge-desc">' + U.esc(a.desc) + '</span>' +
+        '</div>';
+    }).join('');
+  }
+
+  function renderTimes() {
+    var el = document.getElementById('pf-times');
+    if (!el) return;
+    var st = selfStats();
+    el.innerHTML = pbRowsHtml(bestsFromStats(st.raw, true));
+  }
+
+  /* ============================== public profile overlay ==============================
+     Instagram-style, view-only page for any rider (yourself included). Reached by
+     tapping a rider's popup header, a Nearby row, a convoy chip, or the "View
+     public profile" button in the Garage. Renders identity + stats + best dragy
+     times + car + context actions. Reuses the existing modal host (#onboarding via
+     openOverlay/closeOverlay) and the avaInner/carDot helpers. */
+  // Build a "subject" (a normalized rider record) from an NPC id or 'self'.
+  function profileSubject(from) {
+    if (from === 'self') {
+      var c = S.profile.car;
+      var loggedIn = A.auth && A.auth.isLoggedIn();
+      return {
+        self: true,
+        id: 'self',
+        name: S.profile.name,
+        handle: S.profile.handle,
+        emoji: S.profile.emoji,
+        avatar: S.profile.avatar || null,
+        vibe: S.profile.vibe,
+        car: c,
+        account: loggedIn ? A.auth.username() : null,
+        stats: A.sim.getStats('self'),
+        online: true
+      };
+    }
+    var npc = A.sim.getNpc(from);
+    if (!npc) return null;
+    return {
+      self: false,
+      id: npc.id,
+      name: npc.name,
+      handle: npc.handle,
+      emoji: npc.emoji,
+      avatar: npc.avatar || null,
+      vibe: npc.vibe,
+      car: npc.car,
+      account: npc.account || null,
+      stats: npc.stats || null,
+      online: true
+    };
+  }
+
+  // Dragy personal-bests section. stats = { pb: { modeId: {time, trap, when} }, runs, wins }.
+  // Falls back to the local localStorage history for the player's own profile so a
+  // guest (no server stats) still sees their times.
+  function bestsFromStats(stats, isSelf) {
+    var pb = (stats && stats.pb) || {};
+    var rows = [];
+    for (var modeId in pb) {
+      if (!pb.hasOwnProperty(modeId)) continue;
+      var r = pb[modeId];
+      if (!r || typeof r.time !== 'number') continue;
+      rows.push({ modeId: modeId, time: r.time, trap: r.trap, when: r.when });
+    }
+    if (isSelf && A.dragy) {
+      // Merge localStorage history (the full local log) so guests + unsynced runs show.
+      var seen = {};
+      rows.forEach(function (x) { seen[x.modeId] = 1; });
+      var hist = (function () { try { return JSON.parse(localStorage.getItem('convoy.dragy.v1') || '[]'); } catch (e) { return []; } })();
+      var best = {};
+      hist.forEach(function (h) { if (!best[h.modeId] || h.time < best[h.modeId].time) best[h.modeId] = h; });
+      for (var mid in best) {
+        if (!best.hasOwnProperty(mid) || seen[mid]) continue;
+        rows.push({ modeId: mid, time: best[mid].time, trap: best[mid].trap, when: best[mid].when, local: true });
+      }
+    }
+    // Display order matches the dragy preset order; unknown ids sort last.
+    var order = A.dragy ? A.dragy.modes().map(function (m) { return m.id; }) : [];
+    rows.sort(function (a, b) {
+      var ai = order.indexOf(a.modeId), bi = order.indexOf(b.modeId);
+      if (ai < 0) ai = 99; if (bi < 0) bi = 99;
+      return ai - bi;
+    });
+    return rows;
+  }
+
+  function pbRowsHtml(rows) {
+    if (!rows.length) return '<div class="pf-empty">No timed runs yet</div>';
+    var km = S.settings.units === 'km';
+    return '<div class="pf-pb-table">' + rows.map(function (r) {
+      var label = A.dragy ? A.dragy.modeLabel(r.modeId) : r.modeId;
+      var trapLine = (r.trap != null)
+        ? '<i>trap ' + Math.round(r.trap * (km ? 3.6 : 2.23694)) + ' ' + (km ? 'km/h' : 'mph') + '</i>' : '';
+      return '<div class="pf-pb-row">' +
+        '<span class="pf-pb-mode">' + U.esc(label) + '</span>' +
+        '<b class="pf-pb-time">' + r.time.toFixed(2) + 's</b>' + trapLine +
+        '</div>';
+    }).join('') + '</div>';
+  }
+
+  function buildProfileOverlay(subject) {
+    if (!subject) return null;
+    var card = U.el('div', 'modal-card profile-overlay');
+    var p = subject.car || {};
+    var carLine = p.year + ' ' + (p.make || '') + ' ' + (p.model || '') + (p.trim ? ' ' + p.trim : '');
+    var dist = '';
+    if (!subject.self) {
+      try { dist = U.fmtDist(U.haversine(A.sim.playerPos(), A.sim.getNpc(subject.id).pos), S.settings.units) + ' away'; }
+      catch (e) { dist = ''; }
+    }
+    var friends = subject.self ? ((S.friends || []).length) : null;
+    var rows = bestsFromStats(subject.stats, subject.self);
+    var wins = (subject.stats && subject.stats.wins) || 0;
+    var runs = (subject.stats && subject.stats.runs) || 0;
+
+    card.appendChild(authCloseHead(subject.self ? 'Your profile' : 'Rider profile', closeOverlay));
+
+    // Header — large avatar, identity, status tags.
+    var head = U.el('div', 'pf-po-head');
+    head.innerHTML =
+      '<div class="pf-photo-wrap">' +
+      '  <div class="pf-po-photo" style="--paint:' + U.safePaint(p.paint) + '">' + avaInner(subject, 56) + '</div>' +
+      '</div>' +
+      '<div class="pf-po-id">' +
+      '  <div class="pf-po-name">' + U.esc(subject.name || 'Rider') + '</div>' +
+      '  <div class="pf-po-handle">@' + U.esc(subject.handle || 'rider') + (subject.account ? '' : ' · guest') + '</div>' +
+      '  <div class="pf-po-tags">' +
+      '    <span class="tag">' + U.esc(subject.vibe || 'Cruising') + '</span>' +
+           (subject.self
+              ? (A.auth && A.auth.isLoggedIn()
+                  ? '<span class="tag tag-live"><span class="dot dot-live"></span>Synced</span>'
+                  : '<span class="tag">Guest — local only</span>')
+              : (subject.account
+                  ? '<span class="tag tag-live"><span class="dot dot-live"></span>Account</span>'
+                  : '<span class="tag">Guest</span>')) +
+           (dist ? '<span class="tag">' + U.esc(dist) + '</span>' : '') +
+      '  </div>' +
+      '</div>';
+    card.appendChild(head);
+
+    // Stats strip — Instagram-style counts.
+    var strip = U.el('div', 'pf-po-strip');
+    var cells = '<span class="pf-po-stat"><b>' + rows.length + '</b>bests</span>' +
+      '<span class="pf-po-stat"><b>' + runs + '</b>races</span>' +
+      '<span class="pf-po-stat"><b>' + wins + '</b>wins</span>';
+    if (subject.self) cells += '<span class="pf-po-stat"><b>' + friends + '</b>friends</span>';
+    strip.innerHTML = cells;
+    card.appendChild(strip);
+
+    // Personal bests section.
+    card.appendChild(U.el('div', 'section-label', 'Best dragy times'));
+    card.appendChild(U.el('div', 'pf-po-bests', pbRowsHtml(rows)));
+
+    // Car card.
+    card.appendChild(U.el('div', 'section-label', 'Car'));
+    var carCard = U.el('div', 'pf-po-car');
+    carCard.innerHTML =
+      '<span class="pf-po-car-dot">' + A.mapview.carDot(p.paint || '#4f8cff', 28) + '</span>' +
+      '<div class="pf-po-car-info">' +
+      '  <div class="pf-po-carline">' + U.esc(carLine.trim()) + '</div>' +
+      '  <div class="pf-po-paint"><i class="paint-dot" style="background:' + U.safePaint(p.paint) + '"></i>' +
+                U.esc(p.paintName || 'Paint') + ' · ' + U.esc(p.finish || 'Gloss') + '</div>' +
+      '  <div class="pf-po-specs">' +
+           (p.body ? '<span class="tag">' + U.esc(p.body) + '</span>' : '') +
+           (p.drive ? '<span class="tag">' + U.esc(p.drive) + (p.hp ? ' · ' + p.hp + 'hp' : '') + '</span>' : '') +
+           (p.engine ? '<span class="tag">' + U.esc(p.engine) + '</span>' : '') +
+           (p.trans ? '<span class="tag">' + U.esc(p.trans) + '</span>' : '') +
+           (p.mods && p.mods !== 'None' ? '<span class="tag">' + U.esc(p.mods) + '</span>' : '') +
+           (p.exhaust && p.exhaust !== 'Stock' ? '<span class="tag">' + U.esc(p.exhaust) + '</span>' : '') +
+      '  </div>' +
+      '</div>';
+    card.appendChild(carCard);
+
+    // Action row — context dependent.
+    var act = U.el('div', 'pf-po-actions');
+    if (subject.self) {
+      var edit = U.el('button', 'btn btn-primary btn-block', 'Edit profile');
+      edit.addEventListener('click', function () { closeOverlay(); openPanel('profile'); });
+      act.appendChild(edit);
+    } else {
+      var npc = A.sim.getNpc(subject.id);
+      var inviteBtn = U.el('button', 'btn btn-primary btn-small');
+      if (npc && npc.member) { inviteBtn.textContent = 'In convoy ✓'; inviteBtn.disabled = true; }
+      else if (npc && npc.invited) { inviteBtn.textContent = 'Invited…'; inviteBtn.disabled = true; }
+      else {
+        inviteBtn.textContent = 'Invite to convoy';
+        inviteBtn.addEventListener('click', function () {
+          A.party.invite(subject.id);
+          inviteBtn.textContent = 'Invited…';
+          inviteBtn.disabled = true;
+        });
+      }
+      act.appendChild(inviteBtn);
+
+      // Challenge to a race (Part C wires the actual handler; guard until loaded).
+      if (A.race && A.race.challenge) {
+        var raceBtn = U.el('button', 'btn btn-small', 'Challenge to race');
+        raceBtn.addEventListener('click', function () {
+          if (A.race.challenge(subject.id)) closeOverlay();
+          else A.ui.toast('Too far to race — move closer', 'warn');
+        });
+        act.appendChild(raceBtn);
+      }
+
+      var waveBtn = U.el('button', 'btn btn-ghost btn-small', 'Wave');
+      waveBtn.addEventListener('click', function () {
+        waveBtn.disabled = true;
+        A.ui.toast('You waved at ' + subject.name, 'info');
+        if (A.net && A.net.isLive()) A.net.sendWave(subject.id);
+      });
+      act.appendChild(waveBtn);
+
+      // Add-friend for signed-in strangers.
+      if (subject.account && A.auth && A.auth.isLoggedIn() && subject.account !== A.auth.username()) {
+        var already = (S.friends || []).some(function (f) { return f.username === subject.account; });
+        var friendBtn = U.el('button', 'btn btn-ghost btn-small');
+        if (already) { friendBtn.textContent = 'Already friends'; friendBtn.disabled = true; }
+        else {
+          friendBtn.textContent = 'Add friend';
+          friendBtn.addEventListener('click', function () {
+            A.net.sendFriendAdd(subject.account);
+            friendBtn.textContent = 'Request sent';
+            friendBtn.disabled = true;
+          });
+        }
+        act.appendChild(friendBtn);
+      }
+    }
+    card.appendChild(act);
+    return card;
+  }
+
+  // Open the profile overlay for 'self' or an NPC id. Re-renders on 'stats' events
+  // so a PB landing while the overlay is open refreshes live.
+  var profileOverlayId = null;
+  function openProfileOverlay(from) {
+    var subject = profileSubject(from);
+    if (!subject) return;
+    profileOverlayId = subject.id;
+    var refresh = function () {
+      if (profileOverlayId !== subject.id) return; // a different overlay took over
+      var fresh = profileSubject(from);
+      if (!fresh) { closeOverlay(); return; }
+      var card = buildProfileOverlay(fresh);
+      if (card) openOverlay(card);
+    };
+    openOverlay(buildProfileOverlay(subject));
+    // One-shot stats listener: refreshes the overlay when this rider's stats land.
+    // ST.on now returns an unsubscribe (it returned undefined before, so the
+    // off() call below threw and every opened profile leaked a live listener).
+    var off = ST.on('stats', function (e) {
+      if (!e || e.id !== subject.id) return;
+      refresh();
+    });
+    // Detach the listener when the overlay closes (closeOverlay clears #onboarding).
+    var root = document.getElementById('onboarding');
+    var pollClose = setInterval(function () {
+      if (!root.hidden) return;
+      clearInterval(pollClose);
+      if (typeof off === 'function') off();
+      profileOverlayId = null;
+    }, 250);
+  }
+
+  /* The Profile panel has two pages: 'main' — the Instagram-style profile
+     (photo, stats, awards, fastest times) — and 'garage' — the car editor
+     sub-page. Reopening the panel always lands on main. Identity fields
+     (name/handle/insignia/style) are set at signup and no longer editable. */
+  var profileView = 'main';
+  function showProfileView(v) {
+    profileView = v;
+    buildProfilePanel();
+    if (v === 'main') buildSettings(document.getElementById('settings-host'));
+  }
+
   function buildProfilePanel() {
     var body = document.getElementById('profile-body');
     body.innerHTML = '';
+    if (profileView === 'garage') buildGaragePage(body);
+    else buildProfileMain(body);
+  }
+
+  /* ---- page 1: the profile ---- */
+  function buildProfileMain(body) {
+    var pfCard = U.el('div', 'pf-card');
+    pfCard.id = 'pf-card';
+    body.appendChild(pfCard);
+    renderProfileCard();
+
+    // Car card → opens the garage sub-page (the car editor lives there now).
+    var c = S.profile.car;
+    var garageBtn = U.el('button', 'pf-garage-btn');
+    garageBtn.type = 'button';
+    garageBtn.innerHTML =
+      '<span class="pf-garage-dot">' + A.mapview.carDot(c.paint, 26) + '</span>' +
+      '<span class="pf-garage-txt"><b>My Garage</b><i>' +
+      U.esc(c.year + ' ' + c.make + ' ' + c.model + (c.trim ? ' ' + c.trim : '')) + '</i></span>' +
+      '<span class="pf-garage-chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg></span>';
+    garageBtn.addEventListener('click', function () { showProfileView('garage'); });
+    body.appendChild(garageBtn);
+
+    var pub = U.el('button', 'btn btn-ghost btn-block', 'View public profile');
+    pub.title = 'See how your profile looks to other riders';
+    pub.addEventListener('click', function () { openProfileOverlay('self'); });
+    body.appendChild(pub);
+
+    var awLabel = U.el('div', 'section-label pf-sec');
+    awLabel.innerHTML = 'Awards <span class="pf-sec-count" id="pf-awards-count"></span>';
+    body.appendChild(awLabel);
+    var awards = U.el('div', 'pf-badges');
+    awards.id = 'pf-awards';
+    body.appendChild(awards);
+    renderAwards();
+
+    body.appendChild(U.el('div', 'section-label', 'Fastest times'));
+    var times = U.el('div', 'pf-times');
+    times.id = 'pf-times';
+    body.appendChild(times);
+    renderTimes();
+
+    body.appendChild(U.el('div', 'section-label', 'Drive log'));
+    var dlog = U.el('div', 'drive-log');
+    dlog.id = 'drive-log';
+    body.appendChild(dlog);
+    renderDriveLog();
+
+    appendGearbox(body);
+  }
+
+  /* Profile → Drive log: lifetime odometer + the recorded trips (js/triplog.js).
+     Each row can replay its breadcrumb as a dotted trail on the map. */
+  function renderDriveLog() {
+    var el = document.getElementById('drive-log');
+    if (!el || !A.triplog) return;
+    var st = A.triplog.stats();
+    var trips = A.triplog.list().slice(0, 6);
+    var units = S.settings.units;
+    var vMult = units === 'km' ? 3.6 : 2.23694;
+    var vUnit = units === 'km' ? ' km/h' : ' mph';
+    el.innerHTML = '<div class="dl-odo"><b>' + U.fmtDist(st.odoM, units) + '</b> lifetime · ' +
+      st.count + ' trip' + (st.count === 1 ? '' : 's') + '</div>';
+    if (!trips.length) {
+      el.appendChild(U.el('div', 'dl-empty', 'Start a ride and your trips log themselves here.'));
+      return;
+    }
+    var shown = A.triplog.shownIdx();
+    trips.forEach(function (t, i) {
+      var d = new Date(t.t0);
+      var row = U.el('div', 'dl-row');
+      row.innerHTML =
+        '<div class="dl-main"><b>' + U.esc(t.label) + '</b>' +
+        '<i>' + d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + U.fmtClock(d) +
+        ' · ' + U.fmtDist(t.dist, units) + ' · ' + U.fmtDur(t.dur) +
+        // Entries logged before top-speed tracking (or one that never saw a
+        // usable fix) have no maxMs — that rendered as "top NaN mph".
+        (t.maxMs > 0 ? ' · top ' + Math.round(t.maxMs * vMult) + vUnit : '') + '</i></div>';
+      var btn = U.el('button', 'btn btn-ghost btn-small', shown === i ? 'Hide' : 'Map');
+      btn.type = 'button';
+      btn.addEventListener('click', function () {
+        if (A.triplog.shownIdx() === i) A.triplog.hideTrail();
+        else if (!A.triplog.showTrail(i)) toast('No path recorded for this trip', 'info');
+        renderDriveLog();
+      });
+      row.appendChild(btn);
+      el.appendChild(row);
+    });
+    var clr = U.el('button', 'btn btn-ghost btn-small dl-clear', 'Clear log');
+    clr.type = 'button';
+    clr.addEventListener('click', function () { A.triplog.clear(); });
+    el.appendChild(clr);
+  }
+
+  /* ---- page 2: the garage (car editor) ---- */
+  function buildGaragePage(body) {
+    var back = U.el('div', 'pf-back');
+    var backBtn = U.el('button', 'btn btn-ghost btn-small', '← Profile');
+    backBtn.type = 'button';
+    backBtn.addEventListener('click', function () { showProfileView('main'); });
+    back.appendChild(backBtn);
+    back.appendChild(U.el('span', 'pf-back-title', 'My Garage'));
+    body.appendChild(back);
 
     var preview = U.el('div', 'profile-preview');
     preview.id = 'profile-preview';
     body.appendChild(preview);
 
-    pf.name = mkText(S.profile.name, 'Display name');
-    pf.handleWrap = U.el('div', 'handle-wrap', '<span>@</span>');
-    pf.handle = mkText(S.profile.handle, 'handle');
-    pf.handle.maxLength = 16;
-    pf.handleWrap.appendChild(pf.handle);
-    pf.emoji = mkEmojiGrid(S.profile.emoji, updatePreview);
-    pf.vibe = mkSelect(D.VIBES, S.profile.vibe);
     pf.year = mkSelect(yearList(), S.profile.car.year);
     pf.make = mkSelect(D.MAKE_LIST, S.profile.car.make);
     pf.model = mkSelect(modelsFor(S.profile.car.make), S.profile.car.model);
+    pf.trim = mkSelect(trimsFor(S.profile.car.make, S.profile.car.model), S.profile.car.trim);
     pf.paintHex = S.profile.car.paint;
     pf.paintName = S.profile.car.paintName;
     pf.paint = mkSwatches(D.PAINTS, pf.paintHex, function (hex, name) {
@@ -713,9 +1411,11 @@
       D.FINISHES.map(function (f) { return { label: f, value: f }; }),
       S.profile.car.finish, updatePreview);
 
-    // Spec sheet controls
+    // Spec sheet controls. Engine + mods take a preset OR a free-text custom
+    // entry ('Custom…' in the select reveals the input) — swaps, builds, and
+    // mod lists that aren't in the stock catalog.
     pf.body = mkSelect(D.BODY_TYPES, S.profile.car.body);
-    pf.engine = mkSelect(D.ENGINE_SIZES, S.profile.car.engine);
+    pf.engine = mkSelectCustom(D.ENGINE_SIZES, S.profile.car.engine, 'e.g. 2JZ swap, LS3, K24 turbo', 24, updatePreview);
     pf.trans = mkSelect(D.TRANSMISSIONS, S.profile.car.trans);
     pf.drive = mkSegmented(
       D.DRIVETRAINS.map(function (d) { return { label: d, value: d }; }),
@@ -724,29 +1424,30 @@
     pf.hp.type = 'number';
     pf.hp.min = 50; pf.hp.max = 2000; pf.hp.step = 1;
     pf.hp.value = S.profile.car.hp;
-    pf.mods = mkSelect(D.MODS, S.profile.car.mods);
+    pf.mods = mkSelectCustom(D.MODS, S.profile.car.mods, 'e.g. full bolt-ons + E85 tune', 40, updatePreview);
     pf.exhaust = mkSelect(D.EXHAUST_NOTES, S.profile.car.exhaust);
 
-    pf.make.addEventListener('change', function () {
-      var models = modelsFor(pf.make.value);
-      pf.model.innerHTML = '';
-      models.forEach(function (m) {
+    function fillSelect(sel, items) {
+      sel.innerHTML = '';
+      items.forEach(function (m) {
         var o = document.createElement('option');
         o.value = m; o.textContent = m;
-        pf.model.appendChild(o);
+        sel.appendChild(o);
       });
+    }
+    pf.make.addEventListener('change', function () {
+      fillSelect(pf.model, modelsFor(pf.make.value));
+      fillSelect(pf.trim, trimsFor(pf.make.value, pf.model.value));
       updatePreview();
     });
-    [pf.name, pf.handle].forEach(function (i) { i.addEventListener('input', updatePreview); });
-    [pf.vibe, pf.year, pf.model, pf.body, pf.engine, pf.trans, pf.mods, pf.exhaust].forEach(function (s) { s.addEventListener('change', updatePreview); });
+    // Model changed → its trim list is different; repopulate before previewing.
+    pf.model.addEventListener('change', function () {
+      fillSelect(pf.trim, trimsFor(pf.make.value, pf.model.value));
+      updatePreview();
+    });
+    // (engine + mods self-wire their onChange inside mkSelectCustom)
+    [pf.year, pf.trim, pf.body, pf.trans, pf.exhaust].forEach(function (s) { s.addEventListener('change', updatePreview); });
     pf.hp.addEventListener('input', updatePreview);
-
-    var grid2 = U.el('div', 'grid2');
-    grid2.appendChild(mkField('Display name', pf.name));
-    grid2.appendChild(mkField('Handle', pf.handleWrap));
-    body.appendChild(grid2);
-    body.appendChild(mkField('Avatar', pf.emoji));
-    body.appendChild(mkField('Style', pf.vibe));
 
     var sect = U.el('div', 'section-label', 'Car');
     body.appendChild(sect);
@@ -755,6 +1456,7 @@
     grid3.appendChild(mkField('Make', pf.make));
     grid3.appendChild(mkField('Model', pf.model));
     body.appendChild(grid3);
+    body.appendChild(mkField('Trim', pf.trim));
     body.appendChild(mkField('Paint', pf.paint));
     body.appendChild(mkField('Finish', pf.finish));
 
@@ -771,22 +1473,26 @@
 
     body.appendChild(U.el('div', 'section-label', 'Mods'));
     var modsGrid = U.el('div', 'grid2');
-    modsGrid.appendChild(mkField('Visual mod', pf.mods));
+    modsGrid.appendChild(mkField('Mods', pf.mods));
     modsGrid.appendChild(mkField('Exhaust note', pf.exhaust));
     body.appendChild(modsGrid);
 
     var actions = U.el('div', 'profile-actions');
     var save = U.el('button', 'btn btn-primary btn-block', 'Save changes');
     save.addEventListener('click', saveProfileForm);
-    var dice = U.el('button', 'btn btn-ghost', 'Randomize');
-    dice.title = 'Randomize all fields';
+    var dice = U.el('button', 'btn btn-ghost', 'Randomize car');
+    dice.title = 'Randomize the car (identity stays)';
     dice.addEventListener('click', randomizeProfileForm);
     actions.appendChild(save);
     actions.appendChild(dice);
     body.appendChild(actions);
 
-    // Settings — collapsible "gear box" subsection (the folded-in Settings tab).
-    // The actual controls are rendered into #settings-host on panel open.
+    updatePreview();
+  }
+
+  // Settings — collapsible "gear box" subsection (the folded-in Settings tab).
+  // Lives on the profile main page; controls render into #settings-host on open.
+  function appendGearbox(body) {
     var gear = U.el('div', 'gearbox');
     gear.id = 'gearbox';
     gear.innerHTML =
@@ -800,77 +1506,90 @@
     gear.querySelector('#gearbox-head').addEventListener('click', function () {
       toggleGearbox();
     });
-
-    updatePreview();
   }
 
   function modelsFor(make) { return D.MAKES[make] || ['Other']; }
+  function trimsFor(make, model) {
+    var mk = D.VEHICLES && D.VEHICLES[make];
+    var trims = mk && mk[model];
+    return (trims && trims.length) ? trims : ['Standard'];
+  }
 
+  // Live car preview on the garage page (identity is fixed — car only).
   function updatePreview() {
     var preview = document.getElementById('profile-preview');
-    if (!preview) return;
+    if (!preview || !pf.year) return;
     var finish = pf.finish.getValue();
     var drive = pf.drive ? pf.drive.getValue() : '';
     var hp = pf.hp ? pf.hp.value : '';
     var body = pf.body ? pf.body.value : '';
+    var engine = pf.engine ? pf.engine.getValue() : '';
+    var mods = pf.mods ? pf.mods.getValue() : '';
     var exhaust = pf.exhaust ? pf.exhaust.value : '';
     preview.innerHTML =
       '<div class="pp-car">' + A.mapview.carDot(pf.paintHex, 40) + '</div>' +
       '<div class="pp-info">' +
-      '  <div class="pp-name">' + U.esc(pf.name.value || 'Rider') + '</div>' +
-      '  <div class="pp-handle">@' + U.esc((pf.handle.value || 'rider').toLowerCase()) + ' · ' + U.esc(pf.vibe.value) + '</div>' +
-      '  <div class="pp-carline">' + pf.year.value + ' ' + U.esc(pf.make.value) + ' ' + U.esc(pf.model.value) + '</div>' +
-      '  <div class="pp-paint"><i class="paint-dot" style="background:' + pf.paintHex + '"></i>' +
+      '  <div class="pp-carline">' + pf.year.value + ' ' + U.esc(pf.make.value) + ' ' + U.esc(pf.model.value) +
+      (pf.trim && pf.trim.value ? ' <span class="pp-trim">' + U.esc(pf.trim.value) + '</span>' : '') + '</div>' +
+      '  <div class="pp-paint"><i class="paint-dot" style="background:' + U.safePaint(pf.paintHex) + '"></i>' +
       U.esc(pf.paintName) + ' · ' + finish + '</div>' +
       '  <div class="pp-specs"><span class="pp-tag">' + U.esc(body) + '</span>' +
+      (engine ? '    <span class="pp-tag">' + U.esc(engine) + '</span>' : '') +
       '    <span class="pp-tag">' + U.esc(drive) + ' · ' + U.esc(hp) + 'hp</span>' +
+      (mods && mods !== 'None' ? '    <span class="pp-tag">' + U.esc(mods) + '</span>' : '') +
       '    <span class="pp-tag">' + U.esc(exhaust) + '</span></div>' +
       '</div>';
   }
 
   function fillProfileForm() {
-    if (!pf.name) return;
-    pf.name.value = S.profile.name;
-    pf.handle.value = S.profile.handle;
-    pf.vibe.value = S.profile.vibe;
+    if (!pf.year) return; // garage controls not built yet
     pf.year.value = S.profile.car.year;
     pf.make.value = S.profile.car.make;
     pf.make.dispatchEvent(new Event('change'));
     pf.model.value = S.profile.car.model;
+    // The make-change handler refilled trims for the make's FIRST model — resync
+    // to the saved model before restoring the saved trim.
+    pf.model.dispatchEvent(new Event('change'));
+    if (S.profile.car.trim) pf.trim.value = S.profile.car.trim;
     pf.paintHex = S.profile.car.paint;
     pf.paintName = S.profile.car.paintName;
     pf.paint.setValue(pf.paintHex);
     if (S.profile.car.body) {
       pf.body.value = S.profile.car.body;
-      pf.engine.value = S.profile.car.engine || '2.0L';
+      pf.engine.setValue(S.profile.car.engine || '2.0L');
       pf.trans.value = S.profile.car.trans || 'Automatic';
       pf.drive.setValue(S.profile.car.drive || 'FWD');
       pf.hp.value = S.profile.car.hp || 200;
-      pf.mods.value = S.profile.car.mods || 'None';
+      pf.mods.setValue(S.profile.car.mods || 'None');
       pf.exhaust.value = S.profile.car.exhaust || 'Stock';
     }
+    renderProfileCard(); // stats (friends/nearby) go stale between opens
     updatePreview();
   }
 
   function saveProfileForm() {
+    // Identity (name/handle/insignia/style) is fixed at signup; the garage
+    // form only edits the car. Photo is managed by the profile header.
     var profile = {
-      name: pf.name.value.trim() || 'Rider',
-      handle: (pf.handle.value.trim() || 'rider').toLowerCase().replace(/[^a-z0-9_]/g, ''),
-      emoji: pf.emoji.getValue(),
-      vibe: pf.vibe.value,
+      name: S.profile.name,
+      handle: S.profile.handle,
+      emoji: S.profile.emoji,
+      avatar: S.profile.avatar || '',
+      vibe: S.profile.vibe,
       car: {
         year: +pf.year.value,
         make: pf.make.value,
         model: pf.model.value,
+        trim: pf.trim.value || '',
         paint: pf.paintHex,
         paintName: pf.paintName,
         finish: pf.finish.getValue(),
         body: pf.body.value,
-        engine: pf.engine.value,
+        engine: pf.engine.getValue(),
         trans: pf.trans.value,
         drive: pf.drive.getValue(),
         hp: +pf.hp.value || 200,
-        mods: pf.mods.value,
+        mods: pf.mods.getValue(),
         exhaust: pf.exhaust.value
       }
     };
@@ -878,39 +1597,38 @@
     if (A.auth && A.auth.isLoggedIn()) A.auth.saveProfileToServer(profile); // sync across devices
     A.mapview.refreshPlayer();
     refreshAvatarBtn();
+    renderProfileCard();
     renderAccount();
     toast(A.auth && A.auth.isLoggedIn() ? 'Profile saved & synced' : 'Profile saved', 'success');
   }
 
+  // Car-only randomizer (identity is not editable anymore).
   function randomizeProfileForm() {
+    if (!pf.year) return;
     var make = U.pick(D.MAKE_LIST);
     var paint = U.pick(D.PAINTS);
     var engine = U.pick(D.ENGINE_SIZES);
-    pf.name.value = U.pick(D.NAMES);
-    pf.handle.value = pf.name.value.toLowerCase() + U.randInt(2, 99);
-    pf.vibe.value = U.pick(D.VIBES);
     pf.year.value = U.randInt(1995, 2026);
     pf.make.value = make;
     pf.make.dispatchEvent(new Event('change'));
     pf.model.value = U.pick(D.MAKES[make]);
+    pf.model.dispatchEvent(new Event('change'));
+    pf.trim.value = U.pick(trimsFor(make, pf.model.value));
     pf.paintHex = paint.hex;
     pf.paintName = paint.name;
     pf.paint.setValue(paint.hex);
     pf.body.value = U.pick(D.BODY_TYPES);
-    pf.engine.value = engine;
+    pf.engine.setValue(engine);
     pf.trans.value = U.pick(D.TRANSMISSIONS);
     pf.drive.setValue(U.pick(D.DRIVETRAINS));
     pf.hp.value = engine === 'Electric' ? U.randInt(200, 1000) : U.randInt(150, 750);
-    pf.mods.value = U.pick(D.MODS);
+    pf.mods.setValue(U.pick(D.MODS));
     pf.exhaust.value = U.pick(D.EXHAUST_NOTES);
-    var emojis = pf.emoji.querySelectorAll('.emoji-btn');
-    emojis.forEach(function (b) { b.classList.remove('active'); });
-    emojis[U.randInt(0, emojis.length - 1)].classList.add('active');
     updatePreview();
   }
 
   function refreshAvatarBtn() {
-    document.getElementById('btn-avatar').innerHTML = U.riderIcon(S.profile.emoji, { size: 22 });
+    document.getElementById('btn-avatar').innerHTML = avaInner(S.profile, 22);
   }
 
   /* ============================== settings panel ============================== */
@@ -934,14 +1652,57 @@
     renderAccount();
 
     body.appendChild(U.el('div', 'section-label', 'Appearance'));
-    body.appendChild(mkField('Theme', mkSegmented([
-      { label: 'Dark', value: 'dark' },
-      { label: 'Light', value: 'light' },
-      { label: 'Auto', value: 'auto' }
-    ], S.settings.theme, function (v) { ST.setTheme(v); })));
+    // Theme choices come from the registry (js/themes.js) — registering a theme
+    // there adds it here automatically. 'Auto' resolves dark/light by system setting.
+    var accentSw; // built below; theme switches may snap the accent, so re-sync it
+    var themeOpts = (A.themes ? A.themes.list() : [
+      { id: 'dark', name: 'Dark' }, { id: 'light', name: 'Light' }
+    ]).map(function (t) { return { label: t.name, value: t.id }; });
+    themeOpts.push({ label: 'Sun-sync', value: 'sun' }); // follows real sunrise/sunset at your location
+    themeOpts.push({ label: 'Auto', value: 'auto' });
+    var themeSeg = mkSegmented(themeOpts, S.settings.theme, function (v) {
+      ST.setTheme(v);
+      if (accentSw) accentSw.setValue(S.settings.accent);
+    });
+    themeSeg.classList.add('wrap'); // 8 options — let the chips flow onto extra rows
+    body.appendChild(mkField('Theme', themeSeg));
 
-    var accentSw = mkSwatches(ACCENTS, S.settings.accent, function (hex) { ST.setAccent(hex); });
+    accentSw = mkSwatches(ACCENTS, S.settings.accent, function (hex) { ST.setAccent(hex); });
     body.appendChild(mkField('Accent color', accentSw));
+
+    /* ---- custom theme builder ---- */
+    // Six colors → js/themes.js derives the full theme (panels, text, hairlines,
+    // complete map palette) and registers it as the 'Custom' chip above.
+    if (A.themes && A.themes.getCustomCfg) {
+      body.appendChild(U.el('div', 'section-label', 'Custom theme'));
+      var draft = Object.assign({}, A.themes.getCustomCfg());
+      [
+        { key: 'accent', label: 'Accent' },
+        { key: 'bg', label: 'Panels' },
+        { key: 'land', label: 'Map land' },
+        { key: 'road', label: 'Map roads' },
+        { key: 'water', label: 'Map water' },
+        { key: 'route', label: 'GPS route' }
+      ].forEach(function (f) {
+        var inp = U.el('input', 'dot-color');
+        inp.type = 'color';
+        inp.value = draft[f.key];
+        inp.title = f.label;
+        inp.addEventListener('input', function () { draft[f.key] = inp.value; });
+        body.appendChild(mkField(f.label, inp));
+      });
+      var applyBtn = U.el('button', 'btn btn-primary btn-block');
+      applyBtn.type = 'button';
+      applyBtn.textContent = 'Apply custom theme';
+      applyBtn.addEventListener('click', function () {
+        A.themes.setCustom(draft);
+        ST.setTheme('custom');
+        if (themeSeg) themeSeg.setValue('custom');
+        if (accentSw) accentSw.setValue(S.settings.accent);
+        toast('Custom theme applied', 'success');
+      });
+      body.appendChild(applyBtn);
+    }
 
     var styleSel = mkSelect(['auto', 'dark', 'positron', 'voyager', 'liberty', 'bright'], S.settings.mapStyle);
     var styleNames = {
@@ -956,14 +1717,101 @@
     styleSel.addEventListener('change', function () { ST.setMapStyle(styleSel.value); });
     body.appendChild(mkField('Map style', styleSel));
 
+    /* ---- Map dots (recolor the rider categories live) ---- */
+    // One color input per category. Each writes a CSS var via setDotColor, so the
+    // change lands on every marker instantly (no reload, no marker rebuild).
+    // The player dot also drives its halo via --accent — kept separate on purpose
+    // so riders and the player read as distinct categories even when recolored.
+    body.appendChild(U.el('div', 'section-label', 'Map dots'));
+    var DOTS = [
+      { key: 'you',    label: 'You' },
+      { key: 'friend', label: 'Friends' },
+      { key: 'near',   label: 'Nearby' },
+      { key: 'road',   label: 'On your road' },
+      { key: 'sight',  label: 'In sight' }
+    ];
+    var dc = S.settings.dotColors || {};
+    DOTS.forEach(function (d) {
+      var inp = U.el('input', 'dot-color');
+      inp.type = 'color';
+      inp.value = /^#[0-9a-fA-F]{6}$/.test(dc[d.key]) ? dc[d.key] : '#2f80ff';
+      inp.title = d.label + ' dot color';
+      inp.addEventListener('input', function () { ST.setDotColor(d.key, inp.value); });
+      body.appendChild(mkField(d.label, inp));
+    });
+    var resetBtn = U.el('button', 'btn btn-ghost btn-small');
+    resetBtn.type = 'button';
+    resetBtn.textContent = 'Reset to defaults';
+    resetBtn.style.marginTop = '4px';
+    resetBtn.addEventListener('click', function () {
+      ST.resetDotColors();
+      // refresh every input to the reset value
+      var fresh = (A.state.settings.dotColors) || {};
+      body.querySelectorAll('.dot-color').forEach(function (inp, i) {
+        if (DOTS[i]) inp.value = fresh[DOTS[i].key];
+      });
+    });
+    body.appendChild(resetBtn);
+
     body.appendChild(U.el('div', 'section-label', 'Map & live'));
 
     body.appendChild(mkRow('Global drivers', null,
       mkToggle(S.settings.showGlobal, function (v) { ST.setShowGlobal(v); })));
     body.appendChild(mkRow('Smooth animations', null,
       mkToggle(S.settings.anim, function (v) { ST.setAnim(v); })));
+    body.appendChild(mkRow('Space scenery', 'Stars, planets & day/night on the globe',
+      mkToggle(S.settings.showSpace !== false, function (v) {
+        ST.setSetting('showSpace', v);
+        if (A.space && A.space.setEnabled) A.space.setEnabled(v);
+      })));
     body.appendChild(mkRow('Follow camera', null,
       mkToggle(S.settings.followCam, function (v) { ST.setFollowCam(v); })));
+    body.appendChild(mkRow('Speed-adaptive zoom', 'Camera eases out at highway speed',
+      mkToggle(S.settings.adaptiveZoom, function (v) { ST.setSetting('adaptiveZoom', v); })));
+    body.appendChild(mkRow('Speedometer', 'Live speed HUD with session top & average',
+      mkToggle(S.settings.showSpeedo, function (v) { ST.setSetting('showSpeedo', v); })));
+    body.appendChild(mkRow('Keep screen awake', 'Stops the display sleeping while riding',
+      mkToggle(S.settings.keepAwake, function (v) { ST.setSetting('keepAwake', v); })));
+    body.appendChild(mkRow('Auto parking pin', 'Drops a pin where a trip ends',
+      mkToggle(S.settings.autoParkPin, function (v) { ST.setSetting('autoParkPin', v); })));
+
+    /* ---- Instruments (HUD rail cards + driving alerts) ---- */
+    body.appendChild(U.el('div', 'section-label', 'Instruments'));
+    body.appendChild(mkRow('Compass', 'Heading rose with cardinal direction',
+      mkToggle(S.settings.showCompass !== false, function (v) { ST.setSetting('showCompass', v); })));
+    body.appendChild(mkRow('Clock & sun', 'Local time and the next sunrise / sunset',
+      mkToggle(S.settings.showClock !== false, function (v) { ST.setSetting('showClock', v); })));
+    body.appendChild(mkRow('Tripmeter', 'Session distance & moving time (tap the card to reset)',
+      mkToggle(S.settings.showTripmeter, function (v) { ST.setSetting('showTripmeter', v); })));
+    body.appendChild(mkRow('G-force meter', 'Cornering & braking g, derived from GPS',
+      mkToggle(S.settings.showGforce, function (v) { ST.setSetting('showGforce', v); })));
+    body.appendChild(mkRow('Weather now', 'Live temperature & conditions at your location',
+      mkToggle(S.settings.showWeatherNow, function (v) { ST.setSetting('showWeatherNow', v); })));
+    body.appendChild(mkRow('Battery', 'Device battery level while you drive',
+      mkToggle(S.settings.showBattery, function (v) { ST.setSetting('showBattery', v); })));
+    body.appendChild(mkRow('Coordinates', 'Live lat/lng — tap the card to copy',
+      mkToggle(S.settings.showCoords, function (v) { ST.setSetting('showCoords', v); })));
+    body.appendChild(mkRow('Destination arrow', 'Arrow pointing to your active route destination',
+      mkToggle(S.settings.showDestArrow, function (v) { ST.setSetting('showDestArrow', v); })));
+    body.appendChild(mkRow('Top speed quest', 'All-time top speed & fastest 60–100 records',
+      mkToggle(S.settings.showQuest !== false, function (v) { ST.setSetting('showQuest', v); })));
+
+    var dimSlider = U.el('input', 'input');
+    dimSlider.type = 'range'; dimSlider.min = '0'; dimSlider.max = '0.7'; dimSlider.step = '0.05';
+    dimSlider.value = S.settings.nightDim != null ? S.settings.nightDim : 0;
+    dimSlider.style.width = '100%';
+    dimSlider.addEventListener('input', function () { ST.setSetting('nightDim', parseFloat(dimSlider.value)); });
+    body.appendChild(mkField('Night dimmer', dimSlider));
+
+    var spdUnit = S.settings.units === 'km' ? 'km/h' : 'mph';
+    body.appendChild(mkField('Overspeed alert (' + spdUnit + ')', mkSegmented([
+      { label: 'Off', value: '0' },
+      { label: '30', value: '30' },
+      { label: '45', value: '45' },
+      { label: '65', value: '65' },
+      { label: '80', value: '80' }
+    ], String(Number(S.settings.speedAlert) || 0), function (v) { ST.setSetting('speedAlert', Number(v)); })));
+
     var navSupported = A.routing && A.routing.isNavSupported && A.routing.isNavSupported();
     body.appendChild(mkRow('Voice navigation',
       navSupported ? 'Spoken turn-by-turn directions during a trip' : 'Not supported on this device',
@@ -997,6 +1845,22 @@
       'Go invisible and reveal nearby aircraft and police',
       mkToggle(S.settings.ghost, function (v) { applyGhost(v); })));
 
+    /* ---- Voice chat (proximity auto-connect) ---- */
+    body.appendChild(U.el('div', 'section-label', 'Voice chat'));
+    body.appendChild(mkField('Auto voice chat', mkSegmented([
+      { label: 'Off', value: 'off' },
+      { label: 'Nearby', value: 'radius' },
+      { label: 'In sight', value: 'sight' },
+      { label: 'My road', value: 'road' }
+    ], (S.settings.proxVoice || 'off'), function (v) {
+      if (A.voice && A.voice.setProxMode) A.voice.setProxMode(v);
+      else ST.setSetting('proxVoice', v);
+    })));
+    body.appendChild(U.el('div', 'hint-card',
+      'Automatically links the walkie-talkie with riders <b>around you</b>, <b>in sight ahead</b> or ' +
+      '<b>sharing your road</b> — like proximity voice chat. Both riders need it on. ' +
+      'Convoy voice always works; Ghost mode pauses it.'));
+
     /* ---- Routing ---- */
     body.appendChild(U.el('div', 'section-label', 'Routing'));
     body.appendChild(mkRow('Avoid police & cameras',
@@ -1029,19 +1893,40 @@
     ], S.settings.pingRate, function (v) { ST.setSetting('pingRate', v); })));
     body.appendChild(mkRow('Contact stings', 'Alert when a new threat becomes closest',
       mkToggle(S.settings.sonarStings, function (v) { ST.setSetting('sonarStings', v); })));
+    body.appendChild(mkRow('Spoken alerts', 'Voice callout — "Police ahead, 1.2 miles"',
+      mkToggle(S.settings.sonarSpoken !== false, function (v) { ST.setSetting('sonarSpoken', v); })));
 
     /* ---- Ghost target filters (which Ghost-Mode targets are tracked) ---- */
     body.appendChild(U.el('div', 'section-label', 'Ghost targets'));
-    body.appendChild(mkRow('Police stations', null,
-      mkToggle(S.settings.ghostPolice, function (v) { ST.setSetting('ghostPolice', v); })));
+    body.appendChild(mkRow('Police on map', 'Show police, cameras & live Waze sightings on the map everywhere',
+      mkToggle(S.settings.ghostPolice, function (v) { ST.setSetting('ghostPolice', v, 'ghostpolice'); })));
     body.appendChild(mkRow('Speed cameras', null,
       mkToggle(S.settings.ghostCamera, function (v) { ST.setSetting('ghostCamera', v); })));
-    body.appendChild(mkRow('Airplanes', null,
+    body.appendChild(mkRow('Airplanes', 'Track fixed-wing aircraft on the radar',
       mkToggle(S.settings.ghostAir, function (v) { ST.setSetting('ghostAir', v); })));
     body.appendChild(mkRow('Helicopters', null,
       mkToggle(S.settings.ghostHeli, function (v) { ST.setSetting('ghostHeli', v); })));
+
+    /* ---- Aircraft by owner (which classes the radar board ranks) ---- */
+    // These are independent of the airplane/heli shape filter above: a helicopter
+    // shows on the board only if BOTH its shape (ghostHeli) AND its ownership
+    // (e.g. ghostAirPolice) are on. Map dots are unaffected — these govern the
+    // threat list + sonar only.
+    body.appendChild(U.el('div', 'section-label', 'Aircraft classes'));
+    body.appendChild(mkRow('Military', 'Fighters, transports, gov aircraft',
+      mkToggle(S.settings.ghostAirMil !== false, function (v) { ST.setSetting('ghostAirMil', v); })));
+    body.appendChild(mkRow('Police / law enforcement', 'Police planes + rotor units',
+      mkToggle(S.settings.ghostAirPolice !== false, function (v) { ST.setSetting('ghostAirPolice', v); })));
+    body.appendChild(mkRow('EMS / medevac', 'Air ambulances and rescue helicopters',
+      mkToggle(S.settings.ghostAirEms !== false, function (v) { ST.setSetting('ghostAirEms', v); })));
+    body.appendChild(mkRow('Civilian', 'Airliners, private planes (off the threat board by default)',
+      mkToggle(S.settings.ghostAirCiv, function (v) { ST.setSetting('ghostAirCiv', v); })));
+
     body.appendChild(mkRow('Police hotspots', 'Heatmap of where police are usually seen at this hour',
       mkToggle(S.settings.ghostHotspots !== false, function (v) { ST.setSetting('ghostHotspots', v, 'ghosthotspots'); })));
+
+    /* ---- Hardware radar detector (BLE) ---- */
+    buildDetectorSettings(body);
 
     /* ---- Data overlays ---- */
     body.appendChild(U.el('div', 'section-label', 'Map overlays'));
@@ -1086,6 +1971,115 @@
     return r;
   }
 
+  /* ============================== radar detector settings ============================== */
+  // Scan for nearby BLE detectors, pick one to connect, and toggle auto-connect
+  // + crowd-upload. On the web (no native plugin) this shows the compatibility
+  // list only — the scan button explains it needs the Android app.
+  function buildDetectorSettings(body) {
+    body.appendChild(U.el('div', 'section-label', 'Radar detector'));
+    var isNative = A.native && A.native.isNative && A.native.isNative();
+
+    // Connection status line.
+    var status = U.el('div', 'det-status');
+    status.id = 'det-status';
+    function renderStatus(st) {
+      var connected = st && st.connected;
+      var name = S.settings.detectorName || '';
+      status.className = 'det-status' + (connected ? ' on' : '');
+      status.innerHTML = '<span class="det-dot"></span>' +
+        (connected ? ('Connected' + (st.family ? ' · ' + U.esc(st.family) : '') + (name ? ' · ' + U.esc(name) : ''))
+          : (name ? ('Saved: ' + U.esc(name) + ' — not connected') : 'No detector connected'));
+    }
+    renderStatus(A.native && A.native.state ? A.native.state().det : null);
+    ST.on('detector:state', renderStatus);
+    body.appendChild(status);
+
+    // Scan + device picker.
+    var scanBtn = U.el('button', 'btn btn-ghost btn-block', 'Scan for detectors');
+    var picker = U.el('div', 'det-picker');
+    picker.hidden = true;
+    var seen = {};
+    function addDevice(d) {
+      if (!d || !d.id || seen[d.id]) return;
+      seen[d.id] = 1;
+      var row = U.el('button', 'det-dev' + (d.compatible ? ' ok' : ''));
+      row.type = 'button';
+      row.innerHTML =
+        '<span class="det-dev-main"><b>' + U.esc(d.name || '(unnamed)') + '</b>' +
+        '<i>' + (d.compatible ? (U.esc(d.brand || 'Compatible') + (d.stream ? '' : ' · limited')) : 'Not a known detector') + '</i></span>' +
+        '<span class="det-dev-rssi">' + (d.rssi != null ? d.rssi + ' dBm' : '') + '</span>';
+      row.disabled = !d.compatible;
+      row.addEventListener('click', function () { chooseDevice(d); });
+      picker.appendChild(row);
+    }
+    function chooseDevice(d) {
+      ST.setSetting('detectorId', d.id);
+      ST.setSetting('detectorName', d.name || d.brand || 'Detector');
+      renderStatus(A.native && A.native.state ? A.native.state().det : null);
+      if (A.native && A.native.connectDetector) A.native.connectDetector(d.id, d.family);
+      toast('Connecting to ' + (d.name || 'detector') + '…', 'info');
+      picker.hidden = true;
+    }
+    // Live-stream devices as the native scan discovers them.
+    ST.on('detector:device', addDevice);
+
+    scanBtn.addEventListener('click', function () {
+      if (!isNative || !A.native.listDetectors) {
+        toast('Detector scanning needs the Convoy Android app', 'warn');
+        return;
+      }
+      seen = {}; picker.innerHTML = ''; picker.hidden = false;
+      picker.appendChild(U.el('div', 'det-scanning', 'Scanning for Bluetooth detectors…'));
+      scanBtn.disabled = true; scanBtn.textContent = 'Scanning…';
+      A.native.listDetectors().then(function (list) {
+        picker.innerHTML = '';
+        var compat = (list || []).filter(function (d) { return d.compatible; });
+        var rest = (list || []).filter(function (d) { return !d.compatible; });
+        if (!compat.length && !rest.length) {
+          picker.appendChild(U.el('div', 'det-scanning', 'No Bluetooth devices found. Turn the detector on and make sure it is pairing.'));
+        }
+        compat.concat(rest).forEach(addDevice);
+        scanBtn.disabled = false; scanBtn.textContent = 'Scan again';
+      }).catch(function () {
+        scanBtn.disabled = false; scanBtn.textContent = 'Scan for detectors';
+      });
+    });
+    body.appendChild(scanBtn);
+    body.appendChild(picker);
+
+    if (S.settings.detectorId) {
+      var forget = U.el('button', 'btn btn-ghost btn-small', 'Forget detector');
+      forget.addEventListener('click', function () {
+        ST.setSetting('detectorId', '');
+        ST.setSetting('detectorName', '');
+        if (A.native && A.native.stopDetector) A.native.stopDetector();
+        renderStatus(null);
+        toast('Detector forgotten', 'info');
+      });
+      body.appendChild(forget);
+    }
+
+    body.appendChild(mkRow('Auto-connect', 'Connect the saved detector when Ghost Mode turns on',
+      mkToggle(S.settings.detectorAuto !== false, function (v) { ST.setSetting('detectorAuto', v); })));
+    body.appendChild(mkRow('Share detections', 'Upload likely-police radar to the map for nearby riders',
+      mkToggle(S.settings.detectorUpload !== false, function (v) { ST.setSetting('detectorUpload', v); })));
+
+    // Compatibility reference — every supported model, grouped by brand.
+    var compatWrap = U.el('details', 'det-compat');
+    var sum = U.el('summary', null, 'Compatible detectors');
+    compatWrap.appendChild(sum);
+    var byBrand = A.detectors ? A.detectors.supportedByBrand() : {};
+    Object.keys(byBrand).forEach(function (brand) {
+      var models = byBrand[brand].filter(function (m) { return m.bt; });
+      if (!models.length) return;
+      var grp = U.el('div', 'det-compat-grp');
+      grp.innerHTML = '<b>' + U.esc(brand) + '</b> <span>' +
+        models.map(function (m) { return U.esc(m.name); }).join(' · ') + '</span>';
+      compatWrap.appendChild(grp);
+    });
+    body.appendChild(compatWrap);
+  }
+
   /* ============================== search ============================== */
   function wireSearch() {
     var input = document.getElementById('search-input');
@@ -1093,9 +2087,52 @@
     var clearBtn = document.getElementById('search-clear');
     var items = [];
 
+    // Recent destinations — Google-Maps-style history shown when the box is empty
+    // or just focused, so common trips are one tap away. Persisted in localStorage.
+    var RECENTS_KEY = 'convoy.recents';
+    function loadRecents() {
+      try { return JSON.parse(localStorage.getItem(RECENTS_KEY) || '[]'); } catch (e) { return []; }
+    }
+    function saveRecent(r) {
+      var list = loadRecents().filter(function (x) {
+        return !(x.label === r.label && Math.abs(x.lng - r.lng) < 1e-6 && Math.abs(x.lat - r.lat) < 1e-6);
+      });
+      list.unshift({ label: r.label, sub: r.sub, lng: r.lng, lat: r.lat });
+      try { localStorage.setItem(RECENTS_KEY, JSON.stringify(list.slice(0, 6))); } catch (e) {}
+    }
+
+    // Search-result pin vs. recent-history clock — distinct icons like Google Maps.
+    var PIN_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-6.5 7-12A7 7 0 0 0 5 9c0 5.5 7 12 7 12Z"/><circle cx="12" cy="9" r="2.4"/></svg>';
+    var CLOCK_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 1.8"/></svg>';
+    function addRow(r, icon) {
+      var item = U.el('div', 'sr-item',
+        '<span class="sr-pin">' + icon + '</span><span class="sr-text"><b>' + U.esc(r.label) + '</b><i>' + U.esc(r.sub || '') + '</i></span>');
+      item.setAttribute('role', 'option');
+      item.addEventListener('mousedown', function (e) { e.preventDefault(); choose(r); });
+      results.appendChild(item);
+    }
+    var STAR_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="m12 3.6 2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.2-4.1 5.8-.8Z"/></svg>';
+    function showRecents() {
+      var savedP = (A.places && A.places.list()) || []; // starred places first
+      var rec = loadRecents();
+      if (!savedP.length && !rec.length) { items = []; results.hidden = true; return; } // clear so Enter can't pick an invisible stale result
+      items = savedP.concat(rec);
+      results.innerHTML = '';
+      if (savedP.length) {
+        results.appendChild(U.el('div', 'sr-head', 'Saved'));
+        savedP.forEach(function (r) { addRow(r, STAR_SVG); });
+      }
+      if (rec.length) {
+        results.appendChild(U.el('div', 'sr-head', 'Recent'));
+        rec.forEach(function (r) { addRow(r, CLOCK_SVG); });
+      }
+      results.hidden = false;
+    }
+
     var run = U.debounce(function () {
       var q = input.value.trim();
-      if (q.length < 3) { results.hidden = true; return; }
+      if (q.length < 3) { showRecents(); return; }
+      items = []; // previous search's rows are dead the moment a new query is in flight
       results.hidden = false;
       results.innerHTML = '<div class="sr-loading">Searching…</div>';
       A.routing.geocode(q).then(function (rows) {
@@ -1105,22 +2142,15 @@
           return;
         }
         results.innerHTML = '';
-        rows.forEach(function (r) {
-          var item = U.el('div', 'sr-item',
-            '<span class="sr-pin"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-6.5 7-12A7 7 0 0 0 5 9c0 5.5 7 12 7 12Z"/><circle cx="12" cy="9" r="2.4"/></svg></span><span class="sr-text"><b>' + U.esc(r.label) + '</b><i>' + U.esc(r.sub) + '</i></span>');
-          item.setAttribute('role', 'option');
-          item.addEventListener('mousedown', function (e) {
-            e.preventDefault();
-            choose(r);
-          });
-          results.appendChild(item);
-        });
+        rows.forEach(function (r) { addRow(r, PIN_SVG); });
       }).catch(function () {
+        items = [];
         results.innerHTML = '<div class="sr-loading">Search unavailable — check connection</div>';
       });
     }, 350);
 
     function choose(r) {
+      saveRecent(r);
       input.value = r.label;
       results.hidden = true;
       input.blur();
@@ -1152,7 +2182,9 @@
       else if (e.key === 'Enter') {
         var active = results.querySelector('.sr-item.active');
         if (active) active.dispatchEvent(new MouseEvent('mousedown', { cancelable: true }));
-        else if (items.length) choose(items[0]);
+        // Only pick the first row when the list is actually visible — otherwise
+        // Enter would navigate to a result the user can no longer see.
+        else if (!results.hidden && items.length) choose(items[0]);
       }
       else if (e.key === 'Escape') { results.hidden = true; input.blur(); }
     });
@@ -1161,13 +2193,14 @@
     });
     input.addEventListener('focus', function () {
       if (input.value.trim().length >= 3 && results.children.length) results.hidden = false;
+      else showRecents();
     });
     clearBtn.addEventListener('click', function () {
       input.value = '';
       clearBtn.hidden = true;
-      results.hidden = true;
       A.routing.clearRoute();
       input.focus();
+      showRecents();   // empty box → fall back to recent destinations
     });
   }
 
@@ -1249,8 +2282,9 @@
     var root = document.getElementById('onboarding');
     A.mapview.refreshPlayer();
     refreshAvatarBtn();
-    fillProfileForm();
+    buildProfilePanel(); // re-render whichever profile page is showing
     renderAccount();
+    refreshVerifyBanner();
     root.classList.add('closing');
     setTimeout(function () {
       root.hidden = true; root.innerHTML = '';
@@ -1269,14 +2303,78 @@
       '</div>';
   }
 
-  function authBackHead(title) {
+  // `backTo` is the auth screen the arrow returns to; the flows are nested now
+  // (welcome → login → forgot), so "back" is no longer always the welcome card.
+  function authBackHead(title, backTo) {
     var head = U.el('div', 'auth-head2');
     var back = U.el('button', 'auth-back', '<svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>');
     back.setAttribute('aria-label', 'Back');
-    back.addEventListener('click', function () { renderAuth('welcome'); });
+    back.addEventListener('click', function () { renderAuth(backTo || 'welcome'); });
     head.appendChild(back);
     head.appendChild(U.el('h2', 'auth-title', U.esc(title)));
     return head;
+  }
+
+  /* ---------------- social sign-in buttons ----------------
+     Only the providers /api/auth/config reports are ever drawn: a button that
+     dead-ends at "provider not enabled" is worse than no button at all. */
+
+  // Recognisable marks for the providers people actually look for; everything
+  // else gets a lettered badge, which is honest and costs nothing.
+  var PROVIDER_MARKS = {
+    google: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">' +
+      '<path fill="#4285F4" d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.5h6.5a5.6 5.6 0 0 1-2.4 3.6v3h3.9c2.3-2.1 3.5-5.2 3.5-8.8z"/>' +
+      '<path fill="#34A853" d="M12 24c3.2 0 5.9-1.1 7.9-2.9l-3.9-3c-1.1.7-2.4 1.2-4 1.2-3.1 0-5.7-2.1-6.6-4.9H1.4v3.1A12 12 0 0 0 12 24z"/>' +
+      '<path fill="#FBBC05" d="M5.4 14.4a7.2 7.2 0 0 1 0-4.6V6.7H1.4a12 12 0 0 0 0 10.8l4-3.1z"/>' +
+      '<path fill="#EA4335" d="M12 4.8c1.8 0 3.4.6 4.6 1.8l3.4-3.4A12 12 0 0 0 1.4 6.7l4 3.1C6.3 6.9 8.9 4.8 12 4.8z"/></svg>',
+    apple: '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">' +
+      '<path d="M16.4 12.7c0-2.4 2-3.6 2.1-3.6-1.1-1.7-2.9-1.9-3.5-1.9-1.5-.2-2.9.9-3.6.9s-1.9-.9-3.1-.8c-1.6 0-3.1.9-3.9 2.4-1.7 2.9-.4 7.2 1.2 9.6.8 1.2 1.7 2.5 3 2.4 1.2 0 1.6-.8 3.1-.8s1.9.8 3.1.7c1.3 0 2.1-1.2 2.9-2.3.9-1.3 1.3-2.6 1.3-2.7 0 0-2.5-1-2.6-3.9zM14 5.4c.7-.8 1.1-1.9 1-3-1 0-2.2.7-2.9 1.5-.6.7-1.1 1.9-1 3 1.1.1 2.2-.6 2.9-1.5z"/></svg>',
+    github: '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">' +
+      '<path d="M12 .5A11.5 11.5 0 0 0 .5 12a11.5 11.5 0 0 0 7.9 10.9c.6.1.8-.2.8-.6v-2c-3.2.7-3.9-1.5-3.9-1.5-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.1.1 1.7 1.2 1.7 1.2 1 1.8 2.7 1.3 3.4 1 .1-.7.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.3 11.3 0 0 1 6 0C17.5 4.8 18.5 5 18.5 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .4.2.7.8.6A11.5 11.5 0 0 0 23.5 12 11.5 11.5 0 0 0 12 .5z"/></svg>',
+    discord: '<svg viewBox="0 0 24 24" width="18" height="18" fill="#5865F2" aria-hidden="true">' +
+      '<path d="M20.3 4.5A19.8 19.8 0 0 0 15.4 3l-.3.5c1.7.4 2.6 1 3.5 1.7a12.4 12.4 0 0 0-9.2 0c.9-.7 1.9-1.3 3.5-1.7L12.6 3a19.8 19.8 0 0 0-4.9 1.5C4.5 9.2 3.6 13.8 4 18.3a19.9 19.9 0 0 0 6 3l1.3-2c-.7-.3-1.4-.6-2-1l.5-.4a14.2 14.2 0 0 0 12.1 0l.5.4c-.6.4-1.3.7-2 1l1.3 2a19.9 19.9 0 0 0 6-3c.5-5.2-.8-9.8-3.4-13.8zM9.7 15.5c-1.2 0-2.1-1.1-2.1-2.4S8.5 10.7 9.7 10.7s2.1 1.1 2.1 2.4-.9 2.4-2.1 2.4zm4.6 0c-1.2 0-2.1-1.1-2.1-2.4s.9-2.4 2.1-2.4 2.1 1.1 2.1 2.4-.9 2.4-2.1 2.4z"/></svg>'
+  };
+
+  function providerMark(id, label) {
+    if (PROVIDER_MARKS[id]) return PROVIDER_MARKS[id];
+    return '<span class="oauth-letter">' + U.esc(String(label || id).charAt(0).toUpperCase()) + '</span>';
+  }
+
+  // Renders the provider buttons into `card`, if any are enabled. `verb` reads
+  // "Continue with Google" on the welcome card and "Sign in with Google" on the
+  // login card. Returns the number drawn so the caller knows whether to add a
+  // divider above the email fields.
+  function addProviderButtons(card, cfg, verb) {
+    var list = (cfg && cfg.providers) || [];
+    if (!list.length) return 0;
+    var wrap = U.el('div', 'oauth-row');
+    list.forEach(function (p) {
+      var b = U.el('button', 'btn btn-oauth btn-block',
+        providerMark(p.id, p.label) + '<span>' + U.esc(verb + ' ' + p.label) + '</span>');
+      b.addEventListener('click', function () {
+        b.disabled = true;
+        A.auth.oauthStart(p.id).then(function (r) {
+          if (!r.ok) { b.disabled = false; toast(r.error, 'warn'); return; }
+          // On the web the page is navigating away, so leaving the button
+          // disabled is right. In the APK the sign-in happens in a Custom Tab
+          // over a still-running app: put the button back, or a rider who backs
+          // out of the browser returns to a screen they can no longer use.
+          if (r.pending) b.disabled = false;
+        });
+      });
+      wrap.appendChild(b);
+    });
+    card.appendChild(wrap);
+    return list.length;
+  }
+
+  // Cached across renders — renderAuth redraws on every step and this must not
+  // refetch each time. A.auth.config() caches too; this keeps it synchronous so
+  // the card can be built in one pass without a loading flash.
+  var authCfg = { providers: [], email: false, magicLink: false };
+  var authCfgLoaded = false;
+  function withAuthConfig(fn) {
+    A.auth.config().then(function (cfg) { authCfg = cfg; authCfgLoaded = true; fn(cfg); });
   }
 
   function showErr(el, msg) {
@@ -1295,8 +2393,11 @@
   }
 
   // Reusable car-setup fields (name, avatar, car, paint, pledge). Returns getProfile()+onPledge().
-  function buildCarSetup(card) {
-    var name = U.pick(D.NAMES);
+  function buildCarSetup(card, defaults) {
+    // `defaults.name` pre-fills the display name — used after a provider sign-in,
+    // where the provider already told us what this person calls themselves. It is
+    // only ever a starting value; the field stays editable.
+    var name = (defaults && defaults.name) || U.pick(D.NAMES);
     var make = U.pick(D.MAKE_LIST);
     var model = U.pick(D.MAKES[make]);
     var paint = U.pick(D.PAINTS);
@@ -1306,15 +2407,24 @@
     var yearSel = mkSelect(yearList(), 2022);
     var makeSel = mkSelect(D.MAKE_LIST, make);
     var modelSel = mkSelect(D.MAKES[make], model);
+    var trimSel = mkSelect(trimsFor(make, model));
     var paintHex = paint.hex, paintName = paint.name;
     var swatches = mkSwatches(D.PAINTS, paintHex, function (hex, n) { paintHex = hex; paintName = n; });
 
+    function refillTrims() {
+      trimSel.innerHTML = '';
+      trimsFor(makeSel.value, modelSel.value).forEach(function (t) {
+        var o = document.createElement('option'); o.value = t; o.textContent = t; trimSel.appendChild(o);
+      });
+    }
     makeSel.addEventListener('change', function () {
       modelSel.innerHTML = '';
       D.MAKES[makeSel.value].forEach(function (m) {
         var o = document.createElement('option'); o.value = m; o.textContent = m; modelSel.appendChild(o);
       });
+      refillTrims();
     });
+    modelSel.addEventListener('change', refillTrims);
 
     card.appendChild(mkField('Display name', nameInput));
     card.appendChild(mkField('Avatar', emojiGrid));
@@ -1323,6 +2433,7 @@
     g3.appendChild(mkField('Make', makeSel));
     g3.appendChild(mkField('Model', modelSel));
     card.appendChild(g3);
+    card.appendChild(mkField('Trim', trimSel));
     card.appendChild(mkField('Paint', swatches));
 
     var pledge = U.el('label', 'pledge');
@@ -1339,6 +2450,7 @@
           vibe: U.pick(D.VIBES),
           car: {
             year: +yearSel.value, make: makeSel.value, model: modelSel.value,
+            trim: trimSel.value || '',
             paint: paintHex, paintName: paintName, finish: 'Gloss'
           }
         };
@@ -1365,6 +2477,118 @@
       root.hidden = true; root.innerHTML = '';
       root.classList.remove('closing', 'show');
     }, 380);
+  }
+
+  // "We've sent you something" — the terminal screen of every flow that hands
+  // off to an inbox. Deliberately says nothing about whether the address exists.
+  function buildSentCard(title, message, buttonLabel, onContinue) {
+    var card = U.el('div', 'modal-card');
+    card.appendChild(U.el('div', 'auth-title', U.esc(title)));
+    card.appendChild(U.el('div', 'ob-note', U.esc(message)));
+    card.appendChild(U.el('div', 'ob-note',
+      'Not there in a minute or two? Check your spam folder.'));
+    var btn = U.el('button', 'btn btn-primary btn-block btn-lg', buttonLabel);
+    btn.addEventListener('click', onContinue);
+    card.appendChild(btn);
+    return card;
+  }
+
+  /* ---------------- provider sign-in: the missing half ----------------
+     A provider tells us who someone is, not what they drive or what to call
+     them on the map. This is the step that turns a GoTrue user into a Convoy
+     account, and until it finishes the session resolves to nothing — so it is
+     also what boot() resumes into if the rider closed the tab halfway. */
+  function showOAuthSetup(info, onDone) {
+    authOnDone = onDone || function () { };
+    var root = document.getElementById('onboarding');
+    var card = U.el('div', 'modal-card');
+    var sug = (info && info.suggested) || {};
+
+    card.appendChild(U.el('div', 'auth-title', 'Almost there'));
+    card.appendChild(U.el('div', 'ob-note',
+      info && info.email
+        ? 'Signed in as <b>' + U.esc(info.email) + '</b>. Pick the name other riders see and set up your car.'
+        : 'Pick the name other riders see and set up your car.'));
+
+    var uInput = mkText(sug.username || '', 'Pick a username');
+    uInput.autocomplete = 'username';
+    uInput.maxLength = 20;
+    var errEl = U.el('div', 'auth-err'); errEl.hidden = true;
+    card.appendChild(mkField('Username', uInput));
+    card.appendChild(errEl);
+    card.appendChild(U.el('div', 'section-label', 'Your ride'));
+
+    var setup = buildCarSetup(card, { name: sug.name });
+    var btn = U.el('button', 'btn btn-primary btn-block btn-lg', 'Finish &amp; ride →');
+    btn.disabled = true;
+    setup.onPledge(function (ok) { btn.disabled = !ok; });
+    btn.addEventListener('click', function () {
+      errEl.hidden = true;
+      if (!uInput.value.trim()) { showErr(errEl, 'Pick a username'); return; }
+      btn.disabled = true; btn.textContent = 'Setting up…';
+      A.auth.oauthComplete(uInput.value.trim(), setup.getProfile()).then(function (r) {
+        if (!r.ok) {
+          showErr(errEl, r.error);
+          btn.disabled = false; btn.innerHTML = 'Finish &amp; ride →';
+          return;
+        }
+        root.innerHTML = '';
+        root.appendChild(buildRecoveryCard(r.recoveryCode, 'I saved it — start riding →',
+          function () { closeAuthEnter('Welcome, ' + S.profile.name); },
+          'You\'re in — save your recovery code',
+          'Providers go down and accounts get locked. This is your way back in that doesn\'t depend on one.'));
+        root.scrollTop = 0;
+      });
+    });
+    card.appendChild(btn);
+
+    root.hidden = false;
+    root.classList.remove('closing');
+    root.innerHTML = '';
+    root.appendChild(card);
+    root.scrollTop = 0;
+    requestAnimationFrame(function () { root.classList.add('show'); });
+  }
+
+  // Landing screen for a password-reset link. The token has already been pulled
+  // out of the URL by auth.js by the time this runs.
+  function showResetPassword(token, onDone) {
+    authOnDone = onDone || function () { };
+    var root = document.getElementById('onboarding');
+    var card = U.el('div', 'modal-card');
+    card.appendChild(U.el('div', 'auth-title', 'Choose a new password'));
+    card.appendChild(U.el('div', 'ob-note',
+      'This signs you in and signs every other device out.'));
+    var np = mkPassword('New password (6+ characters)');
+    np.autocomplete = 'new-password';
+    var err = U.el('div', 'auth-err'); err.hidden = true;
+    card.appendChild(mkField('New password', np));
+    card.appendChild(err);
+    var btn = U.el('button', 'btn btn-primary btn-block btn-lg', 'Set password &amp; sign in');
+    var submit = function () {
+      err.hidden = true;
+      if (!np.value) { showErr(err, 'Enter a new password'); return; }
+      btn.disabled = true; btn.textContent = 'Saving…';
+      A.auth.resetWithToken(token, np.value).then(function (r) {
+        if (r.ok) { closeAuthEnter('Password updated — welcome back'); return; }
+        showErr(err, r.error);
+        btn.disabled = false; btn.innerHTML = 'Set password &amp; sign in';
+      });
+    };
+    btn.addEventListener('click', submit);
+    np.addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); });
+    card.appendChild(btn);
+    // A dead link has to lead somewhere, or the rider is stuck on this card.
+    var back = U.el('button', 'btn btn-ghost btn-block', 'Back to sign-in');
+    back.addEventListener('click', function () { renderAuth('login'); });
+    card.appendChild(back);
+
+    root.hidden = false;
+    root.classList.remove('closing');
+    root.innerHTML = '';
+    root.appendChild(card);
+    root.scrollTop = 0;
+    requestAnimationFrame(function () { root.classList.add('show'); });
   }
 
   function buildRecoveryCard(code, continueLabel, onContinue, title, subtitle) {
@@ -1434,6 +2658,157 @@
     openOverlay(card);
   }
 
+  /* ---------------- the unverified-email banner ----------------
+     While an account has an address it has not confirmed, the server sends every
+     other rider anonymised — no names, no stats. Without a standing explanation
+     that reads as a bug ("why is everyone called Rider?"), so this bar says what
+     is happening and offers the one action that fixes it.
+
+     Deliberately NOT dismissible: it is the only thing explaining the state the
+     map is in, and it disappears by itself the moment the address is confirmed. */
+
+  function verifyBannerEl() {
+    var el = document.getElementById('verify-banner');
+    if (el) return el;
+    el = U.el('div', 'verify-banner');
+    el.id = 'verify-banner';
+    el.hidden = true;
+    document.body.appendChild(el);
+    return el;
+  }
+
+  function refreshVerifyBanner() {
+    var el = verifyBannerEl();
+    var show = A.auth && A.auth.isLoggedIn() && A.auth.email() && !A.auth.emailVerified();
+    if (!show) { el.hidden = true; el.innerHTML = ''; return; }
+    // Keyed on the address, not a bare flag: changing the email has to redraw
+    // the line that names it.
+    if (el.dataset.built === A.auth.email()) { el.hidden = false; return; }
+    el.dataset.built = A.auth.email();
+    el.innerHTML = '';
+    var txt = U.el('div', 'verify-banner-text',
+      '<b>Confirm your email to see rider names &amp; stats</b>' +
+      '<span>We sent a link to ' + U.esc(A.auth.email()) + '</span>');
+    el.appendChild(txt);
+    var btn = U.el('button', 'btn btn-small', 'Resend');
+    btn.addEventListener('click', function () {
+      btn.disabled = true; btn.textContent = 'Sending…';
+      A.auth.resendVerification().then(function (r) {
+        btn.disabled = false; btn.textContent = 'Resend';
+        // alreadyVerified means the link was opened elsewhere while this device
+        // sat here — catch up rather than telling them to check their inbox.
+        if (r.ok && r.alreadyVerified) { A.auth.me().then(refreshVerifyBanner); toast('Already confirmed ✓', 'success'); }
+        else if (r.ok) toast('Confirmation email sent', 'success');
+        else toast(r.error, 'warn');
+      });
+    });
+    el.appendChild(btn);
+    el.hidden = false;
+  }
+
+  /* ---------------- email, from the account panel ---------------- */
+
+  // Attach an address to an account that never had one. Password-gated: without
+  // it, a borrowed session could point the account's recovery path at someone
+  // else's inbox.
+  function showAddEmail() {
+    var card = U.el('div', 'modal-card');
+    card.appendChild(authCloseHead('Add an email', closeOverlay));
+    card.appendChild(U.el('div', 'ob-note',
+      'You\'ll be able to reset your password by email and sign in without one. We\'ll send a link to confirm the address.'));
+    var em = mkText('', 'you@example.com');
+    em.type = 'email'; em.autocomplete = 'email'; em.maxLength = 254;
+    var pw = mkPassword('Your password');
+    var err = U.el('div', 'auth-err'); err.hidden = true;
+    card.appendChild(mkField('Email', em));
+    card.appendChild(mkField('Confirm your password', pw));
+    card.appendChild(err);
+    var btn = U.el('button', 'btn btn-primary btn-block btn-lg', 'Add email');
+    btn.addEventListener('click', function () {
+      err.hidden = true;
+      if (!em.value.trim() || !pw.value) { showErr(err, 'Fill in both fields'); return; }
+      btn.disabled = true; btn.textContent = 'Saving…';
+      A.auth.addEmail(em.value.trim(), pw.value).then(function (r) {
+        if (!r.ok) { showErr(err, r.error); btn.disabled = false; btn.textContent = 'Add email'; return; }
+        renderAccount();
+        openOverlay(buildSentCard('Confirm your email',
+          'We\'ve sent a link to ' + em.value.trim() + '. Open it to finish — until then the address does nothing.',
+          'Done', closeOverlay));
+      });
+    });
+    card.appendChild(btn);
+    openOverlay(card);
+  }
+
+  function showChangeEmail() {
+    var card = U.el('div', 'modal-card');
+    card.appendChild(authCloseHead('Change email', closeOverlay));
+    card.appendChild(U.el('div', 'ob-note',
+      'We\'ll send a link to the new address. Nothing changes until you open it.'));
+    var em = mkText('', 'you@example.com');
+    em.type = 'email'; em.autocomplete = 'email'; em.maxLength = 254;
+    var pw = mkPassword('Your password');
+    var err = U.el('div', 'auth-err'); err.hidden = true;
+    card.appendChild(mkField('New email', em));
+    card.appendChild(mkField('Confirm your password', pw));
+    card.appendChild(err);
+    var btn = U.el('button', 'btn btn-primary btn-block btn-lg', 'Send confirmation');
+    btn.addEventListener('click', function () {
+      err.hidden = true;
+      if (!em.value.trim() || !pw.value) { showErr(err, 'Fill in both fields'); return; }
+      btn.disabled = true; btn.textContent = 'Sending…';
+      A.auth.changeEmail(em.value.trim(), pw.value).then(function (r) {
+        if (!r.ok) { showErr(err, r.error); btn.disabled = false; btn.textContent = 'Send confirmation'; return; }
+        openOverlay(buildSentCard('Check the new inbox',
+          'If ' + r.sentTo + ' is free, a confirmation link is on its way. Your current address stays active until it\'s opened.',
+          'Done', closeOverlay));
+      });
+    });
+    card.appendChild(btn);
+    openOverlay(card);
+  }
+
+  // Everything this account can sign in with, read live from the auth service.
+  function showLinkedAccounts() {
+    var card = U.el('div', 'modal-card');
+    card.appendChild(authCloseHead('Sign-in methods', closeOverlay));
+    var list = U.el('div', 'linked-list', '<div class="ob-note">Loading…</div>');
+    card.appendChild(list);
+    card.appendChild(U.el('div', 'ob-note',
+      'Signing in with a provider that uses the same confirmed email links it to this account automatically. ' +
+      'An account always keeps at least one method.'));
+    var done = U.el('button', 'btn btn-ghost btn-block', 'Close');
+    done.addEventListener('click', closeOverlay);
+    card.appendChild(done);
+    openOverlay(card);
+
+    A.auth.identities().then(function (r) {
+      list.innerHTML = '';
+      if (!r.ok) { list.appendChild(U.el('div', 'auth-err', U.esc(r.error))); return; }
+      if (!r.identities.length) { list.appendChild(U.el('div', 'ob-note', 'No linked methods found.')); return; }
+      r.identities.forEach(function (idn) {
+        var row = U.el('div', 'linked-row');
+        var label = idn.provider === 'email' ? 'Email &amp; password' : U.esc(idn.provider);
+        row.innerHTML = '<span class="linked-mark">' + providerMark(idn.provider, idn.provider) + '</span>' +
+          '<span class="linked-info"><b>' + label + '</b>' +
+          (idn.email ? '<span>' + U.esc(idn.email) + '</span>' : '') + '</span>';
+        if (r.canUnlink) {
+          var rm = U.el('button', 'btn btn-ghost btn-small btn-danger-text', 'Unlink');
+          rm.addEventListener('click', function () {
+            if (!confirm('Remove ' + idn.provider + ' as a way to sign in?')) return;
+            rm.disabled = true;
+            A.auth.unlinkIdentity(idn.id).then(function (res) {
+              if (res.ok) { toast('Sign-in method removed', 'success'); showLinkedAccounts(); }
+              else { rm.disabled = false; toast(res.error, 'warn'); }
+            });
+          });
+          row.appendChild(rm);
+        }
+        list.appendChild(row);
+      });
+    });
+  }
+
   function authCloseHead(title, onClose) {
     var head = U.el('div', 'auth-head2');
     var x = U.el('button', 'auth-back', '<svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>');
@@ -1444,12 +2819,20 @@
     return head;
   }
 
+  // Async only because the provider list comes from the server. A.auth.config()
+  // caches after the first call, so every later render resolves immediately.
   function renderAuth(mode) {
+    withAuthConfig(function (cfg) { buildAuth(mode, cfg); });
+  }
+
+  function buildAuth(mode, cfg) {
     var root = document.getElementById('onboarding');
     var card = U.el('div', 'modal-card');
 
     if (mode === 'welcome') {
       card.innerHTML = authHeader();
+      var nProviders = addProviderButtons(card, cfg, 'Continue with');
+      if (nProviders) card.appendChild(U.el('div', 'auth-or', '<span>or</span>'));
       var loginBtn = U.el('button', 'btn btn-primary btn-block btn-lg', 'Log in');
       var regBtn = U.el('button', 'btn btn-block btn-lg', 'Create account');
       var guestBtn = U.el('button', 'btn btn-ghost btn-block', 'Continue as guest');
@@ -1464,16 +2847,25 @@
 
     } else if (mode === 'login') {
       card.appendChild(authBackHead('Welcome back'));
-      var lu = mkText('', 'Username'); lu.autocomplete = 'username'; lu.maxLength = 20;
+      if (addProviderButtons(card, cfg, 'Sign in with')) {
+        card.appendChild(U.el('div', 'auth-or', '<span>or</span>'));
+      }
+      // One field for both identifiers — riders who signed up with an email
+      // shouldn't have to remember which box it went in, and the server resolves
+      // whichever they type.
+      var idLabel = cfg.email ? 'Username or email' : 'Username';
+      var lu = mkText('', idLabel);
+      lu.autocomplete = 'username';
+      lu.maxLength = cfg.email ? 254 : 20;
       var lp = mkPassword('Password');
       var lerr = U.el('div', 'auth-err'); lerr.hidden = true;
-      card.appendChild(mkField('Username', lu));
+      card.appendChild(mkField(idLabel, lu));
       card.appendChild(mkField('Password', lp));
       card.appendChild(lerr);
       var lbtn = U.el('button', 'btn btn-primary btn-block btn-lg', 'Log in');
       var lsubmit = function () {
         lerr.hidden = true;
-        if (!lu.value.trim() || !lp.value) { showErr(lerr, 'Enter your username and password'); return; }
+        if (!lu.value.trim() || !lp.value) { showErr(lerr, 'Enter your ' + idLabel.toLowerCase() + ' and password'); return; }
         lbtn.disabled = true; lbtn.textContent = 'Signing in…';
         A.auth.login(lu.value.trim(), lp.value).then(function (r) {
           if (r.ok) closeAuthEnter('Welcome back, ' + S.profile.name);
@@ -1484,9 +2876,16 @@
       lp.addEventListener('keydown', function (e) { if (e.key === 'Enter') lsubmit(); });
       lu.addEventListener('keydown', function (e) { if (e.key === 'Enter') lp.focus(); });
       card.appendChild(lbtn);
+      if (cfg.magicLink) {
+        var mlBtn = U.el('button', 'btn btn-ghost btn-block', 'Email me a sign-in link instead');
+        mlBtn.addEventListener('click', function () { renderAuth('magic'); });
+        card.appendChild(mlBtn);
+      }
       var forgotRow = U.el('div', 'auth-switch');
       var forgot = U.el('button', 'auth-link', 'Forgot password?');
-      forgot.addEventListener('click', function () { renderAuth('recover'); });
+      // With email configured there are two ways back in, so ask which; without
+      // it the recovery code is the only one and the question is noise.
+      forgot.addEventListener('click', function () { renderAuth(cfg.email ? 'forgot' : 'recover'); });
       forgotRow.appendChild(forgot);
       card.appendChild(forgotRow);
       var lsw = U.el('div', 'auth-switch', 'New here? ');
@@ -1495,8 +2894,67 @@
       lsw.appendChild(lswa);
       card.appendChild(lsw);
 
+    } else if (mode === 'forgot') {
+      card.appendChild(authBackHead('Forgot password', 'login'));
+      card.appendChild(U.el('div', 'ob-note',
+        'We\'ll email you a link to set a new password. Only works if you confirmed your email.'));
+      var fe = mkText('', 'you@example.com');
+      fe.type = 'email'; fe.autocomplete = 'email'; fe.maxLength = 254;
+      var ferr = U.el('div', 'auth-err'); ferr.hidden = true;
+      card.appendChild(mkField('Email', fe));
+      card.appendChild(ferr);
+      var fbtn = U.el('button', 'btn btn-primary btn-block btn-lg', 'Send reset link');
+      var fsubmit = function () {
+        ferr.hidden = true;
+        if (!fe.value.trim()) { showErr(ferr, 'Enter your email address'); return; }
+        fbtn.disabled = true; fbtn.textContent = 'Sending…';
+        A.auth.forgot(fe.value.trim()).then(function (r) {
+          if (!r.ok) { showErr(ferr, r.error); fbtn.disabled = false; fbtn.textContent = 'Send reset link'; return; }
+          // Deliberately says "if" — the server won't reveal whether that
+          // address has an account, and neither will this screen.
+          root.innerHTML = '';
+          root.appendChild(buildSentCard('Check your inbox',
+            'If ' + fe.value.trim() + ' has a Convoy account, a reset link is on its way. It expires in an hour.',
+            'Back to sign-in', function () { renderAuth('login'); }));
+        });
+      };
+      fbtn.addEventListener('click', fsubmit);
+      fe.addEventListener('keydown', function (e) { if (e.key === 'Enter') fsubmit(); });
+      card.appendChild(fbtn);
+      var toCode = U.el('div', 'auth-switch', 'No email on your account? ');
+      var toCodeA = U.el('button', 'auth-link', 'Use a recovery code');
+      toCodeA.addEventListener('click', function () { renderAuth('recover'); });
+      toCode.appendChild(toCodeA);
+      card.appendChild(toCode);
+
+    } else if (mode === 'magic') {
+      card.appendChild(authBackHead('Sign in by email', 'login'));
+      card.appendChild(U.el('div', 'ob-note',
+        'We\'ll email you a link that signs you straight in — no password needed. Only works if you confirmed your email.'));
+      var me2 = mkText('', 'you@example.com');
+      me2.type = 'email'; me2.autocomplete = 'email'; me2.maxLength = 254;
+      var merr = U.el('div', 'auth-err'); merr.hidden = true;
+      card.appendChild(mkField('Email', me2));
+      card.appendChild(merr);
+      var mbtn = U.el('button', 'btn btn-primary btn-block btn-lg', 'Email me a link');
+      var msubmit = function () {
+        merr.hidden = true;
+        if (!me2.value.trim()) { showErr(merr, 'Enter your email address'); return; }
+        mbtn.disabled = true; mbtn.textContent = 'Sending…';
+        A.auth.magicRequest(me2.value.trim()).then(function (r) {
+          if (!r.ok) { showErr(merr, r.error); mbtn.disabled = false; mbtn.textContent = 'Email me a link'; return; }
+          root.innerHTML = '';
+          root.appendChild(buildSentCard('Check your inbox',
+            'If ' + me2.value.trim() + ' has a Convoy account, a sign-in link is on its way. It expires in 15 minutes.',
+            'Back to sign-in', function () { renderAuth('login'); }));
+        });
+      };
+      mbtn.addEventListener('click', msubmit);
+      me2.addEventListener('keydown', function (e) { if (e.key === 'Enter') msubmit(); });
+      card.appendChild(mbtn);
+
     } else if (mode === 'recover') {
-      card.appendChild(authBackHead('Reset password'));
+      card.appendChild(authBackHead('Reset password', cfg.email ? 'forgot' : 'login'));
       card.appendChild(U.el('div', 'ob-note', 'Enter your username and the recovery code you saved when you signed up.'));
       var ru = mkText('', 'Username'); ru.autocomplete = 'username'; ru.maxLength = 20;
       var rc = mkText('', 'CVY-XXXX-XXXX'); rc.maxLength = 16;
@@ -1527,13 +2985,28 @@
     } else if (mode === 'register' || mode === 'guest') {
       var isGuest = mode === 'guest';
       card.appendChild(authBackHead(isGuest ? 'Ride as a guest' : 'Create your account'));
-      var uInput, pInput, errEl;
+      var uInput, pInput, eInput, errEl;
       if (!isGuest) {
+        if (addProviderButtons(card, cfg, 'Continue with')) {
+          card.appendChild(U.el('div', 'auth-or', '<span>or sign up with a password</span>'));
+        }
         uInput = mkText('', 'Pick a username'); uInput.autocomplete = 'username'; uInput.maxLength = 20;
         pInput = mkPassword('Create a password (6+ characters)');
         pInput.autocomplete = 'new-password';
         errEl = U.el('div', 'auth-err'); errEl.hidden = true;
         card.appendChild(mkField('Username', uInput));
+        // Optional, and labelled as such. An account with no email still works
+        // exactly as before — the recovery code covers it — so this is an offer,
+        // not a toll gate on signing up.
+        if (cfg.email) {
+          eInput = mkText('', 'you@example.com');
+          eInput.type = 'email'; eInput.autocomplete = 'email'; eInput.maxLength = 254;
+          eInput.required = true;
+          card.appendChild(mkField('Email', eInput));
+          card.appendChild(U.el('div', 'ob-note',
+            'We send a link to confirm it. Until you open it, other riders show as ' +
+            '&ldquo;Rider&rdquo; with no stats — confirming unlocks names, stats and password reset by email.'));
+        }
         card.appendChild(mkField('Password', pInput));
         card.appendChild(errEl);
         card.appendChild(U.el('div', 'section-label', 'Your ride'));
@@ -1551,15 +3024,23 @@
           return;
         }
         if (errEl) errEl.hidden = true;
+        var addr = eInput ? eInput.value.trim() : '';
+        if (eInput && !addr) {
+          showErr(errEl, 'Enter your email address');
+          rbtn.disabled = false;
+          return;
+        }
         rbtn.disabled = true; rbtn.textContent = 'Creating…';
-        A.auth.register(uInput.value.trim(), pInput.value, profile).then(function (r) {
+        A.auth.register(uInput.value.trim(), pInput.value, profile, addr).then(function (r) {
           if (r.ok) {
             // show the recovery code before entering the app
             root.innerHTML = '';
             root.appendChild(buildRecoveryCard(r.recoveryCode, 'I saved it — start riding →',
               function () { closeAuthEnter('Welcome, ' + S.profile.name); },
               'Account created — save your recovery code',
-              'You\'ll need this if you ever forget your password.'));
+              addr && r.verificationSent
+                ? 'We\'ve also emailed ' + addr + ' — confirm it to unlock password reset by email.'
+                : 'You\'ll need this if you ever forget your password.'));
             root.scrollTop = 0;
           } else { showErr(errEl, r.error); rbtn.disabled = false; rbtn.textContent = 'Create account & ride →'; }
         });
@@ -1576,13 +3057,17 @@
   function renderAccount() {
     var box = document.getElementById('account-section');
     if (!box) return;
+    // The email and sign-in-method rows depend on what the server offers. Draw
+    // once now so the panel isn't blank, then again when the answer lands —
+    // guarded by the flag so this can't loop.
+    if (!authCfgLoaded) withAuthConfig(function () { renderAccount(); });
     box.innerHTML = '';
     box.appendChild(U.el('div', 'section-label', 'Account'));
     var loggedIn = A.auth && A.auth.isLoggedIn();
     var row = U.el('div', 'account-row');
     if (loggedIn) {
       row.innerHTML =
-        '<div class="u-ava u-ava-sm" style="--paint:' + S.profile.car.paint + '">' + U.riderIcon(S.profile.emoji, { size: 16 }) + '</div>' +
+        '<div class="u-ava u-ava-sm" style="--paint:' + U.safePaint(S.profile.car.paint) + '">' + avaInner(S.profile, 16) + '</div>' +
         '<div class="account-info"><b>@' + U.esc(A.auth.username()) + '</b><span>Signed in · synced across devices</span></div>';
       var out = U.el('button', 'btn btn-ghost btn-small btn-danger-text', 'Log out');
       out.addEventListener('click', function () {
@@ -1590,18 +3075,79 @@
       });
       row.appendChild(out);
       box.appendChild(row);
+
+      // Email state, when the server does email at all. Three shapes: none on
+      // file, one that still needs confirming, one that's done.
+      if (authCfg.email) {
+        var addr = A.auth.email();
+        var verified = A.auth.emailVerified();
+        var mailRow = U.el('div', 'account-row');
+        if (!addr) {
+          mailRow.innerHTML = '<div class="account-info"><b>No email on this account</b>' +
+            '<span>Your recovery code is the only way back in</span></div>';
+          var addBtn = U.el('button', 'btn btn-ghost btn-small', 'Add email');
+          addBtn.addEventListener('click', showAddEmail);
+          mailRow.appendChild(addBtn);
+        } else if (!verified) {
+          mailRow.classList.add('account-row-warn');
+          mailRow.innerHTML = '<div class="account-info"><b>' + U.esc(addr) + '</b>' +
+            '<span>Not confirmed yet — reset by email is off until you do</span></div>';
+          var vBtn = U.el('button', 'btn btn-ghost btn-small', 'Resend');
+          vBtn.addEventListener('click', function () {
+            vBtn.disabled = true; vBtn.textContent = 'Sending…';
+            A.auth.resendVerification().then(function (r) {
+              vBtn.disabled = false; vBtn.textContent = 'Resend';
+              if (r.ok && r.alreadyVerified) { renderAccount(); toast('Already confirmed ✓', 'success'); }
+              else if (r.ok) toast('Confirmation email sent', 'success');
+              else toast(r.error, 'warn');
+            });
+          });
+          mailRow.appendChild(vBtn);
+        } else {
+          mailRow.innerHTML = '<div class="account-info"><b>' + U.esc(addr) + '</b>' +
+            '<span>Confirmed ✓ · password reset and sign-in links enabled</span></div>';
+          var edBtn = U.el('button', 'btn btn-ghost btn-small', 'Change');
+          // A provider account has no Convoy password to confirm the change
+          // with, so the address is theirs to change with the provider.
+          if (A.auth.provider() === 'password') edBtn.addEventListener('click', showChangeEmail);
+          else edBtn.addEventListener('click', function () {
+            toast('This account signs in with ' + A.auth.provider() + ' — change your email there', 'info');
+          });
+          mailRow.appendChild(edBtn);
+        }
+        box.appendChild(mailRow);
+      }
+
       var actions = U.el('div', 'account-actions');
-      var chg = U.el('button', 'btn btn-ghost btn-small', 'Change password');
-      chg.addEventListener('click', showChangePassword);
-      var rec = U.el('button', 'btn btn-ghost btn-small', 'Recovery code');
-      rec.addEventListener('click', showRegenRecovery);
-      actions.appendChild(chg);
-      actions.appendChild(rec);
+      // Both of these confirm the CURRENT password before they do anything —
+      // that check is what stops a borrowed session from taking an account over.
+      // An account created through a provider has never had one, so for those
+      // riders both buttons could only ever answer "password is incorrect".
+      // Show what actually applies to them instead of a pair of dead ends.
+      if (A.auth.provider() === 'password') {
+        var chg = U.el('button', 'btn btn-ghost btn-small', 'Change password');
+        chg.addEventListener('click', showChangePassword);
+        var rec = U.el('button', 'btn btn-ghost btn-small', 'Recovery code');
+        rec.addEventListener('click', showRegenRecovery);
+        actions.appendChild(chg);
+        actions.appendChild(rec);
+      }
+      // Only worth showing where more than one method can exist.
+      if (authCfg.providers && authCfg.providers.length) {
+        var linked = U.el('button', 'btn btn-ghost btn-small', 'Sign-in methods');
+        linked.addEventListener('click', showLinkedAccounts);
+        actions.appendChild(linked);
+      }
       box.appendChild(actions);
+      if (A.auth.provider() !== 'password') {
+        box.appendChild(U.el('div', 'ob-note',
+          'Your password is managed by ' + U.esc(A.auth.provider()) + '. The recovery code from ' +
+          'sign-up still works if you ever lose access to that account.'));
+      }
       return;
     } else {
       row.innerHTML =
-        '<div class="u-ava u-ava-sm" style="--paint:' + S.profile.car.paint + '">' + U.riderIcon(S.profile.emoji, { size: 16 }) + '</div>' +
+        '<div class="u-ava u-ava-sm" style="--paint:' + U.safePaint(S.profile.car.paint) + '">' + avaInner(S.profile, 16) + '</div>' +
         '<div class="account-info"><b>Playing as guest</b><span>Car &amp; convoys stay on this device</span></div>';
       var create = U.el('button', 'btn btn-primary btn-small', 'Create account');
       create.addEventListener('click', function () {
@@ -1628,6 +3174,7 @@
     buildProfilePanel(); // includes the Settings gear box (built into #settings-host on open)
     refreshAvatarBtn();
     updateLiveChip(); // sim seeds before ui.init — sync the count now
+    updateNearbyDockBadge(); // pending friend requests restored from a live session
 
     document.getElementById('btn-avatar').addEventListener('click', function () {
       openPanel(openName === 'profile' ? null : 'profile');
@@ -1638,7 +3185,15 @@
     if (psb) psb.addEventListener('click', function () { toggleGearbox(); });
 
     // live refreshers
-    ST.on('tick', function () { updateNearbyLive(); updateConvoyLive(); });
+    var reclassTick = 0;
+    ST.on('tick', function () {
+      updateNearbyLive();
+      updateConvoyLive();
+      // Road/sight membership drifts as riders move — refresh the dot colors
+      // every few seconds so the map keeps matching the active filter.
+      if (nearbyFilter !== 'radius' && (++reclassTick % 3) === 0 &&
+        A.mapview && A.mapview.reclassifyMarkers) A.mapview.reclassifyMarkers();
+    });
     ST.on('nearby:seeded', function () { updateLiveChip(); if (openName === 'nearby') renderNearby(); });
     ST.on('party', function () {
       updateDockBadge();
@@ -1661,6 +3216,7 @@
     ST.on('theme', function () { A.mapview.applyStyle(); });
     ST.on('mapstyle', function () { A.mapview.applyStyle(); });
     ST.on('accent', function () { A.mapview.applyAccent(); });
+    ST.on('triplog', function () { renderDriveLog(); }); // drive-log list stays live while open
 
     // Voice navigation: keep routing's nav flag + chosen voice in sync with settings.
     if (A.routing && A.routing.setNavEnabled) A.routing.setNavEnabled(S.settings.voiceNav);
@@ -1671,6 +3227,12 @@
     if (window.speechSynthesis && window.speechSynthesis.getVoices) {
       try { window.speechSynthesis.getVoices(); } catch (e) { }
     }
+
+    // Cruise loop — one tap plans a route that loops back to where you are.
+    var loopBtn = document.getElementById('ctl-loop');
+    if (loopBtn) loopBtn.addEventListener('click', function () {
+      if (A.routing && A.routing.promptLoop) A.routing.promptLoop();
+    });
 
     // Ghost Mode: apply persisted state on boot, react to changes, and build
     // the status chip. The fetcher starts only after the map is ready.
@@ -1697,6 +3259,15 @@
       if (openName === 'nearby') renderNearby();
       updateNearbyDockBadge();
       if (A.mapview && A.mapview.reclassifyMarkers) A.mapview.reclassifyMarkers();
+      renderProfileCard(); // friends counter on the profile header
+      renderAwards();      // "Crew" badge
+    });
+    // Own dragy stats landed (runs/wins/PBs) — refresh the profile page numbers.
+    ST.on('stats', function (e) {
+      if (e && e.id && e.id !== 'self') return;
+      renderProfileCard();
+      renderAwards();
+      renderTimes();
     });
     // auth.boot() decides whether to show the auth screen or enter the app
   }
@@ -1718,12 +3289,26 @@
     toast: toast,
     inviteToast: inviteToast,
     showAuth: showAuth,
+    refreshVerifyBanner: refreshVerifyBanner,
+    // Entered from auth.js when a link or an OAuth redirect brings the app back:
+    // the "pick a username" step for a fresh provider account, and the landing
+    // screen for a password-reset link.
+    showOAuthSetup: showOAuthSetup,
+    showResetPassword: showResetPassword,
     renderAccount: renderAccount,
     welcomeBack: welcomeBack,
     openPanel: openPanel,
     closePanels: closePanels,
     refreshAvatarBtn: refreshAvatarBtn,
+    setProfilePhoto: handlePhotoFile, // photo → NSFW screen → compress → save (native bridge + tests)
     applyGhost: applyGhost, // radar dock's exit button toggles ghost off through here
-    nearbyFilter: function () { return nearbyFilter; } // mapview reads this to color dots by active filter
+    openProfileOverlay: openProfileOverlay, // Instagram-style profile view
+    // Raw overlay access — reused by the race lobby/results (race.js).
+    openOverlayRaw: openOverlay,
+    closeOverlay: closeOverlay,
+    nearbyFilter: function () { return nearbyFilter; }, // mapview reads this to color dots by active filter
+    // Does this rider match the active Nearby filter right now? (mapview uses
+    // this so only matching riders get the brighter road/sight dot color.)
+    nearbyMatches: function (npc) { return A.sim.proximityMatch(npc, nearbyFilter); }
   };
 })();

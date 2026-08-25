@@ -6,7 +6,12 @@
 
   var OSRM = 'https://router.project-osrm.org/route/v1/driving/';
   var NOMINATIM = 'https://nominatim.openstreetmap.org';
-  var OVERPASS = 'https://overpass-api.de/api/interpreter';
+  // OpenStreetMap lookups go through our own server, NOT to overpass-api.de
+  // directly: that endpoint sends no Access-Control-Allow-Origin header, so a
+  // browser request to it is blocked before the response is ever readable. The
+  // proxy also caches, so riders in the same area share one upstream query.
+  // Callers name a KIND ('police' | 'enforcement' | 'road'); see server/overpass.js.
+  var OVERPASS_PROXY = (A.config ? A.config.base : '') + '/api/overpass';
   var FETCH_TIMEOUT_MS = 9000; // a hung OSRM/Nominatim used to leave the UI stuck forever
   var POLICE_AVOID_M = 160;    // a route coord within this of a police/camera POI counts as a "pass"
 
@@ -91,20 +96,77 @@
 
   /* ---------------- geocoding ---------------- */
   var lastGeocode = null; // AbortController for the most recent search, so a new query cancels it
+  // Where the user is looking — bias address search to here so results are local,
+  // not global. Prefer the live GPS position, fall back to the map center.
+  function searchAnchor() {
+    // player.pos starts at the demo spawn — only trust it once a real fix (or an
+    // explicit relocate) has landed, otherwise every search would be biased to
+    // the spawn city instead of where the user is actually looking.
+    var trusted = A.sim && A.sim.hasRealPos && A.sim.hasRealPos();
+    var p = trusted && A.sim.playerPos ? A.sim.playerPos() : null;
+    if (p && isFinite(p[0]) && isFinite(p[1])) return { lng: p[0], lat: p[1] };
+    var m = A.mapview && A.mapview.map ? A.mapview.map() : null;
+    if (m && m.getCenter) { var c = m.getCenter(); return { lng: c.lng, lat: c.lat }; }
+    return null;
+  }
   function geocode(q) {
     if (lastGeocode) { try { lastGeocode.abort(); } catch (e) {} }
     var ctrl = new AbortController(); lastGeocode = ctrl;
-    var url = NOMINATIM + '/search?format=jsonv2&limit=6&accept-language=en&q=' + encodeURIComponent(q);
-    return fetchJSON(url, { signal: ctrl.signal }).then(function (rows) {
-      return rows.map(function (r) {
+    var a = searchAnchor();
+    // ~0.9° (~100km) half-window around the user — a metro-sized box.
+    var d = 0.9;
+    function run(bounded) {
+      // Pull more rows than we show so the local-distance sort has candidates to
+      // pick the nearest from (Nominatim returns its own relevance order otherwise).
+      var url = NOMINATIM + '/search?format=jsonv2&limit=10&accept-language=en&q=' + encodeURIComponent(q);
+      if (a) {
+        url += '&viewbox=' + (a.lng - d) + ',' + (a.lat - d) + ',' + (a.lng + d) + ',' + (a.lat + d);
+        // bounded=1 HARD-restricts to that box so a generic query ("coffee", "Main St")
+        // returns the LOCAL match instead of a strongly-named place across the country.
+        if (bounded) url += '&bounded=1';
+      }
+      return fetchJSON(url, { signal: ctrl.signal });
+    }
+    // Local + global passes in PARALLEL: the bounded box keeps generic queries
+    // ("coffee", "Main St") local, while the global pass keeps strongly-named far
+    // places ("Las Vegas", "Eiffel Tower") findable — a partial local match must
+    // never shadow the real destination (a bounded-first-then-widen sequence did
+    // exactly that whenever the box contained ANY match). Local results rank
+    // first (nearest first), then global ones in Nominatim's relevance order.
+    // BOTH passes swallow their own failure. The bounded pass used to reject
+    // straight through Promise.all, so one flaky local request threw away a
+    // perfectly good global result and the box just said "Search unavailable".
+    var reqs = a
+      ? [run(true).catch(function () { return []; }), run(false).catch(function () { return []; })]
+      : [run(false)];
+    return Promise.all(reqs).then(function (res) {
+      var localRows = a ? (res[0] || []) : [];
+      var globalRows = a ? (res[1] || []) : (res[0] || []);
+      function toItem(r) {
         var parts = (r.display_name || '').split(', ');
+        var lng = parseFloat(r.lon), lat = parseFloat(r.lat);
         return {
+          _id: r.place_id || ((r.osm_type || '') + '/' + (r.osm_id || '') + '/' + r.display_name),
           label: parts[0] || r.display_name,
           sub: parts.slice(1, 4).join(', '),
-          lng: parseFloat(r.lon),
-          lat: parseFloat(r.lat)
+          lng: lng,
+          lat: lat,
+          // cos-lat-corrected squared distance to the user (0 when no anchor) for sorting
+          _d: a ? (function () {
+            var dx = (lng - a.lng) * Math.cos(a.lat * Math.PI / 180), dy = lat - a.lat;
+            return dx * dx + dy * dy;
+          })() : 0
         };
+      }
+      var out = localRows.map(toItem);
+      out.sort(function (x, y) { return x._d - y._d; });
+      out = out.slice(0, 4); // leave room for global names below
+      var seen = {};
+      for (var i = 0; i < out.length; i++) seen[out[i]._id] = 1;
+      globalRows.map(toItem).forEach(function (it) {
+        if (!seen[it._id]) { seen[it._id] = 1; out.push(it); }
       });
+      return out.slice(0, 6);
     });
   }
 
@@ -177,18 +239,15 @@
     minLat -= pad; minLng -= pad; maxLat += pad; maxLng += pad;
     // Cross-country routes would make a huge Overpass query — skip avoidance there.
     if ((maxLat - minLat) > 3 || (maxLng - minLng) > 3) return Promise.resolve(null);
-    var box = minLat + ',' + minLng + ',' + maxLat + ',' + maxLng;
-    var q = '[out:json][timeout:20];(' +
-      'node["amenity"="police"](' + box + ');' +
-      'way["amenity"="police"](' + box + ');' +
-      'node["highway"="speed_camera"](' + box + ');' +
-      ');out center 400;';
     if (lastPolice) { try { lastPolice.abort(); } catch (e) {} }
     var ctrl = new AbortController(); lastPolice = ctrl;
-    return fetch(OVERPASS, {
+    return fetch(OVERPASS_PROXY, {
       method: 'POST', signal: ctrl.signal,
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: 'data=' + encodeURIComponent(q)
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'police',
+        bbox: { minLat: minLat, minLng: minLng, maxLat: maxLat, maxLng: maxLng }
+      })
     }).then(function (r) { if (!r.ok) throw new Error('overpass ' + r.status); return r.json(); })
       .then(function (j) {
         var pts = [], els = (j && j.elements) || [];
@@ -203,13 +262,40 @@
   }
 
   // How many police/camera POIs the route passes within POLICE_AVOID_M.
+  //
+  // This used to be a straight nested loop: up to 400 Overpass POIs against every
+  // other route vertex, repeated for each of three candidate routes — on the order
+  // of a million haversine calls on the main thread, right at the moment the user
+  // is waiting for a route to draw. Instead, hash the route's vertices into a
+  // coarse lat/lng grid whose cell is ~POLICE_AVOID_M across, then test each POI
+  // only against the vertices in its own cell and the eight around it. Same
+  // answer, near-linear.
   function policeHits(coords, police) {
-    if (!police || !police.length) return 0;
+    if (!police || !police.length || !coords || !coords.length) return 0;
+    // Cell size in degrees: latitude is ~111.32 km/deg; longitude shrinks with
+    // cos(lat), so size the lng step at the route's mid-latitude.
+    var midLat = coords[(coords.length / 2) | 0][1];
+    var dLat = POLICE_AVOID_M / 111320;
+    var dLng = POLICE_AVOID_M / (111320 * Math.max(0.05, Math.cos(midLat * Math.PI / 180)));
+    var grid = Object.create(null);
+    for (var c = 0; c < coords.length; c += 2) { // sample every other vertex (geometry is dense)
+      var v = coords[c];
+      var key = Math.floor(v[0] / dLng) + ',' + Math.floor(v[1] / dLat);
+      (grid[key] || (grid[key] = [])).push(v);
+    }
     var hits = 0;
     for (var p = 0; p < police.length; p++) {
-      var pt = police[p], near = false;
-      for (var c = 0; c < coords.length; c += 2) { // sample every other vertex (full geometry is dense)
-        if (U.haversine(pt, coords[c]) <= POLICE_AVOID_M) { near = true; break; }
+      var pt = police[p];
+      var gx = Math.floor(pt[0] / dLng), gy = Math.floor(pt[1] / dLat);
+      var near = false;
+      for (var ox = -1; ox <= 1 && !near; ox++) {
+        for (var oy = -1; oy <= 1 && !near; oy++) {
+          var bucket = grid[(gx + ox) + ',' + (gy + oy)];
+          if (!bucket) continue;
+          for (var i = 0; i < bucket.length; i++) {
+            if (U.haversine(pt, bucket[i]) <= POLICE_AVOID_M) { near = true; break; }
+          }
+        }
       }
       if (near) hits++;
     }
@@ -449,6 +535,10 @@
   // position + bearing at progress meters along the line (cached segment index)
   function posAt(line, m) {
     var coords = line.coords, cum = line.cum;
+    // A degenerate line (a 1-point "route" from a provider hiccup) used to throw
+    // here on coords[1], which killed the whole trip render loop.
+    if (!coords || !coords.length) return { pos: [0, 0], brg: 0 };
+    if (coords.length < 2) return { pos: coords[0].slice(), brg: 0 };
     if (m <= 0) return { pos: coords[0].slice(), brg: U.bearing(coords[0], coords[1]) };
     if (m >= line.total) {
       var n = coords.length;
@@ -472,11 +562,19 @@
   function nearestOnRoute(line, pos) {
     var coords = line.coords, cum = line.cum;
     if (!coords || coords.length < 2) return { m: 0, devM: 0 };
+    // Equirectangular projection about the rider's latitude. A degree of
+    // longitude is only cos(lat) as long as a degree of latitude — at 34° N
+    // that's 0.83, at 51° N (London) 0.63. Projecting raw lng/lat as if the
+    // grid were square stretched every east–west segment, so the "nearest"
+    // segment could be the wrong one and the lateral deviation read up to ~40%
+    // high on an east–west road. That deviation drives the 55 m off-route test,
+    // so the error showed up as spurious auto-reroutes while driving straight.
+    var kx = Math.max(1e-6, Math.cos(pos[1] * Math.PI / 180)); // guard the poles
     var bestM = 0, bestD = Infinity, bestPt = coords[0];
     for (var i = 0; i < coords.length - 1; i++) {
       var a = coords[i], b = coords[i + 1];
-      // project pos onto segment ab (planar — fine at route scale)
-      var ax = a[0], ay = a[1], bx = b[0], by = b[1], px = pos[0], py = pos[1];
+      var ax = a[0] * kx, ay = a[1], bx = b[0] * kx, by = b[1];
+      var px = pos[0] * kx, py = pos[1];
       var dx = bx - ax, dy = by - ay;
       var segLen2 = dx * dx + dy * dy;
       var t = segLen2 > 0 ? ((px - ax) * dx + (py - ay) * dy) / segLen2 : 0;
@@ -486,7 +584,7 @@
       if (d < bestD) {
         bestD = d;
         bestM = cum[i] + t * Math.max(cum[i + 1] - cum[i], 0);
-        bestPt = [cx, cy];
+        bestPt = [cx / kx, cy];   // back to real lng/lat for the haversine below
       }
     }
     return { m: Math.max(0, Math.min(line.total, bestM)), devM: U.haversine(pos, bestPt) };
@@ -512,6 +610,15 @@
     });
     no.addEventListener('click', function () { A.mapview.closePopup(); });
     actions.appendChild(go);
+    // In a convoy the dropped pin can also become the shared rally point.
+    if (S.party) {
+      var rallyBtn = U.el('button', 'btn btn-ghost btn-small', 'Rally here');
+      rallyBtn.addEventListener('click', function () {
+        A.mapview.closePopup();
+        A.party.setRally(lngLat, nameEl.textContent || 'Rally point');
+      });
+      actions.appendChild(rallyBtn);
+    }
     actions.appendChild(no);
     A.mapview.openPopup(lngLat, card);
   }
@@ -598,7 +705,10 @@
     var i = bestI, j = i + 2 < coords.length ? i + 2 : Math.max(0, i - 2);
     var heading = U.bearing(coords[i], coords[j]);
     var rel = U.relBearing(coords[i], heading, bestP);     // + police on the right, − on the left
-    var side = (rel >= 0 ? heading - 90 : heading + 90 + 360) % 360; // steer to the opposite side
+    // Steer to the opposite side. Normalize into 0..360 — `heading - 90` went
+    // negative for any heading under 90°, which is legal input to destPoint but
+    // made the value meaningless to read or log.
+    var side = ((rel >= 0 ? heading - 90 : heading + 90) % 360 + 360) % 360;
     return [700, 1400, 2200].map(function (off) { return U.destPoint(coords[i], side, off); });
   }
 
@@ -650,6 +760,196 @@
     });
   }
 
+  /* ---------------- cruise loop ----------------
+     One tap → a route that leaves from where the rider is and loops back to the
+     same spot. Candidate loops are built through waypoints on a rough circle in
+     four directions, then scored keyless via Overpass:
+       · police stations + speed cameras  — heavily penalized (avoid cops)
+       · stop signs + traffic signals     — penalized (a good cruise avoids
+                                            stop-and-go side streets)
+       · distance from the requested size — mild penalty
+     If Overpass is down, the loop with the highest average speed wins — fewer
+     lights/stops per meter IS a faster route per meter. */
+  var LOOP_CELL_STOP = 0.0005;    // ~50 m grid for stop signs / signals (they sit ON the road)
+  var LOOP_CELL_POLICE = 0.0015;  // ~150 m grid for police / cameras (near the road counts)
+  var loopBusy = false;
+
+  // OSRM route through an ordered coord list (loop = start … waypoints … start).
+  // continue_straight=true stops OSRM from U-turning back down the same road at
+  // a via point, which would fold the loop onto itself.
+  function osrmMulti(coordsList, signal) {
+    var path = coordsList.map(function (c) { return c[0] + ',' + c[1]; }).join(';');
+    var url = OSRM + path + '?overview=full&geometries=geojson&steps=true&alternatives=false&continue_straight=true';
+    return fetchJSON(url, { signal: signal }).then(function (j) {
+      if (!j.routes || !j.routes.length) throw new Error('no route');
+      var r = j.routes[0];
+      return { distance: r.distance, duration: r.duration, coords: r.geometry.coordinates, steps: parseSteps(r) };
+    });
+  }
+
+  // Four candidate loops: circle-ish waypoint fans to the right of travel, the
+  // left, ahead, and behind. Radius is sized so the road distance of the loop
+  // lands near the target (straight-line perimeter ≈ 4R, roads add ~30%).
+  function loopCandidates(from, heading, targetM) {
+    var R = Math.max(500, targetM / 5.2);
+    return [heading + 90, heading - 90, heading, heading + 180].map(function (d) {
+      var wps = [-60, 0, 60].map(function (off) {
+        return U.destPoint(from, ((d + off) % 360 + 360) % 360, R);
+      });
+      return [from, wps[0], wps[1], wps[2], from];
+    });
+  }
+
+  // Stop signs, traffic signals, police + cameras across the candidates' bbox.
+  // null = Overpass unavailable (callers fall back to average-speed scoring).
+  function fetchLoopPois(routes) {
+    var minLat = 90, minLng = 180, maxLat = -90, maxLng = -180;
+    routes.forEach(function (r) {
+      r.coords.forEach(function (c) {
+        if (c[0] < minLng) minLng = c[0]; if (c[0] > maxLng) maxLng = c[0];
+        if (c[1] < minLat) minLat = c[1]; if (c[1] > maxLat) maxLat = c[1];
+      });
+    });
+    var pad = 0.005;
+    minLat -= pad; minLng -= pad; maxLat += pad; maxLng += pad;
+    if ((maxLat - minLat) > 2 || (maxLng - minLng) > 2) return Promise.resolve(null);
+    return fetch(OVERPASS_PROXY, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'road',
+        bbox: { minLat: minLat, minLng: minLng, maxLat: maxLat, maxLng: maxLng }
+      })
+    }).then(function (r) { if (!r.ok) throw new Error('overpass ' + r.status); return r.json(); })
+      .then(function (j) {
+        var out = { police: [], stops: [], signals: [] };
+        ((j && j.elements) || []).forEach(function (e) {
+          var lat = e.lat != null ? e.lat : (e.center && e.center.lat);
+          var lon = e.lon != null ? e.lon : (e.center && e.center.lon);
+          if (lat == null || lon == null) return;
+          var t = e.tags || {};
+          if (t.amenity === 'police' || t.highway === 'speed_camera') out.police.push([lon, lat]);
+          else if (t.highway === 'stop') out.stops.push([lon, lat]);
+          else if (t.highway === 'traffic_signals') out.signals.push([lon, lat]);
+        });
+        return out;
+      }).catch(function () { return null; });
+  }
+
+  // Approximate proximity counting on a rounded lat/lng grid — exact distances
+  // would be POIs × vertices haversines (millions for a city-sized loop). A POI
+  // counts as "on the route" when its cell or any neighbor holds a route vertex.
+  function gridIndex(coords, cell) {
+    var idx = {};
+    for (var i = 0; i < coords.length; i++) {
+      idx[Math.round(coords[i][0] / cell) + ':' + Math.round(coords[i][1] / cell)] = 1;
+    }
+    return idx;
+  }
+  function gridHits(idx, pts, cell) {
+    if (!pts || !pts.length) return 0;
+    var hits = 0;
+    for (var p = 0; p < pts.length; p++) {
+      var gx = Math.round(pts[p][0] / cell), gy = Math.round(pts[p][1] / cell);
+      var near = false;
+      for (var dx = -1; dx <= 1 && !near; dx++) {
+        for (var dy = -1; dy <= 1; dy++) {
+          if (idx[(gx + dx) + ':' + (gy + dy)]) { near = true; break; }
+        }
+      }
+      if (near) hits++;
+    }
+    return hits;
+  }
+
+  // Lower = better ride. One police pass ≈ five traffic lights.
+  function scoreLoop(r, pois, targetM) {
+    var out = { police: 0, stops: 0, signals: 0, total: 0 };
+    var sizePenalty = Math.abs(r.distance - targetM) / targetM * 10;
+    if (pois) {
+      out.police = gridHits(gridIndex(r.coords, LOOP_CELL_POLICE), pois.police, LOOP_CELL_POLICE);
+      out.stops = gridHits(gridIndex(r.coords, LOOP_CELL_STOP), pois.stops, LOOP_CELL_STOP);
+      out.signals = gridHits(gridIndex(r.coords, LOOP_CELL_STOP), pois.signals, LOOP_CELL_STOP);
+      out.total = out.police * 15 + out.signals * 3 + out.stops * 2 + sizePenalty;
+    } else {
+      // No POI data — higher average speed = fewer stops per meter.
+      out.total = -(r.distance / Math.max(r.duration, 1)) + sizePenalty;
+    }
+    return out;
+  }
+
+  function planLoop(targetM) {
+    if (loopBusy) return;
+    var from = A.sim.playerPos();
+    if (!from) { A.ui.toast('No position yet — tap the locate button first', 'warn'); return; }
+    loopBusy = true;
+    if (S.trip && S.trip.active) endTrip(false);
+    A.ui.toast('Planning a cruise loop…', 'info');
+    var heading = A.sim.playerHeading() || 0;
+    var cands = loopCandidates(from, heading, targetM);
+    Promise.all(cands.map(function (c) { return osrmMulti(c).catch(function () { return null; }); }))
+      .then(function (routes) {
+        routes = routes.filter(function (r) { return r && r.distance > targetM * 0.3; });
+        if (!routes.length) throw new Error('no loops');
+        return fetchLoopPois(routes).then(function (pois) {
+          var best = null, bestScore = null;
+          routes.forEach(function (r) {
+            var sc = scoreLoop(r, pois, targetM);
+            if (!best || sc.total < bestScore.total) { best = r; bestScore = sc; }
+          });
+          applyRoute(best, 'Cruise loop', from.slice());
+          var extra;
+          if (pois) {
+            var quiet = [];
+            quiet.push(bestScore.police ? bestScore.police + ' police/cam on route' : 'no police on route');
+            var sl = bestScore.signals + bestScore.stops;
+            quiet.push(sl ? sl + ' lights/stops' : 'no lights or stop signs');
+            extra = quiet.join(' · ');
+          } else {
+            extra = 'smoothest of ' + routes.length + ' loops';
+          }
+          A.ui.toast('Cruise loop ready — ' + U.fmtDist(best.distance, S.settings.units) +
+            ' · ' + U.fmtDur(best.duration) + ' · ' + extra, 'success');
+        });
+      })
+      .catch(function () {
+        A.ui.toast('Could not plan a loop from here — try again in a moment', 'warn');
+      })
+      .finally(function () { loopBusy = false; });
+  }
+
+  // Loop-size chooser, anchored at the rider's position on the map.
+  function promptLoop() {
+    var from = A.sim.playerPos();
+    if (!from) { A.ui.toast('No position yet — tap the locate button first', 'warn'); return; }
+    var km = S.settings.units === 'km';
+    // [meters, label] — sized for a quick spin / a proper cruise / a long ride
+    var opts = km ? [[8000, '8 km'], [16000, '16 km'], [32000, '32 km']]
+      : [[8000, '5 mi'], [16000, '10 mi'], [32000, '20 mi']];
+    var card = U.el('div', 'pop-card pop-prompt');
+    card.innerHTML =
+      '<div class="prompt-label"><span class="prompt-pin">' +
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M19.5 12a7.5 7.5 0 1 1-2.6-5.7"/><path d="M17.5 2.8v3.7h3.7"/></svg></span>' +
+      '<span class="prompt-name">Cruise loop — back to here</span></div>' +
+      '<div class="pop-sub">Loops you back around while avoiding police, stop signs &amp; traffic lights.</div>' +
+      '<div class="pop-actions" id="loop-sizes"></div>' +
+      '<div class="pop-actions"></div>';
+    var sizes = card.querySelector('#loop-sizes');
+    opts.forEach(function (o) {
+      var b = U.el('button', 'btn btn-primary btn-small', '~' + o[1]);
+      b.addEventListener('click', function () {
+        A.mapview.closePopup();
+        planLoop(o[0]);
+      });
+      sizes.appendChild(b);
+    });
+    var no = U.el('button', 'btn btn-ghost btn-small', 'Cancel');
+    no.addEventListener('click', function () { A.mapview.closePopup(); });
+    card.querySelectorAll('.pop-actions')[1].appendChild(no);
+    A.mapview.openPopup(from, card);
+  }
+
   function clearRoute() {
     if (S.trip && S.trip.active) endTrip(false);
     S.route = null;
@@ -680,6 +980,10 @@
       warnedIdx: -1     // last maneuver we gave an advance warning for
     };
     document.getElementById('ctl-recenter').hidden = S.trip.follow;
+    // On native (the real driving app) make sure the foreground GPS watch is live so
+    // the trip follows the rider's actual position. On web we keep the tap-to-locate
+    // flow so a desktop demo can preview a route without being yanked to home GPS.
+    if (A.config && A.config.isNative && A.sim && A.sim.ensureWatch) A.sim.ensureWatch();
     renderEtaCard();
     A.ui.toast('Navigation started — following your drive', 'success');
     speak('Starting route to ' + (r.label || 'your destination') + '.');
@@ -689,16 +993,14 @@
     ST.emit('trip', S.trip);
   }
 
-  // Speed multiplier: 1× = live GPS (real driving); 5/20× = preview playback of
-  // the route. Switching above 1× flips the trip into playback (live=false) so the
-  // simulated dot takes over; switching back to 1× re-engages real GPS. Single
-  // source of truth — also reflects the active chip + refreshes the ETA readout.
+  // Speed multiplier: 1× = live GPS (real driving); >1× = preview playback of the
+  // route (the simulated dot takes over; back to 1× re-engages real GPS). The UI
+  // chips were removed from the trip card — navigation always follows real GPS —
+  // but the hook stays for programmatic/demo use via A.routing.setMult.
   function setMult(m) {
     if (!S.trip || !S.trip.active) return;
     S.trip.mult = m;
     S.trip.live = (m === 1);
-    var chips = document.querySelectorAll('.speed-chip');
-    chips.forEach(function (c) { c.classList.toggle('active', +c.dataset.mult === m); });
     updateTripUI();
   }
 
@@ -813,8 +1115,6 @@
       card.querySelector('#eta-start').addEventListener('click', startTrip);
       card.querySelector('#eta-clear').addEventListener('click', clearRoute);
     } else {
-      var mult = trip.mult || 1;
-      function chip(m, lbl) { return '<button class="speed-chip' + (m === mult ? ' active' : '') + '" data-mult="' + m + '">' + lbl + '</button>'; }
       card.innerHTML =
         '<div class="eta-main">' +
         '  <div class="eta-dest">' + U.esc(r.label) + ' <span class="eta-live" id="trip-live" hidden>● LIVE</span></div>' +
@@ -822,14 +1122,8 @@
         '  <div class="progress"><i id="trip-bar"></i></div>' +
         '</div>' +
         '<div class="eta-actions">' +
-        '  <div class="speed-chips" title="1× follows your real GPS; 5×/20× preview the route">' +
-        chip(1, 'Live') + chip(5, '5×') + chip(20, '20×') +
-        '  </div>' +
         '  <button class="btn btn-end" id="eta-end">End</button>' +
         '</div>';
-      card.querySelectorAll('.speed-chip').forEach(function (c) {
-        c.addEventListener('click', function () { setMult(+c.dataset.mult); });
-      });
       card.querySelector('#eta-end').addEventListener('click', function () { endTrip(false); });
       updateTripUI();
     }
@@ -837,17 +1131,28 @@
     requestAnimationFrame(function () { card.classList.add('show'); });
   }
 
+  // Seconds still to drive. A zero-length route (or a provider returning
+  // distance 0) made baseSpeed 0, so remain/0 was Infinity and `new Date(NaN)`
+  // rendered the ETA as "Invalid Date". Fall back to a walking-pace floor and
+  // cap the horizon so the card always shows a real clock time.
+  function remainingSecs(trip, remain) {
+    var pace = (trip.baseSpeed || 0) * (trip.mult || 1);
+    if (!(pace > 0.1)) pace = 0.1;
+    return U.clamp(remain / pace, 0, 86400 * 7);
+  }
+
   function updateTripUI() {
     var trip = S.trip, r = S.route;
     if (!trip || !r) return;
-    var remain = Math.max(0, trip.line.total - trip.progress);
-    var secs = remain / (trip.baseSpeed * trip.mult);
+    var total = trip.line.total || 0;
+    var remain = Math.max(0, total - trip.progress);
+    var secs = remainingSecs(trip, remain);
     var remEl = document.getElementById('trip-remain');
     var etaEl = document.getElementById('trip-eta');
     var bar = document.getElementById('trip-bar');
     if (remEl) remEl.textContent = U.fmtDist(remain, S.settings.units) + ' left';
     if (etaEl) etaEl.textContent = U.fmtClock(new Date(Date.now() + secs * 1000));
-    if (bar) bar.style.width = U.clamp(trip.progress / trip.line.total * 100, 0, 100) + '%';
+    if (bar) bar.style.width = (total > 0 ? U.clamp(trip.progress / total * 100, 0, 100) : 0) + '%';
     // LIVE badge: lit only once real GPS is actually driving the trip.
     var liveEl = document.getElementById('trip-live');
     if (liveEl) liveEl.hidden = !(trip.live && trip.gotFix);
@@ -856,6 +1161,8 @@
   A.routing = {
     geocode: geocode,
     promptRoute: promptRoute,
+    promptLoop: promptLoop,   // cruise-loop size chooser (ctl-loop button)
+    planLoop: planLoop,       // loop route from here back to here, avoiding cops/stops/lights
     setDestination: setDestination,
     clearRoute: clearRoute,
     startTrip: startTrip,
@@ -873,6 +1180,13 @@
     listVoices: listVoices,
     isNavSupported: isNavSupported,
     stopSpeaking: stopSpeaking,
+    // Speak OUTSIDE navigation (radar callouts, alerts): same voice pipeline but
+    // bypasses the voiceNav toggle — callers gate on their own setting.
+    say: function (text) {
+      if (!text) return;
+      if (ttsServer === true) serverSpeak(text);
+      else synthSpeak(text);
+    },
     previewVoice: function () { navVoice = null; speak('Navigation voice ready. Turn left in 300 feet.'); }
   };
 })();

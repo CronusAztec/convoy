@@ -1,0 +1,32 @@
+[Unit]
+Description=Convoy hotspot collector (continuously builds police-probability data)
+# Needs the API up; the collector POSTs region bboxes to /api/waze, which records
+# live police sightings into the hotspot model. It only talks to the local server,
+# so the server is the single writer of hotspots.json.
+After=network.target convoy.service
+Wants=convoy.service
+
+[Service]
+Type=simple
+User=convoy
+WorkingDirectory=/opt/convoy/server
+ExecStart=/usr/bin/node /opt/convoy/server/collect-hotspots.js
+# Point at the local API. INTERVAL ~ the server's 15-min sighting dedup window, so
+# we don't waste OpenWeb Ninja quota re-polling the same alerts.
+Environment=COLLECT_URL=http://localhost:5173
+# 30-min sweeps, 6s apart — gentle on the OpenWeb Ninja free tier. The server's
+# 429 cooldown (server/waze.js) is the hard safety net; this lowers the baseline draw.
+Environment=COLLECT_INTERVAL_MS=1800000
+Environment=COLLECT_STEP_MS=6000
+# Edit /opt/convoy/server/collect-regions.json to choose which areas to cover.
+# Environment=COLLECT_REGIONS=/opt/convoy/server/collect-regions.json
+Restart=always
+RestartSec=10
+
+# hardening (optional but free)
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

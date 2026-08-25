@@ -28,9 +28,11 @@
   // Layer data survives style switches via this cache (setStyle wipes sources)
   var cache = {
     route: emptyFC(),
+    trail: emptyFC(),   // drive-log replay breadcrumb (js/triplog.js)
     links: emptyFC(),
     global: emptyFC(),
     aircraft: emptyFC(),
+    aircraftTrail: emptyFC(),   // fading motion trails for aircraft (ghost mode)
     police: emptyFC(),
     hotspots: emptyFC(),   // police probability hotspots (ghost mode)
     rings: emptyFC()    // ghost-mode radar range circles
@@ -40,17 +42,28 @@
 
   function styleUrl() {
     var s = S.settings.mapStyle;
-    if (s === 'auto') return ST.themeResolved() === 'dark' ? STYLES.dark : STYLES.voyager;
+    if (s === 'auto') {
+      // A theme can pin its own basemap (recolored to match in ensureLayers).
+      var def = A.themes && A.themes.get(ST.themeResolved());
+      if (def && def.map && def.map.base && STYLES[def.map.base]) return STYLES[def.map.base];
+      return ST.themeIsDark() ? STYLES.dark : STYLES.voyager;
+    }
     return STYLES[s] || STYLES.dark;
   }
 
   /* =================== init =================== */
   function init() {
+    // Globe boot intro: no location is ever persisted, so until the user shares
+    // a real position (⌖ button or a live GPS fix) we boot fully zoomed out on a
+    // 3D globe; the first fix flies down to street level (landIntro). Needs
+    // MapLibre ≥5 (setProjection) and is skipped when animations are off.
+    introMode = S.settings.anim !== false &&
+      typeof maplibregl.Map.prototype.setProjection === 'function';
     map = new maplibregl.Map({
       container: 'map',
       style: styleUrl(),
-      center: S.playerStart,
-      zoom: 13.4,
+      center: introMode ? [S.playerStart[0], 22] : S.playerStart,
+      zoom: introMode ? 1.1 : 13.4,
       pitch: 0,
       bearing: 0,
       maxPitch: 70,
@@ -59,13 +72,31 @@
     });
     map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-left');
 
+    if (introMode) {
+      map.on('style.load', applyGlobe); // setStyle wipes projection — re-apply every load
+      // 'load' can hang on a slow glyph fetch (same reason boot below falls back
+      // to 'idle' + timeout) — start the spin on whichever fires first.
+      map.once('idle', startIntroSpin);
+      setTimeout(startIntroSpin, 2500);
+    }
+
+    // Space environment (starfield behind the globe + day/night terminator).
+    // Must init BEFORE the ensureLayers listener below so the night overlay's
+    // style.load handler runs first and our data layers stack on top of it.
+    if (A.space) A.space.init(map);
+
     map.on('style.load', ensureLayers);
     map.on('click', onMapClick);
     map.on('rotate', updateCompass);
     // Reclassify global drivers once the camera settles (newly loaded tiles let us
     // detect residential land that wasn't rendered before). 'idle' guards the loop:
     // setData re-renders → idle, but we only act when a real move set needRefilter.
-    map.on('moveend', function () { needRefilter = true; });
+    map.on('moveend', function () {
+      needRefilter = true;
+      // Tell the always-on layers (police, hotspots) the view changed so they can
+      // refetch for the new area. They're bbox-gated, so a tiny nudge is a no-op.
+      if (ST && ST.emit) ST.emit('mapmoved');
+    });
     map.on('idle', function () { if (needRefilter) { needRefilter = false; applyGlobalFilter(); } });
 
     // Tile/network failures shouldn't crash anything — surface once
@@ -92,7 +123,13 @@
     // the whole app (markers, auth, panels) would never appear. Markers don't need glyphs.
     return new Promise(function (resolve) {
       var done = false;
-      function ready() { if (done) return; done = true; resolve(); }
+      function ready() {
+        if (done) return; done = true;
+        // Kick the always-on layers once on first ready, in case the map loaded at a
+        // static center and never fired 'moveend' (e.g. routecaps raced map init).
+        if (ST && ST.emit) ST.emit('mapmoved');
+        resolve();
+      }
       map.on('load', ready);
       map.on('idle', ready);
       setTimeout(ready, 6000);
@@ -101,10 +138,18 @@
 
   /* =================== layers =================== */
   function ensureLayers() {
-    var dark = ST.themeResolved() === 'dark';
+    var dark = ST.themeIsDark();
     var accent = S.settings.accent;
+    // The nav line uses the theme's GPS color when it defines one (GTA's waypoint
+    // purple), otherwise the accent.
+    var routeCol = (A.themes && A.themes.routeColor()) || accent;
+
+    // Skin the basemap to the active theme (GTA V etc.) before stacking our layers.
+    // Re-runs on every style.load, so it survives style switches.
+    if (A.themes) A.themes.applyMapTheme(map);
 
     addSrc('route', cache.route);
+    addSrc('trail', cache.trail);
     addSrc('links', cache.links);
     addSrc('global', cache.global, { cluster: true, clusterRadius: 46, clusterMaxZoom: 9 });
     addSrc('aircraft', cache.aircraft);
@@ -112,45 +157,24 @@
     addSrc('hotspots', cache.hotspots);
     addSrc('rings', cache.rings);
 
-    // ----- ROUTE: stacked neon light-trail (bloom → core → hot center) -----
-    // Wide, soft outer bloom (chromatic haze)
-    addLayer({
-      id: 'route-glow', type: 'line', source: 'route',
-      layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: {
-        'line-color': accent, 'line-blur': 18, 'line-opacity': dark ? 0.32 : 0.22,
-        'line-width': zw(20, 34)
-      }
-    });
-    // Mid bloom — tighter, brighter
-    addLayer({
-      id: 'route-bloom', type: 'line', source: 'route',
-      layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: {
-        'line-color': accent, 'line-blur': 8, 'line-opacity': dark ? 0.55 : 0.4,
-        'line-width': zw(11, 18)
-      }
-    });
-    // Dark core underlay so the bright neon reads as a tube of light, not a smear
-    addLayer({
-      id: 'route-casing', type: 'line', source: 'route',
-      layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: {
-        'line-color': dark ? '#04070d' : '#ffffff',
-        'line-opacity': 0.92, 'line-width': zw(7, 12)
-      }
-    });
-    // Bright neon body
+    // ----- ROUTE: one solid GTA V-style GPS line -----
+    // A single flat line in the theme's GPS color (GTA waypoint purple on that
+    // theme, else the accent). No glow/bloom/filament stack — reads exactly like
+    // the in-game minimap trail.
     addLayer({
       id: 'route-line', type: 'line', source: 'route',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': accent, 'line-width': zw(4, 7.5), 'line-blur': 0.6 }
+      paint: { 'line-color': routeCol, 'line-width': zw(5, 9), 'line-opacity': 0.95 }
     });
-    // White-hot center filament
+
+    // ----- DRIVE-LOG TRAIL: dotted breadcrumb of a recorded trip -----
     addLayer({
-      id: 'route-core', type: 'line', source: 'route',
+      id: 'trail-line', type: 'line', source: 'trail',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': '#ffffff', 'line-width': zw(1.2, 2.2), 'line-opacity': 0.92 }
+      paint: {
+        'line-color': routeCol, 'line-width': zw(3, 5),
+        'line-opacity': 0.8, 'line-dasharray': [0.1, 1.8]
+      }
     });
 
     // ----- CONVOY LINKS: dashed neon with a soft underglow -----
@@ -217,10 +241,16 @@
     setRingsVisible(!!(S.settings && S.settings.ghost));
 
     // ----- GHOST MODE: aircraft (silver) + police stations (blue) -----
+    // Aircraft color = ownership: military=red, police=blue, ems=green, civilian=silver.
+    // Each carries its own ring stroke so the categories read apart at a glance.
     addLayer({
       id: 'aircraft-points', type: 'circle', source: 'aircraft',
       paint: {
-        'circle-color': '#e8edf6',
+        'circle-color': ['match', ['get', 'owner'],
+          'military', '#ff3b3b',
+          'police', '#3b82f6',
+          'ems', '#22c55e',
+          '#e8edf6'], /* civilian default = silver */
         'circle-stroke-color': '#ffffff',
         'circle-stroke-width': 1,
         'circle-radius': 6,
@@ -228,35 +258,70 @@
         'circle-blur': 0.3
       }
     });
+    // Aircraft motion trails: a line source fed by ghost.js's predictor. Each
+    // feature is a LineString of recent predicted positions with a per-segment
+    // opacity so the tail fades into the dot's current position. Sits beneath the
+    // aircraft-points layer (added first → lower z) so the dot draws on top.
+    addSrc('aircraft-trail', cache.aircraftTrail);
+    addLayer({
+      id: 'aircraft-trail', type: 'line', source: 'aircraft-trail',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: {
+        // color + opacity come from the feature properties so each owner-class
+        // trail keeps its identity and the fade is per-segment.
+        'line-color': ['get', 'color'],
+        'line-width': ['coalesce', ['get', 'width'], 2],
+        'line-opacity': ['coalesce', ['get', 'opacity'], 0.5]
+      }
+    });
     addLayer({
       id: 'police-points', type: 'circle', source: 'police',
       paint: {
-        // camera=amber, alpr=red, police=blue (default). Each enforcement kind
-        // reads apart at a glance in the Ghost radar HUD.
-        'circle-color': ['match', ['get', 'kind'], 'camera', '#ffcf2e', 'alpr', '#ff3b3b', '#3b82f6'],
+        // camera=amber, alpr=red, station=slate (static building), police=bright blue
+        // (LIVE sighting, default). Live police pop; stations read as muted infrastructure.
+        'circle-color': ['match', ['get', 'kind'], 'camera', '#ffcf2e', 'alpr', '#ff3b3b', 'station', '#64748b', '#3b82f6'],
         'circle-stroke-color': '#ffffff',
         'circle-stroke-width': 1.5,
         'circle-radius': 5.5,
         'circle-opacity': 0.95
       }
     });
-    // Probability hotspots: soft blurred circles sized + colored by `prob`.
-    // Sits BENEATH the live police pins (added first → lower in the layer stack)
-    // so a hard live-sighting pin draws on top of the fuzzy "usually here" halo.
+    // Probability hotspots, drawn as two stacked layers so the area reads clearly
+    // AND the exact spot is unambiguous:
+    //   1) 'police-hotspots' — a coloured halo whose radius grows with probability,
+    //      giving the "roughly here" footprint.
+    //   2) 'police-hotspots-core' — a small solid dot with a white ring at the exact
+    //      cell centre, so the precise location is obvious.
+    // Both sit BENEATH the live police pins (added first → lower z) so a hard
+    // live-sighting pin still draws on top.
     addLayer({
       id: 'police-hotspots', type: 'circle', source: 'hotspots',
       paint: {
         // radius grows with probability; bigger = more sightings at this hour
-        'circle-radius': ['interpolate', ['linear'], ['get', 'prob'], 0, 10, 0.5, 20, 1, 34],
+        'circle-radius': ['interpolate', ['linear'], ['get', 'prob'], 0, 12, 0.5, 22, 1, 36],
         // green(low) → amber(mid) → red(high), heatmap-style
         'circle-color': ['interpolate', ['linear'], ['get', 'prob'],
           0, '#22c55e', 0.5, '#f59e0b', 1, '#ef4444'],
-        'circle-opacity': 0.28,
-        'circle-blur': 1.1,
+        // Clearly visible ambient footprint (was near-invisible at 0.2 / soft stroke).
+        'circle-opacity': ['interpolate', ['linear'], ['get', 'prob'], 0, 0.28, 1, 0.42],
+        'circle-blur': 0.65,
         'circle-stroke-color': ['interpolate', ['linear'], ['get', 'prob'],
-          0, '#22c55e', 1, '#ef4444'],
-        'circle-stroke-width': 1,
-        'circle-stroke-opacity': 0.4
+          0, '#16a34a', 0.5, '#d97706', 1, '#dc2626'],
+        'circle-stroke-width': 2,
+        'circle-stroke-opacity': 0.85
+      }
+    });
+    addLayer({
+      id: 'police-hotspots-core', type: 'circle', source: 'hotspots',
+      paint: {
+        // Small, crisp, fixed-size dot marking the EXACT hotspot coordinate.
+        'circle-radius': 4.5,
+        'circle-color': ['interpolate', ['linear'], ['get', 'prob'],
+          0, '#16a34a', 0.5, '#d97706', 1, '#dc2626'],
+        'circle-stroke-color': '#ffffff',
+        'circle-stroke-width': 2,
+        'circle-opacity': 1,
+        'circle-stroke-opacity': 1
       }
     });
     setGhostLayersVisible(!!(S.settings && S.settings.ghost));
@@ -288,6 +353,7 @@
   }
 
   function setRouteData(fc) { cache.route = fc || emptyFC(); setData('route', cache.route); }
+  function setTrailData(fc) { cache.trail = fc || emptyFC(); setData('trail', cache.trail); }
   function setLinksData(fc) { cache.links = fc || emptyFC(); setData('links', cache.links); }
   function setGlobalData(fc) { globalRaw = fc || emptyFC(); applyGlobalFilter(); }
 
@@ -305,6 +371,15 @@
   // Is this coordinate sitting on residential land? Uses the basemap's rendered
   // landuse polygons (queryRenderedFeatures hit-tests the polygon for us). Only
   // meaningful for points inside the loaded viewport; fails open (false) otherwise.
+  //
+  // Memoized by quantized coordinate: queryRenderedFeatures is a GPU readback, and
+  // applyGlobalFilter calls this once per global driver. Without the cache a single
+  // feed refresh (dozens of drivers) re-ran the same expensive query for dots that
+  // hadn't moved. The key is rounded to ~11m (3 decimals) so a driver drifting a
+  // few meters reuses the result; the cache is invalidated on every camera move
+  // (residential classification is view-dependent — off-screen fails open).
+  var residentialCache = {};
+  var residentialCacheKey = '';
   function isResidential(coord) {
     if (!map || !map.isStyleLoaded()) return false;
     var ids = landuseLayerIds();
@@ -313,25 +388,92 @@
     try { p = map.project(coord); } catch (e) { return false; }
     var cv = map.getCanvas();
     if (p.x < 0 || p.y < 0 || p.x > cv.clientWidth || p.y > cv.clientHeight) return false; // off-screen
+    // Quantize the lng/lat so near-identical positions share a result. 3 decimals
+    // ≈ 11m at the equator — finer than the dots ever move between refreshes.
+    var qkey = coord[0].toFixed(3) + ',' + coord[1].toFixed(3);
+    // Invalidate the whole cache when the view changes (a coord's residential-ness
+    // depends on whether its tile is loaded, which changes with pan/zoom).
+    var viewKey = Math.round(map.getZoom()) + '|' + p.x.toFixed(0) + '|' + p.y.toFixed(0);
+    if (viewKey !== residentialCacheKey) { residentialCacheKey = viewKey; residentialCache = {}; }
+    if (qkey in residentialCache) return residentialCache[qkey];
     var feats;
     try { feats = map.queryRenderedFeatures(p, { layers: ids }); } catch (e) { return false; }
+    var hit = false;
     for (var i = 0; i < feats.length; i++) {
       var pr = feats[i].properties || {};
       var cls = pr.class || pr.landuse || pr.type || pr.subclass || '';
-      if (RESIDENTIAL_RE.test(cls)) return true;
+      if (RESIDENTIAL_RE.test(cls)) { hit = true; break; }
     }
-    return false;
+    residentialCache[qkey] = hit;
+    return hit;
   }
 
   // Drop global drivers that fall on residential land, then publish the rest.
+  // Debounced: setData re-renders → fires 'idle' → which used to re-trigger this
+  // filter, causing a feedback loop of GPU queries. Coalescing to one run per
+  // frame breaks the cycle while still keeping the filter fresh after a pan.
+  var filterScheduled = false;
   function applyGlobalFilter() {
-    var feats = globalRaw.features || [];
-    var out = feats.length ? feats.filter(function (f) {
-      var c = f.geometry && f.geometry.coordinates;
-      return !(c && isResidential(c));
-    }) : feats;
-    cache.global = { type: 'FeatureCollection', features: out };
-    setData('global', cache.global);
+    if (filterScheduled) return;
+    filterScheduled = true;
+    requestAnimationFrame(function () {
+      filterScheduled = false;
+      // Read globalRaw HERE, not at schedule time. Capturing it up front meant a
+      // feed refresh landing inside the coalescing window was filtered out of
+      // existence: applyGlobalFilter returned early (already scheduled) and the
+      // pending pass then published the stale snapshot it had closed over.
+      var raw = globalRaw;
+      var feats = raw.features || [];
+      var out = feats.length ? feats.filter(function (f) {
+        var c = f.geometry && f.geometry.coordinates;
+        return !(c && isResidential(c));
+      }) : feats;
+      tweenGlobal({ type: 'FeatureCollection', features: out });
+    });
+  }
+
+  // Tween global dots between feed refreshes. The server re-sends the whole
+  // layer every ~45s and dots used to teleport to their new spots; instead,
+  // riders (keyed by name+car — the feed has no ids) ease from their last
+  // rendered position to the new one. New/removed dots still pop in/out.
+  var GLOBAL_TWEEN_MS = 1200;
+  var GLOBAL_TWEEN_MAX = 150;  // beyond this many movers, skip animating (clustered source re-indexes per frame)
+  var globalPrevPos = {};      // key -> [lng,lat] last rendered
+  var globalTweenRaf = null;
+  function renderGlobal(fc) { cache.global = fc; setData('global', fc); }
+  function tweenGlobal(targetFC) {
+    if (globalTweenRaf) { cancelAnimationFrame(globalTweenRaf); globalTweenRaf = null; }
+    var feats = targetFC.features || [];
+    var moves = [];
+    var nextPos = {};
+    for (var i = 0; i < feats.length; i++) {
+      var f = feats[i], p = f.properties || {};
+      var key = (p.name || '') + '|' + (p.car || '');
+      var to = f.geometry.coordinates.slice();
+      nextPos[key] = to;
+      var from = globalPrevPos[key];
+      if (from && (from[0] !== to[0] || from[1] !== to[1])) moves.push({ f: f, from: from, to: to });
+    }
+    globalPrevPos = nextPos;
+    if (!moves.length || moves.length > GLOBAL_TWEEN_MAX || !(S.settings && S.settings.anim)) {
+      renderGlobal(targetFC);
+      return;
+    }
+    var t0 = performance.now();
+    function step(now) {
+      var t = Math.min((now - t0) / GLOBAL_TWEEN_MS, 1);
+      var e = t * (2 - t); // easeOutQuad
+      for (var j = 0; j < moves.length; j++) {
+        var mv = moves[j];
+        mv.f.geometry.coordinates = [
+          mv.from[0] + (mv.to[0] - mv.from[0]) * e,
+          mv.from[1] + (mv.to[1] - mv.from[1]) * e
+        ];
+      }
+      renderGlobal(targetFC);
+      globalTweenRaf = t < 1 ? requestAnimationFrame(step) : null;
+    }
+    globalTweenRaf = requestAnimationFrame(step);
   }
 
   function setGlobalVisible(on) {
@@ -341,10 +483,15 @@
   }
 
   function setAircraftData(fc) { cache.aircraft = fc || emptyFC(); setData('aircraft', cache.aircraft); }
+  function setAircraftTrailData(fc) { cache.aircraftTrail = fc || emptyFC(); setData('aircraft-trail', cache.aircraftTrail); }
   function setPoliceData(fc) { cache.police = fc || emptyFC(); setData('police', cache.police); }
   function setHotspotData(fc) { cache.hotspots = fc || emptyFC(); setData('hotspots', cache.hotspots); }
   function setGhostLayersVisible(on) {
-    ['aircraft-points', 'police-points', 'police-hotspots'].forEach(function (id) {
+    // NB: 'police-hotspots' AND 'police-points' are intentionally NOT toggled here —
+    // both are always-on layers, independent of ghost mode. Police pins show
+    // everywhere (gated by the "Police stations" setting); ghost mode only adds the
+    // aircraft layer (points + trails) and the hotspot legend/scrubber over them.
+    ['aircraft-points', 'aircraft-trail'].forEach(function (id) {
       if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
     });
   }
@@ -370,9 +517,8 @@
   function applyAccent() {
     if (!map || !map.getLayer('route-line')) return;
     var accent = S.settings.accent;
-    map.setPaintProperty('route-line', 'line-color', accent);
-    map.setPaintProperty('route-bloom', 'line-color', accent);
-    map.setPaintProperty('route-glow', 'line-color', accent);
+    var routeCol = (A.themes && A.themes.routeColor()) || accent;
+    map.setPaintProperty('route-line', 'line-color', routeCol);
     map.setPaintProperty('convoy-links', 'line-color', accent);
     map.setPaintProperty('convoy-links-glow', 'line-color', accent);
   }
@@ -380,6 +526,7 @@
   /* =================== markers (dots) =================== */
   // Inline dot for popups / profile preview (background-color so the CSS gloss gradient shows)
   function carDot(paint, size) {
+    paint = U.safePaint(paint);
     return '<span class="car-dot" style="width:' + size + 'px;height:' + size +
       'px;background-color:' + paint + '"></span>';
   }
@@ -392,9 +539,12 @@
     if (npc.member) return 'c-friend';        // convoy member → friend color
     if (npc.account && (S.friends || []).some(function (f) { return f.username === npc.account; })) return 'c-friend';
     var filter = A.ui ? A.ui.nearbyFilter() : 'radius';
-    if (filter === 'sight') return 'c-sight';
-    if (filter === 'road') return 'c-road';
-    return 'c-near';
+    if (filter === 'radius') return 'c-near';
+    // Road/sight: only riders that actually MATCH the active filter get the
+    // brighter category color — everyone else stays base green, so the map
+    // shows who is on your road / in sight at a glance.
+    if (A.ui && A.ui.nearbyMatches && !A.ui.nearbyMatches(npc)) return 'c-near';
+    return filter === 'sight' ? 'c-sight' : 'c-road';
   }
 
   // Apply category classes to every NPC marker. Called when the filter changes
@@ -415,7 +565,7 @@
     var size = opts.player ? 18 : 14;
     var cat = opts.player ? 'c-you' : (opts.category || 'c-near');
     root.innerHTML = '<div class="m-ring"></div>' +
-      '<div class="m-dot ' + cat + '" style="width:' + size + 'px;height:' + size + 'px;background-color:' + opts.paint + '"></div>';
+      '<div class="m-dot ' + cat + '" style="width:' + size + 'px;height:' + size + 'px;background-color:' + U.safePaint(opts.paint) + '"></div>';
     return root;
   }
 
@@ -437,6 +587,56 @@
     if (!playerMarker) return;
     playerMarker.setLngLat(pos);
     if (brg != null) playerMarker.setRotation(brg);
+  }
+
+  /* =================== convoy rally point =================== */
+  var rallyMarker = null;
+  // rally = { lng, lat, label, byName } or null to remove the flag.
+  function setRallyPoint(rally) {
+    if (!rally) {
+      if (rallyMarker) { rallyMarker.remove(); rallyMarker = null; }
+      return;
+    }
+    var pos = [rally.lng, rally.lat];
+    if (!rallyMarker) {
+      var el = document.createElement('div');
+      el.className = 'rally-marker';
+      el.innerHTML =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+        '<path d="M5 21V4"/><path d="M5 4h11l-2.2 3.5L16 11H5"/></svg>';
+      el.addEventListener('click', function (e) { e.stopPropagation(); showRallyPopup(); });
+      rallyMarker = new maplibregl.Marker({ element: el, anchor: 'bottom' }).setLngLat(pos).addTo(map);
+    } else {
+      rallyMarker.setLngLat(pos);
+    }
+    rallyMarker._rally = rally;
+  }
+
+  function showRallyPopup() {
+    var rally = rallyMarker && rallyMarker._rally;
+    if (!rally) return;
+    var pos = [rally.lng, rally.lat];
+    var card = U.el('div', 'pop-card pop-prompt');
+    card.innerHTML =
+      '<div class="prompt-label"><span class="prompt-pin">' +
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4"/><path d="M5 4h11l-2.2 3.5L16 11H5"/></svg>' +
+      '</span><span class="prompt-name">' + U.esc(rally.label || 'Rally point') +
+      ' · by ' + U.esc(rally.byName || 'convoy') + '</span></div>' +
+      '<div class="pop-actions"></div>';
+    var actions = card.querySelector('.pop-actions');
+    var go = U.el('button', 'btn btn-primary btn-small', 'Route here');
+    go.addEventListener('click', function () {
+      closePopup();
+      A.routing.setDestination(pos, rally.label || 'Rally point');
+    });
+    actions.appendChild(go);
+    var clear = U.el('button', 'btn btn-ghost btn-small', 'Clear rally');
+    clear.addEventListener('click', function () {
+      closePopup();
+      if (A.party && A.party.clearRally) A.party.clearRally();
+    });
+    actions.appendChild(clear);
+    openPopup(pos, card);
   }
 
   function addNpc(npc) {
@@ -500,9 +700,11 @@
       '<div class="m-dest-ring"></div>' +
       '<div class="m-dest-pulse"></div>' +
       '<div class="m-dest-pin">' +
-        '<svg viewBox="0 0 24 24">' +
-          '<path d="M12 1.5 22 21 12 17 2 21Z" fill="var(--accent)" stroke="#ffffff" stroke-width="1" stroke-linejoin="round"/>' +
-          '<path d="M12 6 17.5 17.5 12 15 6.5 17.5Z" fill="#ffffff" opacity=".9"/>' +
+        // Google-Maps-style teardrop pin: rounded head, pointed tip (anchored at the
+        // exact location), white inner dot. Themed with --accent so it still reads as Convoy.
+        '<svg viewBox="0 0 24 34">' +
+          '<path d="M12 .9C6.2.9 1.5 5.6 1.5 11.4c0 7.3 8.4 18.7 9.9 20.6a.75.75 0 0 0 1.2 0c1.5-1.9 9.9-13.3 9.9-20.6C22.5 5.6 17.8.9 12 .9Z" fill="var(--accent)" stroke="#ffffff" stroke-width="1.4" stroke-linejoin="round"/>' +
+          '<circle cx="12" cy="11.4" r="4.3" fill="#ffffff"/>' +
         '</svg>' +
       '</div>';
     destMarker = new maplibregl.Marker({ element: el, anchor: 'bottom' }).setLngLat(lngLat).addTo(map);
@@ -512,6 +714,16 @@
   }
 
   /* =================== popups =================== */
+  // Avatars go straight into a src="…" attribute inside innerHTML, so a prefix
+  // test (/^data:image\//) is not enough — `data:image/x",onerror="…` passes it.
+  // This mirrors the server's sanitizeAvatar() exactly, so the client no longer
+  // depends on the server being the only thing standing between a rider record
+  // and an attribute-injection sink.
+  var AVATAR_RE = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/;
+  function safeAvatar(v) {
+    return typeof v === 'string' && v.length <= 24000 && AVATAR_RE.test(v);
+  }
+
   function closePopup() {
     if (popupRef) { popupRef.remove(); popupRef = null; }
   }
@@ -530,14 +742,19 @@
     var member = npc.member, invited = npc.invited;
     var card = U.el('div', 'pop-card');
     card.innerHTML =
-      '<div class="pop-head">' +
-      '  <div class="u-ava" style="--paint:' + npc.car.paint + '">' + U.riderIcon(npc.emoji, { size: 20 }) + '</div>' +
+      '<div class="pop-head" id="pop-head-' + id + '">' +
+      '  <div class="u-ava" style="--paint:' + U.safePaint(npc.car.paint) + '">' +
+      (safeAvatar(npc.avatar)
+        ? '<img class="ava-img" src="' + npc.avatar + '" alt=""/>'
+        : U.riderIcon(npc.emoji, { size: 20 })) + '</div>' +
       '  <div class="pop-id"><div class="u-name">' + U.esc(npc.name) + '</div>' +
       '  <div class="u-handle">@' + U.esc(npc.handle) + ' · ' + dist + ' away</div></div>' +
+      '<span class="pop-more" title="View profile"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg></span>' +
 '</div>' +
 '<div class="pop-car"><span class="pop-car-svg">' + carDot(npc.car.paint, 13) + '</span>' +
       '  <span>' + npc.car.year + ' ' + U.esc(npc.car.make) + ' ' + U.esc(npc.car.model) +
-      '  <i class="paint-dot" style="background:' + npc.car.paint + '"></i> ' + U.esc(npc.car.paintName) + ' · ' + npc.car.finish + '</span>' +
+      (npc.car.trim ? ' ' + U.esc(npc.car.trim) : '') +
+      '  <i class="paint-dot" style="background:' + U.safePaint(npc.car.paint) + '"></i> ' + U.esc(npc.car.paintName) + ' · ' + U.safeFinish(npc.car.finish) + '</span>' +
 '</div>' +
 '<div class="pop-tags"><span class="tag tag-live"><span class="dot dot-live"></span>' +
       (npc.mode === 'parked' ? 'Parked' : 'Cruising') + '</span>' +
@@ -546,6 +763,13 @@
       (npc.car.exhaust && npc.car.exhaust !== 'Stock' ? '<span class="tag">' + U.esc(npc.car.exhaust) + '</span>' : '') +
       '<span class="tag">' + U.esc(npc.vibe) + '</span></div>' +
 '<div class="pop-actions"></div>';
+
+    // Tapping the popup header opens the full Instagram-style profile overlay.
+    card.querySelector('#pop-head-' + id).addEventListener('click', function (e) {
+      if (e.target.closest('.pop-actions')) return; // don't steal button taps
+      A.mapview.closePopup();
+      if (A.ui && A.ui.openProfileOverlay) A.ui.openProfileOverlay(id);
+    });
 
     var actions = card.querySelector('.pop-actions');
     var inviteBtn = U.el('button', 'btn btn-primary btn-small');
@@ -620,17 +844,27 @@
     var spdStr = props.speed != null
       ? (S.settings.units === 'km' ? Math.round(props.speed * 3.6) + ' km/h' : Math.round(props.speed * 2.23694) + ' mph')
       : '—';
+    // Ownership drives the avatar color + a headline tag so it's the first thing
+    // you read. Military/police/EMS each get a distinct paint; civilian stays silver.
+    var ownColor = props.owner === 'military' ? '#ff3b3b'
+      : props.owner === 'police' ? '#3b82f6'
+      : props.owner === 'ems' ? '#22c55e'
+      : '#e8edf6';
+    var ownName = props.ownerName || (props.owner === 'military' ? 'Military'
+      : props.owner === 'police' ? 'Law enforcement'
+      : props.owner === 'ems' ? 'EMS / medevac'
+      : 'Civilian');
     card.innerHTML =
       '<div class="pop-head">' +
-      '  <div class="u-ava" style="--paint:#e8edf6">' + U.riderIcon(0, { size: 20 }) + '</div>' +
+      '  <div class="u-ava" style="--paint:' + ownColor + '">' + U.riderIcon(0, { size: 20 }) + '</div>' +
       '  <div class="pop-id"><div class="u-name">' + U.esc(props.callsign) + '</div>' +
       '  <div class="u-handle">' + U.esc(props.country || props.acType || props.reg || 'Unknown origin') + '</div></div>' +
       '</div>' +
       '<div class="pop-tags">' +
-      (props.ground ? '<span class="tag">On ground</span>' : '<span class="tag tag-live"><span class="dot dot-live"></span>Airborne</span>') +
+      '<span class="tag tag-live"><span class="dot dot-live" style="background:' + ownColor + '"></span>' + U.esc(ownName) + '</span>' +
+      (props.ground ? '<span class="tag">On ground</span>' : '<span class="tag">Airborne</span>') +
       (props.acType ? '<span class="tag">Type ' + U.esc(props.acType) + '</span>' : '') +
       (props.reg ? '<span class="tag">Reg ' + U.esc(props.reg) + '</span>' : '') +
-      (props.mil ? '<span class="tag">⚑ Military</span>' : '') +
       '<span class="tag">Altitude ' + altStr + '</span>' +
       '<span class="tag">Speed ' + spdStr + '</span>' +
       (props.heading != null ? '<span class="tag">HDG ' + Math.round(props.heading) + '°</span>' : '') +
@@ -641,19 +875,23 @@
   }
 
   function showPolicePopup(props, lngLat) {
-    var cam = props.kind === 'camera';
-    var alpr = props.kind === 'alpr';
-    var color = alpr ? '#ff3b3b' : (cam ? '#ffcf2e' : '#3b82f6');
-    var sub = alpr ? 'ALPR / surveillance camera' : (cam ? 'Speed / enforcement camera' : 'Police station');
-    var iconIdx = alpr ? 4 : (cam ? 7 : 1); // avatar glyph per kind
+    var kind = props.kind;
+    // kinds: 'camera' (speed cam), 'alpr' (surveillance), 'station' (OSM police
+    // building), 'police' (LIVE sighting from Waze/crowd — the only kind that feeds
+    // hotspots). Each gets its own color, label, icon and source credit.
+    var meta = kind === 'alpr' ? { color: '#ff3b3b', sub: 'ALPR / surveillance camera', icon: 4, src: 'OpenStreetMap' }
+      : kind === 'camera' ? { color: '#ffcf2e', sub: 'Speed / enforcement camera', icon: 7, src: 'OpenStreetMap' }
+      : kind === 'station' ? { color: '#64748b', sub: 'Police station', icon: 1, src: 'OpenStreetMap' }
+      : { color: '#3b82f6', sub: 'Live police sighting', icon: 1, src: props.waze ? 'Waze' : 'Rider report' };
+    var name = props.name || props.label || (kind === 'station' ? 'Police station' : 'Police');
     var card = U.el('div', 'pop-card');
     card.innerHTML =
       '<div class="pop-head">' +
-      '  <div class="u-ava" style="--paint:' + color + '">' + U.riderIcon(iconIdx, { size: 20 }) + '</div>' +
-      '  <div class="pop-id"><div class="u-name">' + U.esc(props.name) + '</div>' +
-      '  <div class="u-handle">' + sub + '</div></div>' +
+      '  <div class="u-ava" style="--paint:' + meta.color + '">' + U.riderIcon(meta.icon, { size: 20 }) + '</div>' +
+      '  <div class="pop-id"><div class="u-name">' + U.esc(name) + '</div>' +
+      '  <div class="u-handle">' + meta.sub + '</div></div>' +
       '</div>' +
-      '<div class="pop-tags"><span class="tag tag-delayed"><span class="dot dot-global"></span>OpenStreetMap</span></div>';
+      '<div class="pop-tags"><span class="tag tag-delayed"><span class="dot dot-global"></span>' + meta.src + '</span></div>';
     openPopup(lngLat, card);
   }
 
@@ -670,8 +908,9 @@
     card.innerHTML =
       '<div class="pop-head">' +
       '  <div class="u-ava" style="--paint:' + color + '">' + U.riderIcon(6, { size: 20 }) + '</div>' +
-      '  <div class="u-id"><div class="u-name">Police hotspot</div>' +
-      '  <div class="u-handle">~' + prob + '% likely here' + (hour >= 0 ? ' · ' + pad2(hour) + ':00' : '') + '</div></div>' +
+      '  <div class="pop-id"><div class="u-name">Police hotspot</div>' +
+      '  <div class="u-handle">~' + prob + '% likely here' +
+           (props.allHours ? ' · seen at various hours' : (hour >= 0 ? ' · ' + pad2(hour) + ':00' : '')) + '</div></div>' +
       '</div>' +
       '<div class="pop-tags">' +
         '<span class="tag"><span class="dot" style="background:' + color + '"></span>Based on ' + count + ' sighting' + (count === 1 ? '' : 's') + '</span>' +
@@ -680,7 +919,61 @@
     openPopup(lngLat, card);
   }
 
+  // Hazard pin → a description popup, mirroring the police/hotspot dots. The label is
+  // the human description (e.g. "Accident", "Flood Warning", "Heavy rain") and the tag
+  // credits the source it came from.
+  var HZ_WEATHER = { rain: 1, snow: 1, ice: 1, wind: 1, fog: 1, flood: 1, alert: 1 };
+  function showHazardPopup(props, lngLat) {
+    props = props || {};
+    var color = props.color || '#ff5a3c';
+    var src = props.waze ? 'Waze'
+      : props.tomtom ? 'TomTom traffic'
+      : props.alert ? 'NWS weather alert'
+      : props.crowd ? 'Reported by a rider'
+      : props.reported ? 'You reported this'
+      : props.agent ? 'Live data feed'
+      : 'Local conditions';
+    var cat = HZ_WEATHER[props.kind] ? 'Weather' : 'Road hazard';
+
+    // Which way is it, and how far — relative to where the rider is right now.
+    var me = A.sim && A.sim.playerPos && A.sim.playerPos();
+    var dirText = '';
+    if (me && lngLat && (me[0] !== lngLat[0] || me[1] !== lngLat[1])) {
+      var dist = U.haversine(me, lngLat);
+      dirText = U.fmtDist(dist, S.settings.units) + ' to the ' + compass8(U.bearing(me, lngLat));
+    }
+    // Location detail (street / city) when the source provides it.
+    var place = [props.street, props.city].filter(function (s) { return s; }).map(U.esc).join(', ');
+
+    // Extra source detail: Waze crowd confidence + how fresh the report is.
+    var extra = [];
+    if (dirText) extra.push('<span class="tag"><span class="dot" style="background:' + color + '"></span>' + dirText + '</span>');
+    if (props.reliability) extra.push('<span class="tag">Confidence ' + Math.round(props.reliability) + '/10</span>');
+    // Coerce: `thumbs` comes straight off the upstream Waze payload and was the
+    // one remote value interpolated into HTML without escaping or coercion.
+    var thumbs = Math.max(0, Math.round(Number(props.thumbs) || 0));
+    if (thumbs) extra.push('<span class="tag">' + thumbs + ' confirmed</span>');
+    if (props.when) { var w = new Date(props.when); if (!isNaN(w)) extra.push('<span class="tag tag-delayed">' + relAgo(w.getTime()) + '</span>'); }
+
+    var card = U.el('div', 'pop-card');
+    card.innerHTML =
+      '<div class="pop-head">' +
+      '  <div class="u-ava" style="--paint:' + color + '">' + U.riderIcon(6, { size: 20 }) + '</div>' +
+      '  <div class="pop-id"><div class="u-name">' + U.esc(props.label || 'Hazard') + '</div>' +
+      '  <div class="u-handle">' + cat + (place ? ' · ' + place : '') + '</div></div>' +
+      '</div>' +
+      '<div class="pop-tags">' + extra.join('') +
+        '<span class="tag tag-delayed"><span class="dot dot-global"></span>' + U.esc(src) + '</span>' +
+      '</div>';
+    openPopup(lngLat, card);
+  }
+
   function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  // 8-point compass name for a bearing in degrees (0 = north).
+  function compass8(deg) {
+    var names = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
+    return names[Math.round(((deg % 360) + 360) % 360 / 45) % 8];
+  }
   function relAgo(ts) {
     var mins = Math.round((Date.now() - ts) / 60000);
     if (mins < 60) return mins + 'm ago';
@@ -691,18 +984,41 @@
 
   /* =================== map click → route prompt =================== */
   function onMapClick(e) {
-    // ghost layers first (aircraft, police, hotspots) — only present while ghost mode is on
-    var gLayers = ['aircraft-points', 'police-points', 'police-hotspots'].filter(function (id) { return map.getLayer(id); });
+    // always-on enforcement layers first (aircraft, police pins, hotspot dot + halo).
+    // The crisp core dot is listed first so a tap on the exact spot always wins.
+    var gLayers = ['aircraft-points', 'police-points', 'police-hotspots-core', 'police-hotspots'].filter(function (id) { return map.getLayer(id); });
     if (gLayers.length) {
       var gf = map.queryRenderedFeatures(e.point, { layers: gLayers });
-      if (gf.length) {
-        var hit = gf[0];
+      var hit = null;
+      for (var gi = 0; gi < gf.length; gi++) {
+        var cand = gf[gi];
+        if (cand.layer && cand.layer.id === 'police-hotspots') {
+          // The halo is a big soft circle (up to ~36px radius) that can blanket whole
+          // blocks — only claim the tap near its centre, otherwise fall through so
+          // tap-to-route still works inside hotspot areas. (The core dot has no such
+          // guard: it's small and precise, so any hit on it opens the popup.)
+          var cpt = map.project(cand.geometry.coordinates.slice());
+          var hdx = cpt.x - e.point.x, hdy = cpt.y - e.point.y;
+          if (hdx * hdx + hdy * hdy > 16 * 16) continue;
+        }
+        hit = cand;
+        break;
+      }
+      if (hit) {
         var ll = hit.geometry.coordinates.slice();
-        if (hit.layer && hit.layer.id === 'police-points') showPolicePopup(hit.properties, ll);
-        else if (hit.layer && hit.layer.id === 'police-hotspots') showHotspotPopup(hit.properties, ll);
+        var lid = hit.layer && hit.layer.id;
+        if (lid === 'police-points') showPolicePopup(hit.properties, ll);
+        else if (lid === 'police-hotspots' || lid === 'police-hotspots-core') showHotspotPopup(hit.properties, ll);
         else showAircraftPopup(hit.properties, ll);
         return;
       }
+    }
+
+    // hazards (weather, TomTom incidents, NWS alerts, rider reports) — tap for a description
+    var hzLayers = ['hazard-icon', 'hazard-circle'].filter(function (id) { return map.getLayer(id); });
+    if (hzLayers.length) {
+      var hf = map.queryRenderedFeatures(e.point, { layers: hzLayers });
+      if (hf.length) { showHazardPopup(hf[0].properties, hf[0].geometry.coordinates.slice()); return; }
     }
 
     // global driver layers next
@@ -749,6 +1065,10 @@
     document.getElementById('ctl-recenter').addEventListener('click', function () {
       A.sim.resumeFollow();
     });
+    // The globe control mirrors the Global chip — it's in the map controls but
+    // previously had no handler, so tapping it did nothing.
+    var globe = document.getElementById('ctl-global');
+    if (globe) globe.addEventListener('click', function () { ST.setShowGlobal(!S.settings.showGlobal); });
 
     map.on('load', function () {
       ['global-clusters', 'global-points'].forEach(function (id) {
@@ -772,14 +1092,61 @@
       function (p) {
         var pos = [p.coords.longitude, p.coords.latitude];
         A.sim.relocatePlayer(pos);
-        map.easeTo({ center: pos, zoom: 14, duration: ST.dur(900) });
+        if (!landIntro(pos, LOCATE_ZOOM)) swoopTo(pos, LOCATE_ZOOM);
         A.ui.toast('Riders refreshed around your location', 'success');
       },
       function () {
+        // Denied/unavailable: don't strand the user on the globe — settle into the demo city.
+        landIntro(S.playerStart, 13.4);
         A.ui.toast('Location blocked (needs https/localhost) — staying in demo city', 'warn');
       },
       { enableHighAccuracy: true, timeout: 8000 }
     );
+  }
+
+  /* =================== globe boot intro =================== */
+  // Boot state: whole planet in view, drifting slowly. Consumed by landIntro()
+  // when the first real location arrives. introMode is set in init().
+  var introMode = false;
+
+  // Globe projection + a thin atmosphere halo that fades out by city zoom.
+  function applyGlobe() {
+    try { map.setProjection({ type: 'globe' }); } catch (e) { }
+    try {
+      map.setSky({ 'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 7, 0] });
+    } catch (e) { }
+  }
+
+  // Slow eastward drift, chained in short linear easeTo steps on 'moveend'
+  // (a single big-lng ease is a no-op — MapLibre normalizes the target back to
+  // the same longitude). The chain dies on user touch, on landing, or once the
+  // camera is off the globe (zoom > 4, e.g. the user flew to a rider).
+  var spinStarted = false, spinStop = false;
+  function startIntroSpin() {
+    if (!introMode || spinStarted) return;
+    spinStarted = true;
+    ['mousedown', 'touchstart', 'wheel'].forEach(function (ev) {
+      map.getCanvas().addEventListener(ev, function () { spinStop = true; }, { once: true, passive: true });
+    });
+    map.on('moveend', spinStep);
+    spinStep();
+  }
+  function spinStep() {
+    if (spinStop || !introMode || map.getZoom() > 4 || map.isMoving()) return;
+    var c = map.getCenter();
+    map.easeTo({ center: [c.lng + 8, c.lat], duration: 5000, easing: function (t) { return t; } });
+  }
+
+  // First real position after a globe boot → cinematic fly-down to street level.
+  // Returns true if it handled the camera (callers skip their normal ease).
+  function landIntro(pos, zoom) {
+    if (!introMode || !map) return false;
+    introMode = false;
+    map.flyTo({
+      center: pos, zoom: zoom || 15, pitch: 0, bearing: 0,
+      duration: ST.dur(4600), essential: true
+    });
+    return true;
   }
 
   /* =================== camera =================== */
@@ -795,14 +1162,30 @@
 
   function jumpCam(opts) { map.jumpTo(opts); }
   function easeCam(opts) { map.easeTo(opts); }
-  function flyToUser(pos) {
-    map.easeTo({ center: pos, zoom: Math.max(map.getZoom(), 14.6), duration: ST.dur(800) });
+
+  // Google-Maps-style locate swoop: flyTo's van Wijk arc (pull up, glide, dive
+  // back in) instead of a flat linear ease. Always LANDS zoomed IN — the target
+  // zoom never drops below minZoom and never below the current zoom, so a rider
+  // already at street level is never yanked back out by pressing ⌖ again.
+  var LOCATE_ZOOM = 16.5; // street level, same landing zoom as Google Maps' My Location
+  function swoopTo(pos, minZoom) {
+    var z = Math.max(map.getZoom(), minZoom || LOCATE_ZOOM);
+    if (!S.settings.anim) { map.jumpTo({ center: pos, zoom: z, pitch: 0 }); return; }
+    map.flyTo({
+      center: pos, zoom: z, pitch: 0,
+      curve: 1.42,        // arc shape of the swoop (van Wijk ρ — the Google Maps feel)
+      speed: 1.6,         // brisker than MapLibre's 1.2 default, like GMaps' locate
+      maxDuration: 5000,  // cross-country jumps stay snappy instead of a 20s cruise
+      essential: true
+    });
   }
+  function flyToUser(pos) { swoopTo(pos, 14.6); }
   // Continuous nav follow — keep the player centered as real GPS fixes arrive.
   // Eases center only (keeps the user's zoom/bearing); short duration so successive
   // fixes blend smoothly. Programmatic ⇒ won't trip the user-pan follow-break.
   function followPlayer(pos) {
     if (!map) return;
+    if (landIntro(pos, 15)) return; // first live GPS fix after a globe boot
     map.easeTo({ center: pos, duration: ST.dur(650) });
   }
 
@@ -812,10 +1195,12 @@
     applyStyle: applyStyle,
     applyAccent: applyAccent,
     setRouteData: setRouteData,
+    setTrailData: setTrailData,
     setLinksData: setLinksData,
     setGlobalData: setGlobalData,
     setGlobalVisible: setGlobalVisible,
     setAircraftData: setAircraftData,
+    setAircraftTrailData: setAircraftTrailData,
     setPoliceData: setPoliceData,
     setHotspotData: setHotspotData,
     setGhostLayersVisible: setGhostLayersVisible,
@@ -833,6 +1218,8 @@
     createPlayerMarker: createPlayerMarker,
     refreshPlayer: refreshPlayer,
     setPlayer: setPlayer,
+    setRallyPoint: setRallyPoint,
+    landIntro: landIntro,
     addNpc: addNpc,
     updateNpc: updateNpc,
     removeNpc: removeNpc,

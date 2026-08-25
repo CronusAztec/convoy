@@ -6,7 +6,9 @@
    There is no free dataset of historical police-siting patterns, so this module
    builds one from real observations the server actually receives. Hotspots are
    empty on day 1 and become meaningful over days/weeks as sightings accrue —
-   a cell needs ≥2 historical observations at the queried hour before it surfaces.
+   a cell needs ≥2 observations at the queried hour to surface at full strength,
+   or ≥3 across any hour to surface dampened (the all-hours fallback), so a known
+   spot never blinks out of the map just because the clock moved on.
 
    Model:
      - Observations bucket into ~50m grid cells (cellId derived from lng/lat).
@@ -43,6 +45,13 @@ const HORIZON_MS = HORIZON_DAYS * 24 * 3600 * 1000;
 // A cell needs this many observations (after ±1h folding) at the queried hour
 // before it's worth showing. 1 sighting is noise.
 const MIN_COUNT = 2;
+// All-hours fallback: a cell with this many observations across ANY hour still
+// shows (at a dampened probability) even when the queried hour has too few.
+// Without this, hotspots "disappear" for most of the day — a spot seen only at
+// 9am used to vanish from the 3pm map entirely, which reads as flaky.
+const ALLHOURS_MIN = 3;
+// Fallback probability ceiling — hour-matched signal should always read stronger.
+const ALLHOURS_CAP = 0.5;
 // Collapse repeat reports of the SAME spot within this window into one observation.
 // A single persistent Waze police alert is re-served on every client's bbox poll
 // (every ~60s, ×N clients), so without this one real sighting would otherwise
@@ -50,10 +59,18 @@ const MIN_COUNT = 2;
 const DEDUP_MS = 15 * 60 * 1000;
 
 let obs = [];        // [{ lng, lat, ts }]
-let recentCell = {}; // cellId -> last-recorded ts, for DEDUP_MS collapsing (pruned in maintenance)
+// 'cellId@bucket' -> ts, for DEDUP_MS collapsing. A Map (not a plain object):
+// insertion order gives O(1) oldest-eviction below, and — critically — it is
+// HARD-CAPPED. The old plain object had no size limit and its only cleanup was
+// "older than HORIZON_MS", so anonymous /api/waze polls with rotating wide
+// bboxes could insert fresh keys for 30 days straight and OOM the process
+// (obs has a cap; this map didn't).
+let recentCell = new Map();
+const RECENT_CELL_MAX = 300000; // ~ tens of MB worst case, bounded
 let dirty = false;
 let flushTimer = null;
 let flushInFlight = false;
+let writeGen = 0;    // see store.js — `dirty` must not clear before the write lands
 
 function ensureDir() { try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (e) { /* exists */ } }
 
@@ -80,6 +97,7 @@ function load() {
 
 function scheduleFlush() {
   dirty = true;
+  writeGen++;
   if (flushTimer) return;
   // Arm a timer even if a flush is in flight — that flush snapshotted at its
   // start, so a write landing during it must trigger a follow-up flush or be lost.
@@ -90,13 +108,14 @@ async function flush() {
   if (flushInFlight) return;
   if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
   if (!dirty) return;
-  dirty = false;
   flushInFlight = true;
+  const gen = writeGen;
   ensureDir();
   const tmp = FILE + '.' + process.pid + '.tmp';
   try {
     await fsp.writeFile(tmp, JSON.stringify(obs), 'utf8');
     await renameRetry(tmp, FILE);
+    if (writeGen === gen) dirty = false; // only once it's actually on disk
   } catch (e) {
     console.error('[hotspots] flush failed:', e.message);
     dirty = true;
@@ -161,12 +180,26 @@ function record(lng, lat, ts) {
   // Dedup the same persistent sighting (and multi-client polls of it): if this
   // cell was already recorded within DEDUP_MS, treat it as the same event.
   var cell = cellId(lng, lat);
-  var prev = recentCell[cell];
-  if (prev != null && ts - prev < DEDUP_MS) return;
-  recentCell[cell] = ts;
+  // Bucket the timestamp into DEDUP_MS windows and key on cell+window. The old
+  // test was `ts - prev < DEDUP_MS`, which goes NEGATIVE for any observation
+  // older than the last one recorded for this cell — so a historical backfill
+  // arriving newest-first (agent 'hotspot' items, collect-hotspots.js) had every
+  // entry after the first silently dropped, and the cell then fell below
+  // MIN_COUNT and never rendered at all. Bucketing makes the dedup depend on
+  // WHEN the sighting happened, not on the order it reached us.
+  var key = cell + '@' + Math.floor(ts / DEDUP_MS);
+  if (recentCell.has(key)) return;
+  recentCell.set(key, ts);
+  if (recentCell.size > RECENT_CELL_MAX) {
+    // Drop ~6% extra so eviction amortizes instead of firing on every insert.
+    let drop = recentCell.size - RECENT_CELL_MAX + (RECENT_CELL_MAX >> 4);
+    for (var ek of recentCell.keys()) { recentCell.delete(ek); if (--drop <= 0) break; }
+  }
   obs.push({ lng: lng, lat: lat, ts: ts });
-  // Hard cap so a runaway recorder can't grow this unboundedly between prunes.
-  if (obs.length > 200000) obs.splice(0, obs.length - 200000);
+  // Hysteresis cap: trimming ONE element per insert once at the cap was an
+  // O(n) memmove per sighting (O(n²) under sustained pressure). Trim a 10k
+  // block only once the buffer runs 5% over.
+  if (obs.length > 210000) obs.splice(0, obs.length - 200000);
   scheduleFlush();
 }
 
@@ -184,33 +217,47 @@ function query(minLng, minLat, maxLng, maxLat, hour) {
     var o = obs[i];
     if (now - o.ts > HORIZON_MS) continue;
     if (o.lng < minLng || o.lng > maxLng || o.lat < minLat || o.lat > maxLat) continue;
+    var id = cellId(o.lng, o.lat);
+    if (!cells[id]) cells[id] = { count: 0, total: 0, latest: 0 };
+    cells[id].total++; // any-hour tally — feeds the all-hours fallback
+    if (o.ts > cells[id].latest) cells[id].latest = o.ts;
     // Local hour AT THE SIGHTING, approximated from longitude (15°/hour) rather
     // than the server's clock. The client queries with the viewer's local hour, so
     // bucketing observations by server-local time would skew the whole model by the
     // server↔viewer offset (e.g. a UTC VPS vs US riders never lines up). Longitude
     // gives a server-timezone-independent local hour, good to within the ±1h fold.
     var oh = foldHour(new Date(o.ts).getUTCHours() + Math.round(o.lng / 15));
-    // Only count this observation if it landed in the queried hour window.
-    if (oh !== h && oh !== hPrev && oh !== hNext) continue;
-    var id = cellId(o.lng, o.lat);
-    if (!cells[id]) cells[id] = { count: 0, latest: 0 };
-    cells[id].count++;
-    if (o.ts > cells[id].latest) cells[id].latest = o.ts;
+    // Count toward the hour-matched score only if it landed in the queried window.
+    if (oh === h || oh === hPrev || oh === hNext) cells[id].count++;
   }
   var features = [];
   for (var id in cells) {
     if (!cells.hasOwnProperty(id)) continue;
     var c = cells[id];
-    if (c.count < MIN_COUNT) continue; // single sighting = no signal
+    var prob, count, allHours = false;
+    if (c.count >= MIN_COUNT) {
+      // Hour-matched signal: police are USUALLY here around this hour.
+      prob = Math.min(1, c.count / SATURATION);
+      count = c.count;
+    } else if (c.total >= ALLHOURS_MIN) {
+      // All-hours fallback: a known spot, just not proven at this hour — show it
+      // dampened so it never outshines an hour-matched hotspot. Keeps the layer
+      // populated around the clock instead of blinking out between patrol hours.
+      prob = Math.min(ALLHOURS_CAP, c.total / (SATURATION * 2));
+      count = c.total;
+      allHours = true;
+    } else {
+      continue; // too little signal either way
+    }
     var center = cellCenter(id);
-    var prob = Math.min(1, c.count / SATURATION);
     features.push({
       type: 'Feature',
       geometry: { type: 'Point', coordinates: center },
       properties: {
         prob: prob,
-        count: c.count,
+        count: count,
         hour: h,
+        allHours: allHours, // true = not hour-specific (popup says so)
         latest: c.latest,   // ms — lets the popup say "last seen X ago"
         kind: 'hotspot'     // marker so the client layer/popup can tell it apart
       }
@@ -226,9 +273,12 @@ function startMaintenance() {
     var now = Date.now();
     var before = obs.length;
     obs = obs.filter(function (o) { return now - o.ts <= HORIZON_MS; });
-    // Keep the dedup map from growing without bound — entries older than the
-    // dedup window can never suppress a new record again.
-    for (var k in recentCell) { if (now - recentCell[k] > DEDUP_MS) delete recentCell[k]; }
+    // Keep the dedup map from growing without bound. Keys are cell@bucket, so an
+    // entry is only still useful while a backfill for that window could arrive —
+    // hold them for the observation horizon rather than one dedup window, since
+    // historical ingest legitimately re-visits old buckets. (Map iteration with
+    // in-loop delete is safe; for..in does NOT see Map keys.)
+    for (var k of recentCell.keys()) { if (now - recentCell.get(k) > HORIZON_MS) recentCell.delete(k); }
     if (obs.length !== before) scheduleFlush();
   }, 5 * 60 * 1000).unref();
 }
@@ -242,5 +292,7 @@ module.exports = {
   query: query,
   flush: flush,
   flushSync: flushSync,
-  count: function () { return obs.length; }
+  count: function () { return obs.length; },
+  // Test/ops probe: current dedup-map size (bounded by RECENT_CELL_MAX).
+  dedupSize: function () { return recentCell.size; }
 };

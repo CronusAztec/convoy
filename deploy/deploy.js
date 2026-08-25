@@ -111,6 +111,14 @@ function unitFile(port, user, nodeBin) {
     'Environment=PORT=' + port,
     'Environment=BOTS=12',
     'Environment=NEARBY_KM=30',
+    // Shared agent-ingest key (also read by the police finder). A missing file is
+    // tolerated (the '-') so the server still boots if the key was never provisioned.
+    'EnvironmentFile=-/var/lib/convoy/agent.env',
+    // Supabase credentials (accounts + identity). Unlike agent.env this one is
+    // REQUIRED — the server exits at boot without it — but it still uses '-' so a
+    // missing file surfaces as the server's own clear error message rather than a
+    // systemd unit failure with nothing useful in the log.
+    'EnvironmentFile=-/var/lib/convoy/convoy.env',
     needCaps ? 'AmbientCapabilities=CAP_NET_BIND_SERVICE' : null,
     needCaps ? 'CapabilityBoundingSet=CAP_NET_BIND_SERVICE' : null,
     'Restart=always',
@@ -121,6 +129,156 @@ function unitFile(port, user, nodeBin) {
     'WantedBy=multi-user.target',
     ''
   ].filter((l) => l !== null).join('\n');
+}
+
+// Companion always-on service: the multi-source police finder. Sweeps regions and
+// (a) drives /api/waze so the hotspot model is built 24/7 even with nobody online,
+// and (b) pushes Citizen / speed-camera / keyless-Waze findings to /api/agent/update.
+// Supersedes the old collect-hotspots.js collector (which only did (a)). Runs as the
+// same user/node as convoy.service and reads the shared AGENT_KEY from agent.env.
+function finderUnitFile(port, user, nodeBin) {
+  return [
+    '[Unit]',
+    'Description=Convoy police finder (multi-source: Waze + Citizen + speed cameras)',
+    'After=network.target convoy.service',
+    'Wants=convoy.service',
+    '',
+    '[Service]',
+    'Type=simple',
+    'User=' + user,
+    'WorkingDirectory=/opt/convoy/server',
+    'ExecStart=' + nodeBin + ' /opt/convoy/server/police-finder.js',
+    'Environment=FINDER_URL=http://localhost:' + port,
+    // 15-min sweeps, 5s apart — gentle on OpenWeb Ninja / Citizen / Overpass (the
+    // server's 429 cooldown is the hard safety net). Static speed cameras refresh
+    // every 24th sweep (~6h).
+    'Environment=FINDER_INTERVAL_MS=900000',
+    'Environment=FINDER_STEP_MS=5000',
+    'Environment=CAMERA_EVERY=24',
+    // Shared key that authorizes /api/agent/update (same file the server reads).
+    'EnvironmentFile=-/var/lib/convoy/agent.env',
+    'Restart=always',
+    'RestartSec=10',
+    'NoNewPrivileges=true',
+    '',
+    '[Install]',
+    'WantedBy=multi-user.target',
+    ''
+  ].join('\n');
+}
+
+/* ---------------- Supabase credentials on the VPS ----------------
+   The three SUPABASE_* values are required for the server to boot at all. They
+   must never go in the tarball (server/.env is excluded) or in the tracked unit
+   file, so they live in /var/lib/convoy/convoy.env — 0600, owned by the service
+   user, outside the app tree where no deploy can touch it.
+
+   Values are taken from the local server/.env (or the ambient environment). If
+   they aren't available locally we do NOT clear what's already on the box — a
+   deploy from a machine without the secrets must leave a working server working. */
+const SUPABASE_VARS = ['SUPABASE_URL', 'SUPABASE_SECRET_KEY', 'SUPABASE_DB_URL'];
+const SUPABASE_OPTIONAL = ['SUPABASE_JWT_SECRET', 'AUTH_EMAIL_DOMAIN', 'SUPABASE_DB_CA'];
+
+// Read server/.env without a dependency. Ambient env wins, matching server.js.
+function localEnv() {
+  const out = {};
+  try {
+    const p = path.join(__dirname, '..', 'server', '.env');
+    fs.readFileSync(p, 'utf8').split(/\r?\n/).forEach((line) => {
+      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+      if (m) out[m[1]] = m[2].replace(/^["']|["']$/g, '');
+    });
+  } catch (e) { /* no local .env — ambient env only */ }
+  SUPABASE_VARS.concat(SUPABASE_OPTIONAL).forEach((k) => {
+    if (process.env[k]) out[k] = process.env[k];
+  });
+  return out;
+}
+
+function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'"; }
+
+// A value copied from .env.example but not actually filled in. Treating one of
+// these as real would push a broken credential and restart the server into the
+// crash loop this whole check exists to prevent — so they count as unset.
+function looksUnset(v) {
+  if (!v) return true;
+  const s = String(v).trim();
+  if (!s) return true;
+  return /\[YOUR-PASSWORD\]|\bPASSWORD\b|<[^>]*>|\byour[-_]|\bchangeme\b|\bxxx+\b/i.test(s);
+}
+
+// Decided once by checkSupabaseEnv(), acted on later by provisionSupabaseEnv().
+let supabasePlan = null;   // { write: bool, env: {...} }
+
+// Runs before ANY upload. Either the credentials are available locally (we'll
+// push them), or the box already has them (leave it alone), or neither is true —
+// in which case restarting the service would take the site down, so we stop now
+// while the server is still untouched.
+async function checkSupabaseEnv() {
+  const env = localEnv();
+  const have = SUPABASE_VARS.filter((k) => !looksUnset(env[k]));
+  const missing = SUPABASE_VARS.filter((k) => looksUnset(env[k]));
+  // Distinguish "never filled in" from "filled in with the example placeholder",
+  // because the fix is different and the second one is easy to stare past.
+  const placeholders = missing.filter((k) => env[k]);
+
+  if (!missing.length) {
+    console.log('-> Supabase env: pushing ' + have.length + ' values from server/.env');
+    supabasePlan = { write: true, env: env };
+    return;
+  }
+
+  const probe = await run(
+    'if [ -s /var/lib/convoy/convoy.env ] && grep -q "^SUPABASE_SECRET_KEY=." /var/lib/convoy/convoy.env; ' +
+    'then echo configured; else echo missing; fi', { allowFail: true });
+  if ((probe.out || '').indexOf('configured') >= 0) {
+    console.log('-> Supabase env: already on the server, leaving it untouched' +
+      (have.length ? ' (locally set: ' + have.join(', ') + ')' : ''));
+    supabasePlan = { write: false };
+    return;
+  }
+
+  console.error('');
+  console.error('  DEPLOY ABORTED — nothing was uploaded, the site is untouched.');
+  console.error('');
+  console.error('  Convoy keeps accounts in Supabase, and server.js exits at boot');
+  console.error('  without these. They are set neither locally nor on the VPS:');
+  missing.forEach((k) => console.error('      ' + k +
+    (placeholders.indexOf(k) >= 0 ? '   <- still the example placeholder, not a real value' : '')));
+  console.error('');
+  console.error('  Fill them in server/.env (see server/.env.example) and re-run.');
+  console.error('  Deploying without them would restart the service into a crash');
+  console.error('  loop and take https://odoreeci.tech offline.');
+  console.error('');
+  throw new Error('Supabase configuration missing: ' + missing.join(', '));
+}
+
+async function provisionSupabaseEnv() {
+  if (!supabasePlan || !supabasePlan.write) return;   // already configured on the box
+  const env = supabasePlan.env;
+
+  const lines = SUPABASE_VARS.concat(SUPABASE_OPTIONAL)
+    .filter((k) => env[k])
+    .map((k) => k + '=' + env[k]);
+
+  // Written with printf over the existing SSH session rather than uploaded as a
+  // file, so the secrets never touch a temp file on either machine. Permissions
+  // are set before the content lands.
+  const svc = await run('grep -oP "^User=\\K\\S+" /etc/systemd/system/convoy.service | head -1',
+    { allowFail: true });
+  const owner = (svc.out || '').trim() || 'convoy';
+  await step('Supabase credentials (/var/lib/convoy/convoy.env)',
+    'mkdir -p /var/lib/convoy && install -m 600 /dev/null /var/lib/convoy/convoy.env && ' +
+    'printf "%s\\n" ' + lines.map(shq).join(' ') + ' > /var/lib/convoy/convoy.env && ' +
+    'chown ' + owner + ':' + owner + ' /var/lib/convoy/convoy.env 2>/dev/null; ' +
+    'echo "$(grep -c . /var/lib/convoy/convoy.env) vars, mode $(stat -c %a /var/lib/convoy/convoy.env)"');
+
+  // An already-installed unit (update mode) won't have the EnvironmentFile line
+  // that unitFile() now emits. Insert it idempotently so the restart picks it up.
+  await step('ensure the service loads convoy.env',
+    "grep -q 'EnvironmentFile=-/var/lib/convoy/convoy.env' /etc/systemd/system/convoy.service || " +
+    "sed -i '/^\\[Service\\]/a EnvironmentFile=-/var/lib/convoy/convoy.env' /etc/systemd/system/convoy.service; " +
+    'systemctl daemon-reload; echo ok', { quiet: true });
 }
 
 function checkHttp(url) {
@@ -187,6 +345,11 @@ function checkWs(host, port) {
   }
   console.log('Connected to ' + HOST + ' as ' + USER + '  (mode: ' + MODE + ')');
 
+  // Check the Supabase credentials BEFORE anything is uploaded or overwritten.
+  // Aborting later would leave /opt/convoy holding new code that the running
+  // (old) process hasn't loaded — fine until the next restart, then a crash loop.
+  await checkSupabaseEnv();
+
   await upload(TARBALL, '/tmp/convoy.tgz');
   console.log('-> uploaded app bundle (' + Math.round(fs.statSync(TARBALL).size / 1024) + ' KB)');
 
@@ -212,7 +375,19 @@ function checkWs(host, port) {
     'cd /opt/convoy/server && npm install --omit=dev --no-fund --no-audit 2>&1 | tail -1');
   await step('ownership', 'chown -R convoy:convoy /opt/convoy', { quiet: true });
 
+  /* ---------------- Supabase credentials ----------------
+     Accounts and identity live in Supabase, and the server exits at boot without
+     these. The tarball deliberately excludes server/.env, so they have to reach
+     the box some other way: a 0600 EnvironmentFile in /var/lib/convoy, outside
+     the app tree, so no deploy can overwrite or ship it.
+
+     This runs BEFORE the service restart below. Getting that order wrong would
+     restart the server into a crash loop and take the site down until the file
+     landed. */
+  await provisionSupabaseEnv();
+
   let port = 80;
+  let svcUser = null, nodeBin = null; // known after full mode; grepped back in update mode
   if (MODE === 'full') {
     const busy = await run('ss -tlnH 2>/dev/null | awk \'{print $4}\' | grep -qE ":80$" && echo busy || echo free');
     if (busy.out.indexOf('busy') >= 0) port = 5173;
@@ -223,8 +398,8 @@ function checkWs(host, port) {
       'if [ -x /usr/bin/node ] && sudo -u convoy /usr/bin/node -v >/dev/null 2>&1; then echo "user=convoy bin=/usr/bin/node"; ' +
       'else echo "user=root bin=$(command -v node || echo /usr/local/bin/node)"; fi');
     const dm = /user=(\S+)\s+bin=(\S+)/.exec(dec.out) || [];
-    const svcUser = dm[1] || 'root';
-    const nodeBin = dm[2] || '/usr/bin/node';
+    svcUser = dm[1] || 'root';
+    nodeBin = dm[2] || '/usr/bin/node';
     console.log('-> service runs as "' + svcUser + '" using ' + nodeBin +
       (svcUser === 'root' ? '  (unprivileged user could not reach a node binary)' : ''));
 
@@ -248,6 +423,58 @@ function checkWs(host, port) {
     await step('restart service', 'systemctl restart convoy', { quiet: true });
   }
 
+  // Provision the shared agent-ingest key (agent.env) that BOTH convoy.service and
+  // the police finder read. Generated once and persisted in DATA_DIR so it survives
+  // deploys; never regenerated (that would silently break a running finder). The
+  // server needs AGENT_KEY to accept the finder's Citizen/camera pushes.
+  {
+    if (!svcUser || !nodeBin) {
+      const cu = await run('grep -oP "^User=\\K\\S+" /etc/systemd/system/convoy.service | head -1', { allowFail: true });
+      const cb = await run('grep -oP "^ExecStart=\\K\\S+" /etc/systemd/system/convoy.service | head -1', { allowFail: true });
+      svcUser = (cu.out || '').trim() || svcUser;
+      nodeBin = (cb.out || '').trim() || nodeBin;
+    }
+    const svc = svcUser || 'convoy';
+    await step('shared agent key (/var/lib/convoy/agent.env)',
+      'mkdir -p /var/lib/convoy; ' +
+      "if [ ! -s /var/lib/convoy/agent.env ]; then printf 'AGENT_KEY=%s\\n' \"$(head -c24 /dev/urandom | od -An -tx1 | tr -d ' \\n')\" > /var/lib/convoy/agent.env; fi; " +
+      'chmod 600 /var/lib/convoy/agent.env; chown ' + svc + ':' + svc + ' /var/lib/convoy/agent.env 2>/dev/null || true; ' +
+      'echo "agent.env ready ($(wc -c < /var/lib/convoy/agent.env) bytes)"',
+      { quiet: true, allowFail: true });
+
+    // Make sure the ALREADY-RUNNING convoy.service loads agent.env. Full mode wrote a
+    // fresh unit that already has the line; update mode reuses the on-disk unit, so
+    // insert it idempotently and reload+restart so the server picks up AGENT_KEY.
+    await step('ensure server loads agent.env',
+      "grep -q 'EnvironmentFile=-/var/lib/convoy/agent.env' /etc/systemd/system/convoy.service || " +
+      "sed -i '/^\\[Service\\]/a EnvironmentFile=-/var/lib/convoy/agent.env' /etc/systemd/system/convoy.service; " +
+      'systemctl daemon-reload; systemctl restart convoy',
+      { quiet: true, allowFail: true });
+  }
+
+  // Retire the old single-source collector (the finder supersedes it; running both
+  // would double-poll /api/waze and burn twice the OpenWeb Ninja quota).
+  await step('retire old hotspot collector (superseded)',
+    'systemctl disable --now convoy-collector 2>/dev/null || true; ' +
+    'rm -f /etc/systemd/system/convoy-collector.service; systemctl daemon-reload || true',
+    { quiet: true, allowFail: true });
+
+  // Install/refresh the multi-source police finder as its own always-on service,
+  // running as the same user/node as convoy.service. allowFail: the site is fine
+  // without it — prefer the unprivileged user and let a wrong guess fail loudly.
+  {
+    const finderUser = svcUser || 'convoy';
+    const finderNode = nodeBin || '/usr/bin/node';
+    const tmpFinder = path.join(os.tmpdir(), 'convoy-police-finder.service.tmp');
+    fs.writeFileSync(tmpFinder, finderUnitFile(port, finderUser, finderNode));
+    await upload(tmpFinder, '/tmp/convoy-police-finder.service');
+    fs.unlinkSync(tmpFinder);
+    await step('police finder service',
+      'mv /tmp/convoy-police-finder.service /etc/systemd/system/convoy-police-finder.service && ' +
+      'systemctl daemon-reload && systemctl enable convoy-police-finder >/dev/null 2>&1; systemctl restart convoy-police-finder',
+      { quiet: true, allowFail: true });
+  }
+
   if (PUBKEY_PATH && fs.existsSync(PUBKEY_PATH)) {
     const key = fs.readFileSync(PUBKEY_PATH, 'utf8').trim();
     const keyBody = key.split(' ')[1];
@@ -259,9 +486,10 @@ function checkWs(host, port) {
   }
 
   await step('service health',
-    'sleep 2; echo "state: $(systemctl is-active convoy)"; ' +
+    'sleep 3; echo "convoy: $(systemctl is-active convoy)  finder: $(systemctl is-active convoy-police-finder)"; ' +
     'curl -s -m 6 -o /dev/null -w "local http: %{http_code}\\n" http://127.0.0.1:' + port + '/ ; ' +
-    'journalctl -u convoy -n 6 --no-pager --output=cat', { allowFail: true });
+    'echo "--- convoy ---"; journalctl -u convoy -n 5 --no-pager --output=cat; ' +
+    'echo "--- police-finder ---"; journalctl -u convoy-police-finder -n 6 --no-pager --output=cat', { allowFail: true });
 
   conn.end();
 

@@ -4,6 +4,10 @@ node_modules/
 # server runtime data — accounts & token secret, NEVER commit
 server/data/
 
+# env files — API keys / secrets (TOMTOM_KEY, WAZE_KEY, …), loaded by server.js. NEVER commit
+.env
+**/.env
+
 # self-hosted Piper TTS — binary + voice model, installed on the VPS by deploy/setup-tts.js
 tts/
 
@@ -24,6 +28,18 @@ nul
 # runtime logs (server boot/run output, deploy diag, etc.) — never commit
 *.log
 logs/
+
+# stray credentials from local testing (a live Supabase access token) — NEVER commit
+tok.json
+
+# local AI-tooling config (MCP servers, skill packs) — machine-local, not project source
+.mcp.json
+.agents/
+.claude/
+skills-lock.json
+
+# local scratch output from flick/testing
+flick-output/
 
 # Capacitor / Android build artifacts (the android/ source IS tracked; build outputs are not)
 www/

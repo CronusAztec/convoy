@@ -1,0 +1,42 @@
+[Unit]
+Description=Convoy police finder (multi-source, always-on)
+# Needs the API up: the finder POSTs region bboxes to /api/waze (records live police
+# sightings into the hotspot model) and pushes Citizen / speed-camera / keyless-Waze
+# findings to /api/agent/update, which merges them into the feeds clients already poll.
+# Supersedes convoy-collector.service (that only drove the Waze source).
+After=network.target convoy.service
+Wants=convoy.service
+
+[Service]
+Type=simple
+User=convoy
+WorkingDirectory=/opt/convoy/server
+ExecStart=/usr/bin/node /opt/convoy/server/police-finder.js
+# Talk to the local API. Port must match convoy.service's PORT.
+Environment=FINDER_URL=http://localhost:5173
+# 15-min sweeps, 5s apart — gentle on the OpenWeb Ninja free tier (the server's 429
+# cooldown is the hard safety net) and on Citizen/Overpass. Speed cameras (static)
+# refresh every 24th sweep (~6h). Edit collect-regions.json to choose coverage.
+Environment=FINDER_INTERVAL_MS=900000
+Environment=FINDER_STEP_MS=5000
+Environment=CAMERA_EVERY=24
+# Google Maps incidents (best-effort, self-disabling like keyless-Waze). Google has
+# no official public API for live police reports, so this stays idle until you point
+# it at a reachable Maps-incident feed. Uncomment + set to a URL template with bbox
+# placeholders {minLat}/{minLng}/{maxLat}/{maxLng} (and optionally {cLat}/{cLng}):
+# Environment=GOOGLE_INCIDENTS_URL=https://your-maps-incident-proxy.example/incidents?bl={minLat},{minLng}&tr={maxLat},{maxLng}
+# Environment=FINDER_GOOGLE=0   # or turn the source off entirely
+# AGENT_KEY (shared with convoy.service) enables pushing Citizen/camera findings.
+# deploy.js writes it here; a missing file is tolerated (the finder still builds the
+# Waze hotspot model, it just can't push the other sources).
+EnvironmentFile=-/var/lib/convoy/agent.env
+Restart=always
+RestartSec=10
+
+# hardening (optional but free)
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

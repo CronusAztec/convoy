@@ -17,10 +17,33 @@ otherwise it falls back to solo. One dependency (`ws`), no database, no API keys
 
 ## Features
 
-- **Accounts & friends** — register / log in / recover (recovery codes), or ride
-  as a guest. Passwords are scrypt-hashed server-side; sessions are stateless
-  HMAC tokens (revocable via a `tokenVersion` bump). Add friends by username,
-  see who's online, invite friends to a convoy even when they're off your map.
+- **Accounts & friends** — register / log in / recover, or ride as a guest.
+  Identity is **Supabase Auth**: the server proxies GoTrue so the secret key
+  never reaches a client, and riders hold a real Supabase session (short-lived
+  access token + refresh token). Add friends by username, see who's online,
+  invite friends to a convoy even when they're off your map.
+- **Email confirmation gates the social layer** — where a mailer is configured,
+  registering takes an email address and a confirmation link is sent. Until it is
+  opened, other riders appear as **"Rider" with no stats** — the pins, cars and
+  movement are all still there, so the map works; you just can't see *who*.
+  Opening the link lifts it instantly, over the websocket, without a reconnect.
+  Guests and accounts that predate email support are not affected, and with
+  `RESEND_API_KEY` unset nothing is gated at all.
+- **Sign in however you like** — a username and password is the baseline and
+  works with no email at all, with a one-shot recovery code as the way back in.
+  On top of that, and all optional per deployment: sign up with an email and
+  confirm it, sign in with either the username or the address, reset the password
+  by emailed link, sign in with no password at all (a link mailed to a confirmed
+  address), change the address on an account, and **social sign-in** — Google
+  plus Apple, GitHub, Discord, Microsoft and the rest of Supabase's providers,
+  over PKCE with the verifier held server-side. All of it works in the **APK**
+  as well as the browser: social sign-in opens the provider in a Chrome Custom
+  Tab (Google refuses OAuth in an embedded WebView) and returns as a deep link,
+  and mailed links open straight into the app via Android App Links — or into
+  the website, unchanged, on anything else. Mail goes out through
+  [Resend](https://resend.com); leave `RESEND_API_KEY` and `OAUTH_PROVIDERS`
+  unset and the app is exactly the username-only one it was. See
+  [DEPLOY.md](DEPLOY.md) for the dashboard and DNS setup each needs.
 - **Map** — MapLibre GL (GPU-rendered, smooth pan/zoom/rotate/pitch) with CARTO basemaps.
   Dark, light, and voyager styles; auto-matches your theme.
 - **Routes** — search any destination (Nominatim) or tap the map → driving routes via
@@ -108,14 +131,20 @@ js/scanners.js          police-scanner directory (OpenMHz)
 js/overlays.js          weather radar + traffic heatmap + hazard pins
 js/dragy.js             0–60 / drag-timer performance meter
 js/ui.js                panels, dock, forms, settings, onboarding
-js/auth.js              register/login/guest, token storage, boot gating
+js/auth.js              register/login/guest/social, email links, session + refresh, boot gating
 js/native.js            Android native bridge (bg GPS, BLE radar, SABRE); no-op on web
 js/app.js               boot
 server/server.js        realtime server: static hosting + ws + REST auth + TomTom/TTS proxies
-server/auth.js          stateless HMAC token mint/verify
-server/store.js         JSON-file user store: scrypt hashing, friends, recovery, atomic flush
+server/supabase.js      Supabase Auth (GoTrue) client + ES256 access-token verification
+server/db.js            Postgres data layer: profiles, friends, stats, queued writes
+server/store.js         account store — in-memory read cache over Supabase, recovery codes
+server/mailer.js        outbound email over Resend: transport + link/notice templates
+server/oauth.js         social sign-in: provider registry + server-held PKCE state
+server/migrations/      SQL applied to the Supabase project, in order
 server/tomtom.js        TomTom routing + traffic proxy (key from TOMTOM_KEY env, never client-side)
+server/overpass.js      OpenStreetMap (Overpass) proxy + cache — the endpoint sends no CORS header
 server/bots.js          server-side bots + shared geo helpers
 deploy/                 VPS deploy scripts + systemd unit (see DEPLOY.md)
 android/                Capacitor Android shell (Java plugins under app/src/main/java/...)
+  AuthPlugin.java       social sign-in + mailed links: Custom Tab out, deep links back (APK only)
 ```

@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -20,6 +20,54 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- Social sign-in comes back through here. The provider round-trip
+                 runs in a Custom Tab (see AuthPlugin — Google refuses OAuth in an
+                 embedded WebView), and the WebView's own https://localhost origin
+                 is not somewhere anyone can redirect TO. So the flow ends at a
+                 scheme this app owns, and Android delivers it to MainActivity.
+
+                 launchMode="singleTask" above is load-bearing: it brings the
+                 EXISTING activity forward and delivers this through
+                 onNewIntent — clearing the Custom Tab that sits above it —
+                 rather than starting a second copy of the app on top of the one
+                 that is midway through signing in.
+
+                 The host is pinned to "auth" so this claims one specific link
+                 shape and not every tech.odoreeci.convoy:// URI. -->
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="tech.odoreeci.convoy" android:host="auth" />
+            </intent-filter>
+
+            <!-- App Links: the links Convoy EMAILS (password reset, email
+                 confirmation, passwordless sign-in, email change). Opened on a
+                 phone with the app installed, Android hands them straight here
+                 instead of to a browser.
+
+                 autoVerify="true" is what makes that automatic and silent: at
+                 install time Android fetches
+                 https://odoreeci.tech/.well-known/assetlinks.json and only
+                 honours this filter if the certificate THIS APK is signed with
+                 is listed there (the server builds that file — see
+                 ANDROID_CERT_SHA256). Fail verification and nothing breaks; the
+                 links just keep opening in the browser, which still works.
+
+                 pathPrefix="/l" is deliberate and load-bearing. App Links match
+                 on PATH ONLY — query strings are ignored — so claiming the
+                 mailed links in their old "/?cv=reset&token=…" shape would have
+                 meant claiming "/", i.e. every link to the website, the APK
+                 download page included. Emails point at /l/<kind> so the claim
+                 covers those four links and nothing else. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="odoreeci.tech" android:pathPrefix="/l" />
+                <data android:scheme="https" android:host="www.odoreeci.tech" android:pathPrefix="/l" />
             </intent-filter>
 
         </activity>
@@ -58,11 +106,38 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
-    <!-- Hardware radar detector over BLE (Escort/Bel via the esclib protocol) -->
+    <!-- Hardware radar detector over BLE (Escort/Bel via the esclib protocol).
+         The SCAN/CONNECT runtime permissions exist only on API 31+; minSdk is
+         24, so Android 7–11 also needs the legacy pair (granted at install)
+         or the detector feature is dead on every pre-12 device. -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
         android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
 
     <!-- BLE feature is optional: the app must work on devices without it. -->
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+
+    <!-- Package visibility (Android 11+). Without this, queryBroadcastReceivers()
+         in SabrePlugin.publish() returns an empty list no matter what is
+         installed, so publishing a crowd report to a SABRE host was a silent
+         no-op on every modern device. -->
+    <queries>
+        <intent>
+            <action android:name="app.sabre.CROWD" />
+        </intent>
+        <!-- Custom Tabs (social sign-in). Under Android 11+ package visibility a
+             browser the app cannot SEE is a browser it cannot launch: without
+             this, CustomTabsIntent finds no provider and every provider sign-in
+             falls back to a plain VIEW intent — or, on a device with no default
+             browser resolved, fails outright. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
 </manifest>

@@ -4,6 +4,7 @@
   "description": "Convoy — ride together. Passenger-side multiplayer map app.",
   "private": true,
   "scripts": {
+    "test": "node test/run.js",
     "serve": "node server/server.js",
     "copy-web": "node scripts/copy-web.js",
     "android:add": "npm run copy-web && cap add android",
