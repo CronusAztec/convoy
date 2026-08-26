@@ -213,7 +213,14 @@ function buildTarball() {
     // protects the secrets and leaves the box's real files untouched on extract.
     '--exclude=server/.env', '--exclude=server/data', '--exclude=*.secret',
     '--exclude=deploy/convoy_deploy_key', '--exclude=deploy/convoy_deploy_key.pub',
-    'index.html', 'css', 'js', 'server', 'README.md', 'DEPLOY.md'
+    // 'legal' is load-bearing, not documentation: server.js serves it at /terms,
+    // /privacy, /notices and /delete-account, the in-app consent gate links
+    // straight to those URLs, and /delete-account is the account-deletion URL
+    // registered with Google Play. Leaving it out of the tarball ships a build
+    // where every one of those 404s — which is a store-policy violation, not a
+    // cosmetic gap.
+    'index.html', 'css', 'js', 'legal', 'server',
+    'README.md', 'DEPLOY.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md'
   );
   run('tar', args, { cwd: ROOT, label: 'tarball' });
   log('   ' + Math.round(fs.statSync(TARBALL).size / 1024) + ' KB → ' + TARBALL);

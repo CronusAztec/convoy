@@ -41,7 +41,7 @@ node deploy.js update     # push files + restart, ~5 seconds
 
 Build the bundle (run in the project root before deploying) with:
 ```powershell
-tar -czf "$env:TEMP\convoy.tgz" --exclude=node_modules --exclude=.git --exclude=.claude index.html css js server README.md DEPLOY.md
+tar -czf "$env:TEMP\convoy.tgz" --exclude=node_modules --exclude=.git --exclude=.claude index.html css js legal server README.md DEPLOY.md LICENSE THIRD-PARTY-NOTICES.md
 ```
 
 Helpers: `node deploy/diag.js` prints service status + logs; `node deploy/livetest.js`
