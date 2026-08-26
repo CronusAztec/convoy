@@ -139,7 +139,7 @@
           if (calls.length) P.lastTime = callTime(calls[calls.length - 1]);
           updateStatus();
           if (!P.current && !P.paused) playNext();
-          else if (!calls.length) setNow('Listening — quiet right now', true);
+          else if (!calls.length) setNow('Listening. Quiet right now', true);
         } else {
           var added = 0;
           for (var i = 0; i < calls.length; i++) {
@@ -160,7 +160,7 @@
   function playNext() {
     if (!P.sys || P.paused) return;
     var c = P.queue.shift();
-    if (!c) { P.current = null; setNow('Listening — quiet right now', true); return; }
+    if (!c) { P.current = null; setNow('Listening. Quiet right now', true); return; }
     P.current = c;
     var a = audioEl();
     a.src = c.url;
@@ -310,14 +310,14 @@
         return;
       }
       if (res.error) {
-        list.innerHTML = '<div class="scanner-empty">Couldn’t reach the scanner directory — check your connection and try again.</div>';
+        list.innerHTML = '<div class="scanner-empty">Couldn’t reach the scanner directory. Check your connection and try again.</div>';
         return;
       }
       var loc = res.loc || {}, sys = res.systems || [];
       sub.textContent = [loc.city, loc.state].filter(Boolean).join(', ') || loc.stateName || 'near you';
       if (!sys.length) {
         list.innerHTML = '<div class="scanner-empty">No live scanner feeds found for your area' +
-          (loc.country && loc.country !== 'US' ? ' — OpenMHz covers the US.' : '.') + '</div>';
+          (loc.country && loc.country !== 'US' ? '. OpenMHz covers the US.' : '.') + '</div>';
         return;
       }
       var shown = sys.slice(0, 40);
@@ -331,9 +331,15 @@
     });
   }
 
-  // Wire the SCANNERS chip (present in the static markup).
+  // Wire the SCANNERS chip (present in the static markup). Gated the first time:
+  // receiving public-safety radio in a moving car is restricted in a number of
+  // US states and licensed in some countries, and the rider is told once before
+  // the directory opens rather than only in the Terms.
   var chip = document.getElementById('chip-scan');
-  if (chip) chip.addEventListener('click', open);
+  if (chip) chip.addEventListener('click', function () {
+    if (A.ui && A.ui.legalGate) A.ui.legalGate('scanner', open);
+    else open();
+  });
 
   A.scanners = { open: open, close: close, find: find, isPolice: isPolice, stop: stopListen };
 })();

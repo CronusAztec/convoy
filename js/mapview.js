@@ -45,10 +45,10 @@
     if (s === 'auto') {
       // A theme can pin its own basemap (recolored to match in ensureLayers).
       var def = A.themes && A.themes.get(ST.themeResolved());
-      if (def && def.map && def.map.base && STYLES[def.map.base]) return STYLES[def.map.base];
+      if (def && def.map && def.map.base && U.own(STYLES, def.map.base)) return STYLES[def.map.base];
       return ST.themeIsDark() ? STYLES.dark : STYLES.voyager;
     }
-    return STYLES[s] || STYLES.dark;
+    return U.own(STYLES, s) ? STYLES[s] : STYLES.dark;
   }
 
   /* =================== init =================== */
@@ -1098,7 +1098,7 @@
       function () {
         // Denied/unavailable: don't strand the user on the globe — settle into the demo city.
         landIntro(S.playerStart, 13.4);
-        A.ui.toast('Location blocked (needs https/localhost) — staying in demo city', 'warn');
+        A.ui.toast('Location blocked (needs https/localhost). Staying in demo city', 'warn');
       },
       { enableHighAccuracy: true, timeout: 8000 }
     );

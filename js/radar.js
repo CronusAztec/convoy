@@ -259,7 +259,11 @@
     // steady on/off signal now: it engages above the gate at ONE fixed depth and
     // cadence instead of racing as risk climbs — presence of the pulse is the
     // information, not its tempo.
-    var sense = HEART_SENSE[s('heartSense', 'normal')] || HEART_SENSE.normal;
+    // Own-property lookups: these keys come from persisted settings, so a stored
+    // 'constructor' or 'toString' would resolve to an inherited Object.prototype
+    // member — truthy, so it sails past the '|| default' beside it and then blows
+    // up on .gate / .freq. Same probe util.js and themes.js already use.
+    var sense = (U.own(HEART_SENSE, s('heartSense', 'normal')) ? HEART_SENSE[s('heartSense', 'normal')] : null) || HEART_SENSE.normal;
     var risk = computeRisk(targets);
     var heartActive = wantHeart && risk >= sense.gate;
 
@@ -277,10 +281,10 @@
     // ping-rate setting scales it, never the threat's distance.
     if (targets.length && !heartActive && wantPings) {
       var top = targets[0];
-      var prof = SND_PROFILE[top.kind] || SND_PROFILE.air;
+      var prof = (U.own(SND_PROFILE, top.kind) ? SND_PROFILE[top.kind] : null) || SND_PROFILE.air;
       if (now >= snd.nextPing) {
         ping(prof, panFor(top));
-        var rateMul = PING_RATE[s('pingRate', 'normal')] || 1;
+        var rateMul = (U.own(PING_RATE, s('pingRate', 'normal')) ? PING_RATE[s('pingRate', 'normal')] : 0) || 1;
         snd.nextPing = now + Math.round(PING_BASE_MS * rateMul);
       }
       // New closest contact since last tick ⇒ one-shot sting + voice callout
@@ -478,7 +482,7 @@
       ? (altStr(t.alt) || (far ? '(muted)' : 'AIRBORNE'))
       : far ? '(muted)'
         : (t.kind === 'police' ? 'POLICE' : t.kind === 'station' ? 'STATION' : t.kind === 'alpr' ? 'ALPR' : 'CAMERA');
-    return '<button class="ralert ralert-' + t.kind + (far ? ' far' : '') + '" data-i="' + idx + '">' +
+    return '<button class="ralert ralert-' + U.esc(t.kind) + (far ? ' far' : '') + '" data-i="' + idx + '">' +
       '<span class="ralert-sig">' + sigPips(t) + '</span>' +
       '<span class="ralert-arr" style="transform:rotate(' + Math.round(t.rel) + 'deg)">' + ARROW + '</span>' +
       '<span class="ralert-mid">' +
@@ -732,7 +736,7 @@
         // Touch the AudioContext now so the next ping isn't gated by the
         // first-user-gesture rule (this click already counts, but be explicit).
         audioCtx();
-        if (A.ui) A.ui.toast('Radar audio on — pings by proximity', 'info');
+        if (A.ui) A.ui.toast('Radar audio on · pings by proximity', 'info');
       }
     });
     wire('radar-stop', function () { if (A.ui && A.ui.applyGhost) A.ui.applyGhost(false); });

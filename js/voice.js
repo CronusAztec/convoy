@@ -53,7 +53,7 @@
     if (A.native && A.native.ensureMic) {
       var okPerm = await A.native.ensureMic();
       if (!okPerm) {
-        if (!micDenied && A.ui) A.ui.toast('Mic permission denied — voice off', 'warn');
+        if (!micDenied && A.ui) A.ui.toast('Mic permission denied. Voice off', 'warn');
         micDenied = true;
         return false;
       }
@@ -66,7 +66,7 @@
     } catch (e) {
       // Only toast the first failure — the proximity poll would otherwise
       // re-attempt (and re-toast) every few seconds after a denial.
-      if (!micDenied && A.ui) A.ui.toast('Mic permission denied — voice off', 'warn');
+      if (!micDenied && A.ui) A.ui.toast('Mic permission denied. Voice off', 'warn');
       micDenied = true;
       return false;
     }
@@ -407,7 +407,7 @@
     if (!active) { if (!micDenied) startParty(ids); }
     else syncMembers(ids);
     if (proxIds.length && !lastProxCount && A.ui) {
-      A.ui.toast('Voice linked — ' + proxIds.length + ' rider' + (proxIds.length === 1 ? '' : 's') + ' in range', 'info');
+      A.ui.toast('Voice linked · ' + proxIds.length + ' rider' + (proxIds.length === 1 ? '' : 's') + ' in range', 'info');
     }
     lastProxCount = proxIds.length;
   }
@@ -418,8 +418,8 @@
     if (ST && ST.setSetting) ST.setSetting('proxVoice', m);
     if (A.net && A.net.isLive() && A.net.sendVoiceProx) A.net.sendVoiceProx(m);
     if (A.ui) {
-      A.ui.toast(m === 'off' ? 'Auto voice chat off — convoy voice only'
-        : 'Auto voice chat on — linking riders ' +
+      A.ui.toast(m === 'off' ? 'Auto voice chat off · convoy voice only'
+        : 'Auto voice chat on · linking riders ' +
           (m === 'radius' ? 'around you' : m === 'sight' ? 'in sight ahead' : 'on your road'), 'info');
     }
     reconcile();
@@ -502,8 +502,8 @@
     if (!ids.length || !A.net || !A.net.isLive()) {
       if (A.ui) {
         A.ui.toast(proxMode !== 'off'
-          ? 'No riders in voice range yet — voice links automatically when one is'
-          : 'Voice works in a live convoy — join one first', 'info');
+          ? 'No riders in voice range yet. Voice links automatically when one is'
+          : 'Voice works in a live convoy. Join one first', 'info');
       }
       return false;
     }
@@ -536,7 +536,7 @@
     if (!active) { retryStart(); return; }
     if (mode !== 'toggle') { setMode('toggle'); toggleOn = true; }
     else toggleOn = !toggleOn;
-    if (A.ui) A.ui.toast(toggleOn ? 'Mic on — tap again to mute' : 'Mic off', 'info');
+    if (A.ui) A.ui.toast(toggleOn ? 'Mic on · tap again to mute' : 'Mic off', 'info');
   }
 
   function setMode(m) {
@@ -552,9 +552,9 @@
 
   var MODE_ORDER = ['ptt', 'open', 'toggle'];
   var MODE_HINT = {
-    ptt: 'Push to talk — hold the mic button (or Space)',
-    open: 'Open mic — transmits when you speak',
-    toggle: 'Toggle — tap the mic button to talk / mute'
+    ptt: 'Push to talk · hold the mic button (or Space)',
+    open: 'Open mic · transmits when you speak',
+    toggle: 'Toggle · tap the mic button to talk / mute'
   };
   function cycleMode() {
     gestureResume();
@@ -587,7 +587,7 @@
     btn.addEventListener('pointercancel', up);
     btn.addEventListener('click', function () {
       if (mode === 'toggle') toggle();
-      else if (mode === 'open' && active && A.ui) A.ui.toast('Open mic — it transmits when you speak', 'info');
+      else if (mode === 'open' && active && A.ui) A.ui.toast('Open mic · transmits when you speak', 'info');
     });
     // The little mode chip cycles PTT → Open → Toggle. (It was never wired
     // before, which left every mode except hold-to-talk unreachable.)

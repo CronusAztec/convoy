@@ -351,6 +351,58 @@ sudo cp -r /tmp/convoy-update/* /opt/convoy/ && sudo chown -R convoy:convoy /opt
 sudo systemctl restart convoy
 ```
 
+## Pre-launch legal checklist
+
+The app ships with a full legal set — Terms of Service + EULA, Privacy Policy, an
+account-deletion page, and third-party notices — served from `legal/` at
+`/terms`, `/privacy`, `/delete-account` and `/notices`. They are complete and
+accurate about what Convoy actually does, **except for the operator details,
+which only you can supply.** Every one of those is rendered in a red highlight on
+the page so it cannot ship unnoticed.
+
+**Fill these in before any public launch or store submission:**
+
+| Placeholder | Where | Why it matters |
+|---|---|---|
+| `[LEGAL ENTITY NAME]` | terms, privacy, delete-account | A privacy policy naming no data controller is not a valid GDPR Art. 13 notice, and Play review rejects it |
+| `[REGISTERED ADDRESS]` / `[POSTAL ADDRESS]` | terms, privacy | Required of a controller; also the Play Console developer address |
+| `[JURISDICTION]` | terms §17 | Terms with no governing law are largely unenforceable |
+| `[REGION]` | privacy §6 | Where your server and Supabase project actually live — needed for the transfer disclosure |
+| `[APPOINT, OR STATE "not required"]` | privacy §1 | GDPR Art. 27 representative, if you serve the UK/EEA from outside it |
+
+Then check off:
+
+- [ ] Mailboxes live and monitored: `privacy@`, `abuse@`, `security@`, `legal@`
+      at your domain. They are published in the documents; a bounce is a
+      compliance failure.
+- [ ] `/privacy` and `/delete-account` reachable over HTTPS, and pasted into
+      **Play Console → App content → Privacy policy** and **Data deletion**.
+      Play requires the deletion URL to work *without* installing the app — it
+      does, but confirm it after your TLS is up.
+- [ ] **Data safety form** filled to match the Privacy Policy: precise location,
+      background location, email, user IDs, in-app messages, audio (transmitted
+      not recorded). Declare "data is not sold" and "data is not shared with
+      third parties for advertising".
+- [ ] Bump `LEGAL_VERSION` in `js/state.js` whenever you change either document
+      materially. That single constant re-opens the consent gate for every rider
+      and invalidates the feature legality acknowledgements. Keep it in step with
+      the version printed at the top of `legal/terms.html`.
+- [ ] Review the **third-party usage policies** in
+      [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) against your expected
+      traffic. Nominatim, the OSRM demo server and the public Overpass instances
+      are development infrastructure — running a launched app against them
+      breaches their terms. OpenSky and airplanes.live are non-commercial only.
+      Self-host or buy capacity first.
+- [ ] Confirm the age rating you declare matches the Terms: **16+**, with live
+      location, open chat, voice and user-generated reports.
+- [ ] If you have a lawyer, have them read `legal/terms.html` §§3–5 and §12.
+      Those sections are what stand between you and a claim after a collision,
+      and they are drafted to be read, not to be decorative.
+
+> Nothing here is legal advice. These documents are a thorough, accurate starting
+> point drafted against what the code actually does — they are not a substitute
+> for a lawyer in your jurisdiction.
+
 ## Heads-up (current limitations)
 
 - **Accounts exist, guests are open** — register/login/recovery run through Supabase

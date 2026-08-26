@@ -532,6 +532,25 @@
     return cum;
   }
 
+  // The trip line's own length, measured the SAME way progress is.
+  //
+  // progress comes from nearestOnRoute(), which can never exceed cum[last] (the
+  // haversine sum of the polyline vertices). line.total used to be the PROVIDER's
+  // road distance instead, which is computed independently and never reconciled
+  // with the polyline. Whenever the provider's number came out larger — even by a
+  // metre — three things broke:
+  //   - arrival (sim.js: progress >= line.total) became unreachable, so a live-GPS
+  //     trip never self-terminated: no "you have arrived", no auto parking pin,
+  //     and the card sat on "X left" forever;
+  //   - "distance left" never reached zero and the progress bar never filled;
+  //   - in preview playback, progress DOES run past cum[last], and posAt() then
+  //     interpolated with t > 1, flying the marker past the final coordinate.
+  // Measuring both ends of the comparison on the same line removes all three.
+  // S.route.distance keeps the provider's figure for display.
+  function lineTotal(cum, fallback) {
+    return (cum && cum.length) ? cum[cum.length - 1] : (fallback || 0);
+  }
+
   // position + bearing at progress meters along the line (cached segment index)
   function posAt(line, m) {
     var coords = line.coords, cum = line.cum;
@@ -658,7 +677,7 @@
       applyRoute(fastest, label, lngLat);                 // show the fastest route right away
       if (S.settings.avoidPolice) refinePoliceAvoid(from, lngLat, label, routes, fastest);
     }).catch(function () {
-      A.ui.toast('Could not reach the routing service — check your connection', 'warn');
+      A.ui.toast('Could not reach the routing service. Check your connection', 'warn');
     });
   }
 
@@ -732,7 +751,7 @@
             ((fastestHits - chosenHits) > 1 ? 's' : '') + (extraMin > 0 ? ' · +' + extraMin + ' min' : ''), 'success');
         } else if (chosenHits > 0) {
           A.ui.toast(chosenHits + ' police/camera' + (chosenHits > 1 ? 's' : '') +
-            ' near this route — best available', 'info');
+            ' near this route · best available', 'info');
         }
       };
 
@@ -881,7 +900,7 @@
   function planLoop(targetM) {
     if (loopBusy) return;
     var from = A.sim.playerPos();
-    if (!from) { A.ui.toast('No position yet — tap the locate button first', 'warn'); return; }
+    if (!from) { A.ui.toast('No position yet. Tap the locate button first', 'warn'); return; }
     loopBusy = true;
     if (S.trip && S.trip.active) endTrip(false);
     A.ui.toast('Planning a cruise loop…', 'info');
@@ -908,12 +927,12 @@
           } else {
             extra = 'smoothest of ' + routes.length + ' loops';
           }
-          A.ui.toast('Cruise loop ready — ' + U.fmtDist(best.distance, S.settings.units) +
+          A.ui.toast('Cruise loop ready · ' + U.fmtDist(best.distance, S.settings.units) +
             ' · ' + U.fmtDur(best.duration) + ' · ' + extra, 'success');
         });
       })
       .catch(function () {
-        A.ui.toast('Could not plan a loop from here — try again in a moment', 'warn');
+        A.ui.toast('Could not plan a loop from here. Try again in a moment', 'warn');
       })
       .finally(function () { loopBusy = false; });
   }
@@ -921,7 +940,7 @@
   // Loop-size chooser, anchored at the rider's position on the map.
   function promptLoop() {
     var from = A.sim.playerPos();
-    if (!from) { A.ui.toast('No position yet — tap the locate button first', 'warn'); return; }
+    if (!from) { A.ui.toast('No position yet. Tap the locate button first', 'warn'); return; }
     var km = S.settings.units === 'km';
     // [meters, label] — sized for a quick spin / a proper cruise / a long ride
     var opts = km ? [[8000, '8 km'], [16000, '16 km'], [32000, '32 km']]
@@ -931,7 +950,7 @@
       '<div class="prompt-label"><span class="prompt-pin">' +
       '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
       '<path d="M19.5 12a7.5 7.5 0 1 1-2.6-5.7"/><path d="M17.5 2.8v3.7h3.7"/></svg></span>' +
-      '<span class="prompt-name">Cruise loop — back to here</span></div>' +
+      '<span class="prompt-name">Cruise loop · back to here</span></div>' +
       '<div class="pop-sub">Loops you back around while avoiding police, stop signs &amp; traffic lights.</div>' +
       '<div class="pop-actions" id="loop-sizes"></div>' +
       '<div class="pop-actions"></div>';
@@ -975,7 +994,7 @@
       offSince: 0,        // perf-now ts when the rider first went off-route (0 = on route)
       follow: S.settings.followCam,
       camIntro: true,
-      line: { coords: r.coords, cum: r.cum, total: r.distance, _idx: 0 },
+      line: { coords: r.coords, cum: r.cum, total: lineTotal(r.cum, r.distance), _idx: 0 },
       cueIdx: 0,        // index of the next maneuver cue to announce
       warnedIdx: -1     // last maneuver we gave an advance warning for
     };
@@ -985,10 +1004,10 @@
     // flow so a desktop demo can preview a route without being yanked to home GPS.
     if (A.config && A.config.isNative && A.sim && A.sim.ensureWatch) A.sim.ensureWatch();
     renderEtaCard();
-    A.ui.toast('Navigation started — following your drive', 'success');
+    A.ui.toast('Navigation started. Following your drive', 'success');
     speak('Starting route to ' + (r.label || 'your destination') + '.');
     if (S.party && S.party.members.length) {
-      A.party.systemMsg('Trip started — convoy rolling to ' + r.label);
+      A.party.systemMsg('Trip started. Convoy rolling to ' + r.label);
     }
     ST.emit('trip', S.trip);
   }
@@ -1014,7 +1033,7 @@
     rerouting = true;
     var dest = S.route.dest.slice(), label = S.route.label;
     var from = A.sim.playerPos();
-    A.ui.toast('Off route — recalculating…', 'info');
+    A.ui.toast('Off route. Recalculating…', 'info');
     fetchRoutes(from, dest).then(function (routes) {
       if (!S.trip || !S.trip.active || !routes || !routes.length) return; // trip ended / no route
       var r = routes[0];
@@ -1027,7 +1046,7 @@
         features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: r.coords } }]
       });
       // Swap the trip onto the new line; progress restarts at the current origin.
-      S.trip.line = { coords: r.coords, cum: S.route.cum, total: r.distance, _idx: 0 };
+      S.trip.line = { coords: r.coords, cum: S.route.cum, total: lineTotal(S.route.cum, r.distance), _idx: 0 };
       S.trip.progress = 0;
       S.trip.cueIdx = 0;
       S.trip.warnedIdx = -1;

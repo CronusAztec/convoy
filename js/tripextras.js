@@ -97,7 +97,7 @@
       secs = pace > 0.1 ? remain / pace : r.duration;
     }
     var eta = U.fmtClock(new Date(Date.now() + secs * 1000));
-    return 'Heading to ' + r.label + ' — ETA ' + eta + ' (' + U.fmtDist(r.distance, S.settings.units) + '). Sent from Convoy.';
+    return 'Heading to ' + r.label + ', ETA ' + eta + ' (' + U.fmtDist(r.distance, S.settings.units) + '). Sent from Convoy.';
   }
 
   function doShare() {
@@ -107,7 +107,7 @@
       navigator.share({ text: text }).catch(function () { });
     } else if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(text).then(function () {
-        A.ui.toast('ETA copied — paste it anywhere', 'success');
+        A.ui.toast('ETA copied. Paste it anywhere', 'success');
       }, function () { legacyCopy(text); });
     } else {
       legacyCopy(text);
@@ -119,7 +119,7 @@
     ta.style.position = 'fixed'; ta.style.opacity = '0';
     document.body.appendChild(ta);
     ta.select();
-    try { document.execCommand('copy'); A.ui.toast('ETA copied — paste it anywhere', 'success'); }
+    try { document.execCommand('copy'); A.ui.toast('ETA copied. Paste it anywhere', 'success'); }
     catch (e) { A.ui.toast('Could not copy on this device', 'warn'); }
     document.body.removeChild(ta);
   }
@@ -159,7 +159,7 @@
         if (!p || !A.places) return;
         var nowSaved = A.places.toggleSave(p);
         sv.classList.toggle('saved', nowSaved);
-        A.ui.toast(nowSaved ? 'Saved — find it in search' : 'Removed from saved places', nowSaved ? 'success' : 'info');
+        A.ui.toast(nowSaved ? 'Saved. Find it in search' : 'Removed from saved places', nowSaved ? 'success' : 'info');
       });
       actions.insertBefore(sv, actions.firstChild);
     }

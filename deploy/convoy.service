@@ -7,6 +7,11 @@ Type=simple
 User=convoy
 WorkingDirectory=/opt/convoy/server
 ExecStart=/usr/bin/node /opt/convoy/server/server.js
+# Marks this unit as the production deployment: db.js refuses to boot without
+# SUPABASE_DB_CA when NODE_ENV=production (an unverified owner-role Postgres
+# connection is fail-open otherwise). Opt out explicitly with
+# SUPABASE_DB_STRICT_TLS=0 if you really mean to.
+Environment=NODE_ENV=production
 Environment=PORT=5173
 # Simulated riders. MUST stay 0 in production: bots are indistinguishable from
 # real people in the UI (real-looking names and cars, they accept convoy invites

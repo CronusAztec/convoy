@@ -136,7 +136,7 @@
       var pos = A.sim.playerPos();
       if (!pos) return;
       setPark(pos);
-      A.ui.toast('Parking pin dropped — tap Ⓟ to find your car later', 'success');
+      A.ui.toast('Parking pin dropped. Tap Ⓟ to find your car later', 'success');
     } else {
       A.mapview.map().flyTo({ center: [park.lng, park.lat], zoom: Math.max(A.mapview.map().getZoom(), 15.5), duration: ST.dur(900) });
       openParkPopup();

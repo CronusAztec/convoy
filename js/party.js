@@ -23,7 +23,7 @@
       members: [],
       chat: []
     };
-    systemMsg('Convoy created — invite riders from the Nearby tab');
+    systemMsg('Convoy created. Invite riders from the Nearby tab');
     ST.emit('party');
     A.ui.toast('Convoy "' + S.party.name + '" created', 'success');
   }
@@ -154,7 +154,7 @@
     if (!S.party) { A.ui.toast('Join a convoy first', 'warn'); return; }
     if (isLive()) { A.net.sendRally(lngLat[0], lngLat[1], label || 'Rally point'); return; }
     S.party.rally = { lng: lngLat[0], lat: lngLat[1], label: label || 'Rally point', byName: 'You', t: Date.now() };
-    systemMsg('Rally point set — ' + S.party.rally.label);
+    systemMsg('Rally point set · ' + S.party.rally.label);
     ST.emit('party');
   }
   function clearRally() {
@@ -175,7 +175,7 @@
     var had = !!lastRallySig;
     lastRallySig = sig;
     if (A.mapview && A.mapview.setRallyPoint) A.mapview.setRallyPoint(r || null);
-    if (r) A.ui.toast((r.byName || 'Convoy') + ' set a rally point — ' + (r.label || 'Rally point'), 'info');
+    if (r) A.ui.toast((r.byName || 'Convoy') + ' set a rally point · ' + (r.label || 'Rally point'), 'info');
     else if (had) A.ui.toast('Rally point cleared', 'info');
   });
 

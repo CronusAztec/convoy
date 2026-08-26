@@ -230,7 +230,7 @@
     };
     pushHist(result);
     renderResult(); renderHistory();
-    if (A.ui && A.ui.toast) A.ui.toast(mode.label + ' · ' + time.toFixed(2) + 's' + (result.pb ? ' — personal best!' : ''), 'success');
+    if (A.ui && A.ui.toast) A.ui.toast(mode.label + ' · ' + time.toFixed(2) + 's' + (result.pb ? '. Personal best!' : ''), 'success');
     // Sync the PB to the server (signed-in riders only) so it shows on profiles
     // and race results. Fire-and-forget — localStorage history is already the
     // source of truth locally; this makes it shared. The server only persists
@@ -363,13 +363,13 @@
 
   function statusText() {
     if (Date.now() - lastFixAt > 4000) return 'Waiting for a GPS fix… tap the locate control (⌖).';
-    if (phase === 'done' && result) return result.label + ' complete — re-arm for another run.';
+    if (phase === 'done' && result) return result.label + ' complete. Re-arm for another run.';
     if (phase === 'run') return 'Running… ' + (mode.type === 'dist'
       ? U.fmtDist(runDist, S.settings.units) + ' / ' + U.fmtDist(mode.meters, S.settings.units)
       : 'go!');
-    if (mode.from > 0) return 'Rolling start — dip below ' + Math.round(spVal(mode.from)) + ' ' + spUnitLo() + ', then floor it through it.';
+    if (mode.from > 0) return 'Rolling start. Dip below ' + Math.round(spVal(mode.from)) + ' ' + spUnitLo() + ', then floor it through it.';
     if (!staged) return 'Come to a complete stop to stage.';
-    return 'Staged — floor it when ready.';
+    return 'Staged. Floor it when ready.';
   }
 
   function progress() {
@@ -427,7 +427,7 @@
   function renderHistory() {
     if (!els.history) return;
     var h = loadHist();
-    if (!h.length) { els.history.innerHTML = '<div class="dragy-empty">No runs yet — your times will show up here.</div>'; return; }
+    if (!h.length) { els.history.innerHTML = '<div class="dragy-empty">No runs yet. Your times will show up here.</div>'; return; }
     var best = bestMap(h);
     els.history.innerHTML = h.slice(0, 14).map(function (r) {
       var pb = r.time === best[r.modeId] ? '<em class="dragy-pb">PB</em>' : '';
@@ -475,8 +475,14 @@
 
   /* ---------- wiring ---------- */
   ST.on('gpsfix', onFix);
+  // Gated the first time: a GPS drag timer on a public road is street racing,
+  // and "track and private land only" has to be said where someone taps the
+  // button, not only in §4 of the Terms.
   var chip = document.getElementById('chip-dragy');
-  if (chip) chip.addEventListener('click', open);
+  if (chip) chip.addEventListener('click', function () {
+    if (A.ui && A.ui.legalGate) A.ui.legalGate('perf', open);
+    else open();
+  });
 
   A.dragy = {
     open: open, close: close, setMode: setMode,

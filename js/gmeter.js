@@ -26,7 +26,7 @@
 
   function build() {
     box = A.hud.card('hud-gmeter');
-    box.title = 'G-force — tap to reset peak';
+    box.title = 'G-force · tap to reset peak';
     box.innerHTML =
       '<div class="gm-ring"><i class="gm-cross-h"></i><i class="gm-cross-v"></i><i class="gm-dot" id="gm-dot"></i></div>' +
       '<span class="hc-l">g-force</span><i class="hc-s" id="gm-s">peak 0.00 g</i>';

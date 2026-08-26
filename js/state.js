@@ -106,6 +106,11 @@
     profile: U.deepClone(DEFAULT_PROFILE),
     settings: U.deepClone(DEFAULT_SETTINGS),
     onboarded: false,
+    // What this rider agreed to, and when. Kept as a record rather than a
+    // boolean because the thing that matters legally is WHICH version of the
+    // terms was accepted and at what moment — see LEGAL_VERSION.
+    consent: null,         // { version, at, passenger, age, terms }
+    featureAck: {},        // riskyFeature -> ms timestamp of the legality notice
     auth: null,            // { token, username } when signed in
     friends: [],           // [{id, username, name, emoji, paint, online}] (server-synced)
     friendReqs: [],        // incoming friend requests [{id, username, name, emoji, paint}]
@@ -163,6 +168,8 @@
       // Neutral-theme migration: anyone still on the old neon-cyan default moves to the new neutral accent.
       if (state.settings.accent === '#00f0ff') state.settings.accent = DEFAULT_SETTINGS.accent;
       state.onboarded = !!saved.onboarded;
+      if (saved.consent && saved.consent.version) state.consent = saved.consent;
+      if (saved.featureAck && typeof saved.featureAck === 'object') state.featureAck = saved.featureAck;
       if (saved.auth && saved.auth.token) state.auth = saved.auth;
     } catch (e) { console.warn('[convoy] could not load saved state', e); }
   }
@@ -173,6 +180,8 @@
         profile: state.profile,
         settings: state.settings,
         onboarded: state.onboarded,
+        consent: state.consent,
+        featureAck: state.featureAck,
         auth: state.auth
       }));
     } catch (e) { /* storage full/blocked — non-fatal */ }
@@ -306,6 +315,49 @@
   }
   function setOnboarded() { state.onboarded = true; save(); }
 
+  /* ---------- legal consent ----------
+     LEGAL_VERSION is the version of the Terms and Privacy Policy this build
+     ships against, and it is the whole mechanism: bumping it invalidates every
+     stored consent, so the gate reappears and everyone re-accepts before they
+     can ride. Bump it whenever either document changes materially, and keep it
+     in step with the version printed at the top of legal/terms.html. */
+  var LEGAL_VERSION = '1.0';
+
+  // TRUE only for a consent recorded against the CURRENT documents, with every
+  // box actually ticked. An older version, or a partial record, reads as no
+  // consent at all — which is the point.
+  function hasConsent() {
+    var c = state.consent;
+    return !!(c && c.version === LEGAL_VERSION && c.passenger && c.age && c.terms);
+  }
+
+  function setConsent(rec) {
+    state.consent = {
+      version: LEGAL_VERSION,
+      at: Date.now(),
+      passenger: !!(rec && rec.passenger),
+      age: !!(rec && rec.age),
+      terms: !!(rec && rec.terms)
+    };
+    save();
+    return state.consent;
+  }
+
+  // One-shot acknowledgement of the legality notice on a feature whose lawfulness
+  // depends on where the rider is (radar detector, enforcement layers, scanner
+  // audio, timed runs). Keyed per feature, and cleared by a legal-version bump
+  // for the same reason consent is.
+  function featureAcked(key) {
+    var c = state.consent;
+    if (!c || c.version !== LEGAL_VERSION) return false;
+    return !!(state.featureAck && state.featureAck[key]);
+  }
+  function ackFeature(key) {
+    if (!state.featureAck || typeof state.featureAck !== 'object') state.featureAck = {};
+    state.featureAck[key] = Date.now();
+    save();
+  }
+
   // `session` is a Supabase session as reshaped by the server:
   //   { token, refreshToken, expiresAt, username, profile, email, emailVerified, provider }
   // The access token is short-lived (an hour by default), so the refresh token
@@ -371,6 +423,9 @@
     setFollowCam: setFollowCam, setVoiceNav: setVoiceNav, setNavVoice: setNavVoice, setGhost: setGhost,
     setSetting: setSetting, setDotColor: setDotColor, resetDotColors: resetDotColors,
     saveProfile: saveProfile, setOnboarded: setOnboarded,
+    LEGAL_VERSION: LEGAL_VERSION,
+    hasConsent: hasConsent, setConsent: setConsent,
+    featureAcked: featureAcked, ackFeature: ackFeature,
     setAuth: setAuth, clearAuth: clearAuth,
     dur: dur
   };

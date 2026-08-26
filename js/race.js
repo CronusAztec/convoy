@@ -152,7 +152,7 @@
         onFinish: function (res) {
           if (id === A.net.myId()) {
             A.net.sendRace({ t: 'race:finish', time: res.time, trap: res.trap });
-            if (A.ui) A.ui.toast('You finished — ' + res.time.toFixed(2) + 's', 'success');
+            if (A.ui) A.ui.toast('You finished in ' + res.time.toFixed(2) + 's', 'success');
           }
         }
       });
@@ -264,7 +264,7 @@
 
     if (race.status === 'lobby' && race.isHost) {
       card.appendChild(U.el('div', 'race-hint',
-        'Share a Challenge from a rider\'s profile to fill the grid. Everyone stages on real GPS — come to a stop, then floor it on green.'));
+        'Share a Challenge from a rider\'s profile to fill the grid. Everyone stages on real GPS. Come to a stop, then floor it on green.'));
     }
     openOverlay(card);
   }

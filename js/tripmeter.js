@@ -15,7 +15,7 @@
 
   function build() {
     box = A.hud.card('hud-trip');
-    box.title = 'Session trip — tap to reset';
+    box.title = 'Session trip · tap to reset';
     box.innerHTML = '<b class="hc-v" id="tm-v">0.0</b><span class="hc-l">trip</span><i class="hc-s" id="tm-s">0 min moving</i>';
     elV = box.querySelector('#tm-v');
     elS = box.querySelector('#tm-s');

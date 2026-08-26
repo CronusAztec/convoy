@@ -61,9 +61,18 @@
   function chance(p) { return Math.random() < p; }
   function uid() { return 'id' + Math.random().toString(36).slice(2, 10); }
 
+  // The 10-unit floor keeps a small non-zero distance from collapsing to "0",
+  // but a real zero has to read as zero: the tripmeter renders through this and
+  // opened (and reset) to "10 ft" of travel that never happened.
+  //
+  // The metres->km handover is at 1000, not 950. At 950 the last metre reading
+  // was "950 m" and the first km reading was (0.95).toFixed(1) === "0.9 km", so
+  // the display counted BACKWARDS across the boundary. At 1000 the two sides
+  // meet at 1000 m / "1.0 km".
   function fmtDist(m, units) {
+    if (!(m > 0)) return units === 'km' ? '0 m' : '0 ft';
     if (units === 'km') {
-      if (m < 950) return Math.max(10, Math.round(m / 10) * 10) + ' m';
+      if (m < 1000) return Math.max(10, Math.round(m / 10) * 10) + ' m';
       var km = m / 1000;
       return (km < 10 ? km.toFixed(1) : Math.round(km)) + ' km';
     }
@@ -97,6 +106,12 @@
     return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
   }
 
+  // Own-property probe for the object literals used as allowlists/lookup
+  // tables below. A bare `TABLE[k]` also finds inherited Object.prototype
+  // members, so 'constructor' / 'toString' / '__proto__' pass allowlists they
+  // were never on and defeat the `|| fallback` beside them.
+  function own(o, k) { return !!o && Object.prototype.hasOwnProperty.call(o, k); }
+
   function esc(s) {
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -114,7 +129,7 @@
   // Same idea for the car finish enum, which renders raw next to the paint.
   var FINISHES = { Gloss: 1, Matte: 1, Metallic: 1, Satin: 1 };
   function safeFinish(v) {
-    return FINISHES[v] ? v : 'Gloss';
+    return own(FINISHES, v) ? v : 'Gloss';
   }
 
   function el(tag, cls, html) {
@@ -251,7 +266,7 @@
     haversine: haversine, bearing: bearing, destPoint: destPoint,
     relBearing: relBearing, crossTrack: crossTrack,
     lerp: lerp, lerpPos: lerpPos, lerpAngle: lerpAngle,
-    clamp: clamp, rand: rand, randInt: randInt, pick: pick, chance: chance, uid: uid,
+    clamp: clamp, rand: rand, randInt: randInt, pick: pick, chance: chance, uid: uid, own: own,
     fmtDist: fmtDist, fmtDur: fmtDur, fmtClock: fmtClock,
     hexToRgb: hexToRgb, luma: luma, esc: esc, safePaint: safePaint, safeFinish: safeFinish, el: el, debounce: debounce, deepClone: deepClone,
     sunTimes: sunTimes, isDaylight: isDaylight,

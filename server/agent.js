@@ -53,6 +53,13 @@ function authed(req) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+// Own properties only. TYPE_DEFAULTS/INCIDENT_KINDS-style lookups are
+// allowlists, and a bare TABLE[k] also resolves inherited Object.prototype
+// members — so an item typed "constructor" (or "toString"/"valueOf"/
+// "__proto__") sailed past the `if (!def)` reject below and was ingested with
+// an undefined kind, label and colour, then served to every rider.
+function own(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
+
 function isLngLat(lng, lat) {
   return Number.isFinite(lng) && Number.isFinite(lat) &&
     lng >= -180 && lng <= 180 && lat >= -90 && lat <= 90;
@@ -111,7 +118,7 @@ function ingest(items) {
       accepted++;
       return;
     }
-    const def = TYPE_DEFAULTS[it.type];
+    const def = own(TYPE_DEFAULTS, it.type) ? TYPE_DEFAULTS[it.type] : null;
     if (!def) return rejected.push({ index: i, reason: 'unknown type "' + String(it.type).slice(0, 24) + '"' });
     const kind = (typeof it.kind === 'string' && HAZARD_KINDS.has(it.kind)) ? it.kind : def.kind;
     push(hazards, {

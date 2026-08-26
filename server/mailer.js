@@ -185,8 +185,28 @@ function passwordChangedNotice(to, username) {
   };
 }
 
+// Sent AFTER the account is gone, to the address that was on it. This is the
+// only record the person keeps that the deletion actually happened, and the only
+// warning the real owner gets if someone else did it — so it goes out even
+// though there is no longer an account to link back to.
+function accountDeletedNotice(to, username) {
+  return {
+    to: to,
+    subject: 'Your Convoy account was deleted',
+    html: shell('Your account was deleted',
+      'The Convoy account <b>@' + esc(username) + '</b> has been deleted, along with its ' +
+      'profile, garage, friends and stats. This cannot be undone, and we no longer ' +
+      'hold this address in connection with it.',
+      null, null,
+      'If this wasn\'t you, reply to this email straight away.'),
+    text: 'The Convoy account @' + username + ' has been deleted, along with its profile, ' +
+      'garage, friends and stats. This cannot be undone and we no longer hold this ' +
+      'address in connection with it.\n\nIf this wasn\'t you, reply to this email straight away.'
+  };
+}
+
 module.exports = {
   configured, appUrl, send,
   verifyEmail, resetPassword, magicLink, confirmNewEmail,
-  emailChangedNotice, passwordChangedNotice
+  emailChangedNotice, passwordChangedNotice, accountDeletedNotice
 };

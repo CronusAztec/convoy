@@ -342,7 +342,7 @@
   function reportHazard(kind, labelOverride) {
     var pos = A.sim ? A.sim.playerPos() : null;
     if (!pos) return;
-    var def = HAZARD_KINDS[kind] || HAZARD_KINDS.hazard;
+    var def = U.own(HAZARD_KINDS, kind) ? HAZARD_KINDS[kind] : HAZARD_KINDS.hazard;
     var label = labelOverride || def.label;
     reportedHazards.push({
       type: 'Feature',
@@ -372,7 +372,7 @@
     var me = A.net && A.net.myId ? A.net.myId() : null;
     if (me && payload.by === me) return;
     var kind = payload.kind || 'hazard';
-    var def = HAZARD_KINDS[kind] || HAZARD_KINDS.hazard;
+    var def = U.own(HAZARD_KINDS, kind) ? HAZARD_KINDS[kind] : HAZARD_KINDS.hazard;
     reportedHazards.push({
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [payload.lng, payload.lat] },
@@ -418,7 +418,7 @@
     return out;
   }
   function hazFeat(kind, label, pos) {
-    var def = HAZARD_KINDS[kind] || HAZARD_KINDS.hazard;
+    var def = U.own(HAZARD_KINDS, kind) ? HAZARD_KINDS[kind] : HAZARD_KINDS.hazard;
     return {
       type: 'Feature',
       geometry: { type: 'Point', coordinates: pos.slice() },
@@ -558,7 +558,7 @@
     reportOverlay.setAttribute('aria-label', 'Report a hazard');
     var shared = (A.native && A.native.isNative && A.native.isNative()) ? ' · shared to nearby apps' : '';
     var btns = REPORT_KINDS.map(function (r) {
-      var col = (HAZARD_KINDS[r.kind] || HAZARD_KINDS.hazard).color;
+      var col = (U.own(HAZARD_KINDS, r.kind) ? HAZARD_KINDS[r.kind] : HAZARD_KINDS.hazard).color;
       return '<button class="hazard-btn" type="button" data-kind="' + r.kind + '">' +
         '<span class="hz-ic" style="color:' + col + '"><svg viewBox="0 0 24 24">' + r.icon + '</svg></span>' +
         '<span class="hz-lb">' + U.esc(r.label) + '</span></button>';
@@ -587,7 +587,7 @@
     if (!S.settings.showHazards) ST.setSetting('showHazards', true, 'hazards'); // make sure pins are shown
     reportHazard(kind);                                  // drops the pin + toasts
     if (A.native && A.native.publishCrowd) {             // share to SABRE hosts on native (no-op on web)
-      var def = HAZARD_KINDS[kind] || HAZARD_KINDS.hazard;
+      var def = U.own(HAZARD_KINDS, kind) ? HAZARD_KINDS[kind] : HAZARD_KINDS.hazard;
       A.native.publishCrowd({ lat: pos[1], lng: pos[0], kind: kind, label: def.label });
     }
     closeReport();

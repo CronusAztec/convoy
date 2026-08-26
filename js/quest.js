@@ -49,7 +49,7 @@
   var box = null, elV = null, elL = null, elS = null;
   function build() {
     box = A.hud.card('hud-quest');
-    box.title = 'Top Speed Quest — all-time top speed & fastest 60–100 mph';
+    box.title = 'Top Speed Quest · all-time top speed & fastest 60–100 mph';
     box.innerHTML =
       '<b class="hc-v" id="qs-v">—</b>' +
       '<span class="hc-l" id="qs-l">top speed</span>' +
@@ -119,9 +119,9 @@
           if (t > 0 && (rec.t60100 == null || t < rec.t60100)) {
             rec.t60100 = t; rec.t60100When = Date.now();
             save(); flash();
-            if (A.ui && A.ui.toast) A.ui.toast('🏁 Quest: fastest 60–100 — ' + t.toFixed(2) + 's', 'success');
+            if (A.ui && A.ui.toast) A.ui.toast('🏁 Quest: fastest 60–100 · ' + t.toFixed(2) + 's', 'success');
           } else if (rec.t60100 != null && A.ui && A.ui.toast) {
-            A.ui.toast('60–100 in ' + t.toFixed(2) + 's — best is ' + rec.t60100.toFixed(2) + 's', 'info');
+            A.ui.toast('60–100 in ' + t.toFixed(2) + 's · best is ' + rec.t60100.toFixed(2) + 's', 'info');
           }
           // Immediately re-arm so the quest never sleeps.
           timer.resetArm();

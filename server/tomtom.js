@@ -127,7 +127,11 @@ async function incidents(minLng, minLat, maxLng, maxLat, cb) {
     const feats = [];
     for (let i = 0; i < j.incidents.length && feats.length < INCIDENT_CAP; i++) {
       const inc = j.incidents[i], props = inc.properties || {};
-      const def = INCIDENT_KINDS[props.iconCategory];
+      // Own properties only: iconCategory is whatever the upstream sent, and a
+      // bare lookup would resolve inherited Object.prototype members as if they
+      // were incident kinds, defeating the `if (!def) continue` drop below.
+      const def = Object.prototype.hasOwnProperty.call(INCIDENT_KINDS, props.iconCategory)
+        ? INCIDENT_KINDS[props.iconCategory] : null;
       if (!def) continue; // drop jams / lane-closed / road-works / unknown
       const pt = incidentPoint(inc.geometry);
       if (!pt) continue;

@@ -204,6 +204,15 @@
     return b;
   }
 
+  // Drive a mkToggle from outside. Needed wherever the change can be refused
+  // after the fact (a legality notice, a failed save): mkToggle flips itself on
+  // click, so the only way back to the truth is to set it explicitly.
+  function setToggle(btn, on) {
+    if (!btn) return;
+    btn.classList.toggle('on', !!on);
+    btn.setAttribute('aria-checked', on ? 'true' : 'false');
+  }
+
   function mkSwatches(paints, value, onChange) {
     var w = U.el('div', 'swatches');
     var custom;
@@ -343,7 +352,7 @@
 
     if (!rows.length) {
       var msg = nearbyFilter === 'road' ? 'No riders sharing your road right now.'
-        : nearbyFilter === 'sight' ? 'Nothing in sight ahead — try Radius.'
+        : nearbyFilter === 'sight' ? 'Nothing in sight ahead. Try Radius.'
         : 'No riders within range right now.';
       content.appendChild(U.el('div', 'hint-card', msg));
       return;
@@ -441,7 +450,7 @@
 
     content.appendChild(U.el('div', 'section-label', 'Friends' + (S.friends.length ? ' · ' + S.friends.length : '')));
     if (!S.friends.length) {
-      content.appendChild(U.el('div', 'hint-card', 'No friends yet — add a username above.'));
+      content.appendChild(U.el('div', 'hint-card', 'No friends yet. Add a username above.'));
       return;
     }
     var sorted = S.friends.slice().sort(function (a, b) {
@@ -479,10 +488,25 @@
   // Apply Ghost Mode: persist + notify the server. All map/ghost/radar reactions
   // are owned by the single 'ghost' listener wired in init(), so toggling does
   // each piece of work exactly once (it used to run twice — here and in the listener).
-  function applyGhost(on) {
+  // `onCancel` matters for callers that own their own visual state. The chip and
+  // the map control redraw from S.settings.ghost on the 'ghost' event, so a
+  // declined gate leaves them correct by doing nothing. A settings toggle does
+  // NOT — mkToggle flips its own class on click and only then calls back, so
+  // without a revert it would sit in the ON position over a ghost mode that
+  // never turned on.
+  function applyGhost(on, onCancel) {
+    // Turning radar ON is the moment the enforcement layers appear, so the
+    // legality notice belongs here rather than deeper in radar.js — this is the
+    // one funnel every entry point (map control, radar dock, persisted state)
+    // passes through. Turning it OFF is never gated.
+    if (on) { legalGate('radar', function () { doApplyGhost(true); }, onCancel); return; }
+    doApplyGhost(false);
+  }
+
+  function doApplyGhost(on) {
     ST.setGhost(on);              // persists + emits 'ghost' → the listener reacts
     if (A.net && A.net.sendGhost) A.net.sendGhost(on);
-    A.ui.toast(on ? 'Ghost mode on — radar active. You are hidden from other riders.' : 'Ghost mode off', 'info');
+    A.ui.toast(on ? 'Ghost mode on · radar active. You are hidden from other riders.' : 'Ghost mode off', 'info');
   }
 
   function updateGhostChip() {
@@ -499,7 +523,7 @@
     var chip = U.el('button', 'chip chip-ghost');
     chip.id = 'chip-ghost';
     chip.type = 'button';
-    chip.title = 'Ghost mode — invisible to other riders';
+    chip.title = 'Ghost mode · invisible to other riders';
     chip.innerHTML = '<span class="dot" style="background:#9b4dff;box-shadow:0 0 6px #9b4dff"></span><span>GHOST</span>';
     chip.addEventListener('click', function () {
       applyGhost(!S.settings.ghost);
@@ -599,15 +623,15 @@
 
     // SOS beacon: one tap drops a "needs help" pin for riders nearby AND tells
     // the convoy chat — for breakdowns, flats, or losing the group.
-    var sosBtn = U.el('button', 'btn btn-block btn-danger-text sos-btn', 'SOS — I\'m stopped and need help');
+    var sosBtn = U.el('button', 'btn btn-block btn-danger-text sos-btn', 'SOS · I\'m stopped and need help');
     sosBtn.addEventListener('click', function () {
       var who = (S.profile && S.profile.name) || 'A rider';
       if (A.overlays && A.overlays.reportHazard) A.overlays.reportHazard('stopped', who + ' needs help');
-      A.party.sendChat('🆘 I\'m stopped and need help — check my pin on the map');
-      sosBtn.textContent = 'SOS sent — convoy + nearby riders alerted';
+      A.party.sendChat('🆘 I\'m stopped and need help. Check my pin on the map');
+      sosBtn.textContent = 'SOS sent. Convoy + nearby riders alerted';
       sosBtn.disabled = true;
       setTimeout(function () {
-        sosBtn.textContent = 'SOS — I\'m stopped and need help';
+        sosBtn.textContent = 'SOS · I\'m stopped and need help';
         sosBtn.disabled = false;
       }, 8000);
     });
@@ -643,7 +667,7 @@
 
     var members = U.el('div', 'convoy-members');
     if (!S.party.members.length) {
-      members.appendChild(U.el('div', 'hint-card', 'No riders yet — invite from <b>Nearby</b>.'));
+      members.appendChild(U.el('div', 'hint-card', 'No riders yet. Invite from <b>Nearby</b>.'));
     }
     S.party.members.forEach(function (id) {
       var npc = A.sim.getNpc(id);
@@ -881,13 +905,13 @@
     loadImageFile(file).then(function (img) {
       return screenPhoto(squareCanvas(img, 384)).then(function (verdict) {
         if (verdict !== 'ok') {
-          toast(verdict === 'explicit' ? 'Photo rejected — explicit content is not allowed'
-            : verdict === 'suggestive' ? 'Photo rejected — too suggestive for a profile photo'
-            : 'Could not verify that photo is appropriate — try a different one', 'warn');
+          toast(verdict === 'explicit' ? 'Photo rejected. Explicit content is not allowed'
+            : verdict === 'suggestive' ? 'Photo rejected. Too suggestive for a profile photo'
+            : 'Could not verify that photo is appropriate. Try a different one', 'warn');
           return;
         }
         var dataUrl = encodeAvatar(img);
-        if (!dataUrl) { toast('Could not compress that image — try a simpler photo', 'warn'); return; }
+        if (!dataUrl) { toast('Could not compress that image. Try a simpler photo', 'warn'); return; }
         S.profile.avatar = dataUrl;
         ST.saveProfile(S.profile);
         if (A.auth && A.auth.isLoggedIn()) A.auth.saveProfileToServer(S.profile);
@@ -952,7 +976,7 @@
       '<div class="pf-carline">' + U.esc(carLine) + '</div>' +
       '<div class="pf-tags">' +
       (loggedIn ? '<span class="tag tag-live"><span class="dot dot-live"></span>Synced</span>'
-        : '<span class="tag">Guest — local only</span>') +
+        : '<span class="tag">Guest · local only</span>') +
       (S.profile.avatar ? '<button class="tag pf-remove-tag" id="pf-remove" type="button">Remove photo</button>' : '') +
       '</div>';
     card.querySelector('#pf-cam').addEventListener('click', pickPhoto);
@@ -1008,7 +1032,7 @@
     if (head) head.textContent = got + ' / ' + list.length;
     el.innerHTML = list.map(function (a) {
       return '<div class="pf-badge' + (a.got ? '' : ' locked') + '">' +
-        '<span class="pf-badge-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + AWARD_ICONS[a.icon] + '</svg></span>' +
+        '<span class="pf-badge-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + (U.own(AWARD_ICONS, a.icon) ? AWARD_ICONS[a.icon] : '') + '</svg></span>' +
         '<span class="pf-badge-name">' + U.esc(a.name) + '</span>' +
         '<span class="pf-badge-desc">' + U.esc(a.desc) + '</span>' +
         '</div>';
@@ -1143,7 +1167,7 @@
            (subject.self
               ? (A.auth && A.auth.isLoggedIn()
                   ? '<span class="tag tag-live"><span class="dot dot-live"></span>Synced</span>'
-                  : '<span class="tag">Guest — local only</span>')
+                  : '<span class="tag">Guest · local only</span>')
               : (subject.account
                   ? '<span class="tag tag-live"><span class="dot dot-live"></span>Account</span>'
                   : '<span class="tag">Guest</span>')) +
@@ -1211,7 +1235,7 @@
         var raceBtn = U.el('button', 'btn btn-small', 'Challenge to race');
         raceBtn.addEventListener('click', function () {
           if (A.race.challenge(subject.id)) closeOverlay();
-          else A.ui.toast('Too far to race — move closer', 'warn');
+          else A.ui.toast('Too far to race. Move closer', 'warn');
         });
         act.appendChild(raceBtn);
       }
@@ -1508,7 +1532,7 @@
     });
   }
 
-  function modelsFor(make) { return D.MAKES[make] || ['Other']; }
+  function modelsFor(make) { return U.own(D.MAKES, make) ? D.MAKES[make] : ['Other']; }
   function trimsFor(make, model) {
     var mk = D.VEHICLES && D.VEHICLES[make];
     var trims = mk && mk[model];
@@ -1707,11 +1731,11 @@
     var styleSel = mkSelect(['auto', 'dark', 'positron', 'voyager', 'liberty', 'bright'], S.settings.mapStyle);
     var styleNames = {
       auto: 'Auto (match theme)',
-      dark: 'Dark — Night City',
-      positron: 'Minimal — Positron',
-      voyager: 'Day — Voyager',
-      liberty: 'Street — Liberty',
-      bright: 'Bright — Colorful'
+      dark: 'Dark · Night City',
+      positron: 'Minimal · Positron',
+      voyager: 'Day · Voyager',
+      liberty: 'Street · Liberty',
+      bright: 'Bright · Colorful'
     };
     styleSel.querySelectorAll('option').forEach(function (o) { o.textContent = styleNames[o.value]; });
     styleSel.addEventListener('change', function () { ST.setMapStyle(styleSel.value); });
@@ -1789,7 +1813,7 @@
       mkToggle(S.settings.showWeatherNow, function (v) { ST.setSetting('showWeatherNow', v); })));
     body.appendChild(mkRow('Battery', 'Device battery level while you drive',
       mkToggle(S.settings.showBattery, function (v) { ST.setSetting('showBattery', v); })));
-    body.appendChild(mkRow('Coordinates', 'Live lat/lng — tap the card to copy',
+    body.appendChild(mkRow('Coordinates', 'Live lat/lng · tap the card to copy',
       mkToggle(S.settings.showCoords, function (v) { ST.setSetting('showCoords', v); })));
     body.appendChild(mkRow('Destination arrow', 'Arrow pointing to your active route destination',
       mkToggle(S.settings.showDestArrow, function (v) { ST.setSetting('showDestArrow', v); })));
@@ -1830,7 +1854,7 @@
       voices.forEach(function (v) {
         var o = document.createElement('option');
         o.value = v.name;
-        o.textContent = v.name + (v.neural ? ' — natural' : (v.female ? ' — female' : ''));
+        o.textContent = v.name + (v.neural ? ' · natural' : (v.female ? ' · female' : ''));
         if (v.name === S.settings.navVoiceName) o.selected = true;
         voiceSel.appendChild(o);
       });
@@ -1841,9 +1865,12 @@
       });
       body.appendChild(mkField('Navigator voice', voiceSel));
     }
+    var ghostToggle = mkToggle(S.settings.ghost, function (v) {
+      // Revert the switch if the legality notice is declined — see applyGhost.
+      applyGhost(v, function () { setToggle(ghostToggle, S.settings.ghost); });
+    });
     body.appendChild(mkRow('Ghost mode',
-      'Go invisible and reveal nearby aircraft and police',
-      mkToggle(S.settings.ghost, function (v) { applyGhost(v); })));
+      'Go invisible and reveal nearby aircraft and police', ghostToggle));
 
     /* ---- Voice chat (proximity auto-connect) ---- */
     body.appendChild(U.el('div', 'section-label', 'Voice chat'));
@@ -1858,7 +1885,7 @@
     })));
     body.appendChild(U.el('div', 'hint-card',
       'Automatically links the walkie-talkie with riders <b>around you</b>, <b>in sight ahead</b> or ' +
-      '<b>sharing your road</b> — like proximity voice chat. Both riders need it on. ' +
+      '<b>sharing your road</b>, like proximity voice chat. Both riders need it on. ' +
       'Convoy voice always works; Ghost mode pauses it.'));
 
     /* ---- Routing ---- */
@@ -1893,7 +1920,7 @@
     ], S.settings.pingRate, function (v) { ST.setSetting('pingRate', v); })));
     body.appendChild(mkRow('Contact stings', 'Alert when a new threat becomes closest',
       mkToggle(S.settings.sonarStings, function (v) { ST.setSetting('sonarStings', v); })));
-    body.appendChild(mkRow('Spoken alerts', 'Voice callout — "Police ahead, 1.2 miles"',
+    body.appendChild(mkRow('Spoken alerts', 'Voice callout: "Police ahead, 1.2 miles"',
       mkToggle(S.settings.sonarSpoken !== false, function (v) { ST.setSetting('sonarSpoken', v); })));
 
     /* ---- Ghost target filters (which Ghost-Mode targets are tracked) ---- */
@@ -1947,6 +1974,42 @@
       { label: 'Kilometers', value: 'km' }
     ], S.settings.units, function (v) { ST.setUnits(v); })));
 
+    /* ---- Legal & data ----
+       The disclosure surface. Everything the consent gate said at sign-up has to
+       stay findable afterwards, or it was a one-time formality rather than a
+       standing notice — and the deletion path has to live somewhere a rider can
+       actually find it, which is what Google Play's account-deletion policy
+       means by "in-app". */
+    body.appendChild(U.el('div', 'section-label', 'Legal & data'));
+
+    var signedIn = A.auth && A.auth.isLoggedIn();
+    var hold = U.el('div', 'legal-note');
+    hold.innerHTML = signedIn
+      ? '<b>We hold your account.</b> Your username, profile, garage, friends, stats' +
+        (A.auth.email() ? ' and email address' : '') + ' are stored on our servers as ' +
+        '<b>@' + U.esc(A.auth.username()) + '</b>, and stay there until you delete them. ' +
+        'While you\'re on the map, riders near you see your live location. We don\'t ' +
+        'keep location history, we don\'t record voice, and we don\'t sell data.'
+      : '<b>You\'re riding as a guest.</b> Nothing about you is on our servers — your ' +
+        'profile and settings live in this browser only. While you\'re on the map, ' +
+        'riders near you still see your live location.';
+    body.appendChild(hold);
+
+    var links = U.el('div', 'legal-links');
+    links.innerHTML =
+      '<a href="' + legalUrl('/terms') + '" target="_blank" rel="noopener">Terms of Service</a>' +
+      '<a href="' + legalUrl('/privacy') + '" target="_blank" rel="noopener">Privacy Policy</a>' +
+      '<a href="' + legalUrl('/notices') + '" target="_blank" rel="noopener">Third-party notices</a>' +
+      '<a href="' + legalUrl('/delete-account') + '" target="_blank" rel="noopener">Delete your account</a>';
+    body.appendChild(links);
+
+    if (S.consent && S.consent.at) {
+      body.appendChild(U.el('div', 'legal-consent',
+        'You accepted the terms (v' + U.esc(S.consent.version) + ') on ' +
+        new Date(S.consent.at).toLocaleDateString() + ', confirming you ride as a ' +
+        'passenger and are 16 or older.'));
+    }
+
     body.appendChild(U.el('div', 'section-label', 'Data'));
     var reset = U.el('button', 'btn btn-ghost btn-block btn-danger-text', 'Reset app data');
     reset.addEventListener('click', function () {
@@ -1954,13 +2017,25 @@
     });
     body.appendChild(reset);
 
+    if (signedIn) {
+      var del = U.el('button', 'btn btn-ghost btn-block btn-danger-text', 'Delete account');
+      del.addEventListener('click', showDeleteAccount);
+      body.appendChild(del);
+      body.appendChild(U.el('div', 'legal-consent',
+        '"Reset app data" only clears this device. "Delete account" erases @' +
+        U.esc(A.auth.username()) + ' from our servers for good.'));
+    }
+
     // Android download — only meaningful on the web; hidden inside the native shell.
     var apkLink = (A.config && A.config.isNative) ? '' :
       '<a class="apk-link" href="/convoy.apk" download="Convoy.apk">⬇ Get the Android app (.apk)</a><br>';
     var about = U.el('div', 'about',
       'Convoy v0.3 · For passengers, never drivers.<br>' + apkLink +
       'Maps © <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a> & ' +
-      '<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OSM</a> · Routing by OSRM.');
+      '<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OSM</a> ' +
+      '(<a href="https://opendatacommons.org/licenses/odbl/" target="_blank" rel="noopener">ODbL</a>) · ' +
+      'Routing by OSRM & TomTom · Radar by RainViewer · Aircraft by OpenSky.<br>' +
+      '<a href="' + legalUrl('/notices') + '" target="_blank" rel="noopener">Full attribution &amp; licences</a>');
     body.appendChild(about);
   }
 
@@ -1988,7 +2063,7 @@
       status.className = 'det-status' + (connected ? ' on' : '');
       status.innerHTML = '<span class="det-dot"></span>' +
         (connected ? ('Connected' + (st.family ? ' · ' + U.esc(st.family) : '') + (name ? ' · ' + U.esc(name) : ''))
-          : (name ? ('Saved: ' + U.esc(name) + ' — not connected') : 'No detector connected'));
+          : (name ? ('Saved: ' + U.esc(name) + ' · not connected') : 'No detector connected'));
     }
     renderStatus(A.native && A.native.state ? A.native.state().det : null);
     ST.on('detector:state', renderStatus);
@@ -2028,6 +2103,13 @@
         toast('Detector scanning needs the Convoy Android app', 'warn');
         return;
       }
+      // Gated before the scan, not after: in a state or country where a detector
+      // is unlawful, the useful moment to say so is before someone goes looking
+      // for one to pair.
+      legalGate('detector', runScan);
+    });
+
+    function runScan() {
       seen = {}; picker.innerHTML = ''; picker.hidden = false;
       picker.appendChild(U.el('div', 'det-scanning', 'Scanning for Bluetooth detectors…'));
       scanBtn.disabled = true; scanBtn.textContent = 'Scanning…';
@@ -2043,7 +2125,7 @@
       }).catch(function () {
         scanBtn.disabled = false; scanBtn.textContent = 'Scan for detectors';
       });
-    });
+    }
     body.appendChild(scanBtn);
     body.appendChild(picker);
 
@@ -2145,7 +2227,7 @@
         rows.forEach(function (r) { addRow(r, PIN_SVG); });
       }).catch(function () {
         items = [];
-        results.innerHTML = '<div class="sr-loading">Search unavailable — check connection</div>';
+        results.innerHTML = '<div class="sr-loading">Search unavailable. Check connection</div>';
       });
     }, 350);
 
@@ -2285,8 +2367,13 @@
     buildProfilePanel(); // re-render whichever profile page is showing
     renderAccount();
     refreshVerifyBanner();
+    // Same guarded teardown as closeOverlay: done() below is auth.enterApp,
+    // which may open another card straight away (the /delete-account deep link
+    // resumes there after sign-in). An unguarded timer would blank it mid-flight.
+    cancelOverlayClose();
     root.classList.add('closing');
-    setTimeout(function () {
+    overlayCloseTimer = setTimeout(function () {
+      overlayCloseTimer = null;
       root.hidden = true; root.innerHTML = '';
       root.classList.remove('closing', 'show');
     }, 380);
@@ -2299,7 +2386,7 @@
     return '<div class="ob-head">' +
       '  <div class="ob-logo">' + document.querySelector('.brand-logo').outerHTML + '</div>' +
       '  <h1>CONVOY</h1>' +
-      '  <p>See the road together. Built for <b>passengers</b> — the driver drives, you run the map.</p>' +
+      '  <p>See the road together. Built for <b>passengers</b>, so the driver drives and you run the map.</p>' +
       '</div>';
   }
 
@@ -2336,7 +2423,7 @@
   };
 
   function providerMark(id, label) {
-    if (PROVIDER_MARKS[id]) return PROVIDER_MARKS[id];
+    if (U.own(PROVIDER_MARKS, id)) return PROVIDER_MARKS[id];
     return '<span class="oauth-letter">' + U.esc(String(label || id).charAt(0).toUpperCase()) + '</span>';
   }
 
@@ -2419,7 +2506,7 @@
     }
     makeSel.addEventListener('change', function () {
       modelSel.innerHTML = '';
-      D.MAKES[makeSel.value].forEach(function (m) {
+      modelsFor(makeSel.value).forEach(function (m) {
         var o = document.createElement('option'); o.value = m; o.textContent = m; modelSel.appendChild(o);
       });
       refillTrims();
@@ -2436,11 +2523,10 @@
     card.appendChild(mkField('Trim', trimSel));
     card.appendChild(mkField('Paint', swatches));
 
-    var pledge = U.el('label', 'pledge');
-    pledge.innerHTML = '<input type="checkbox"/><span>I\'m the <b>passenger</b>. The driver\'s eyes stay on the road.</span>';
-    card.appendChild(pledge);
+    var consent = buildConsentBlock(card);
 
     return {
+      getConsent: consent.get,
       getProfile: function () {
         var nm = nameInput.value.trim() || name;
         return {
@@ -2455,15 +2541,147 @@
           }
         };
       },
-      onPledge: function (cb) {
-        pledge.querySelector('input').addEventListener('change', function (e) { cb(e.target.checked); });
+      onPledge: consent.onChange
+    };
+  }
+
+  /* Absolute URL for a legal page.
+
+     On the web this is same-origin and the leading slash is enough. Inside the
+     APK the WebView origin is https://localhost, where "/terms" is a dead link —
+     only index.html, js/ and css/ are bundled (scripts/copy-web.js). These pages
+     have to resolve against the deployed site, which is exactly what
+     A.config.base is for. Every legal link in the app goes through here. */
+  function legalUrl(p) { return ((A.config && A.config.base) || '') + p; }
+
+  /* ---------------- the consent gate ----------------
+     Three separate confirmations, deliberately not one blanket "I agree":
+
+       passenger — the safety condition the whole product rests on, and the one
+                   claim we actually rely on. Terms §3.
+       age       — 16+, because the app carries live location, open chat, voice
+                   and user-generated reports. COPPA/GDPR Art. 8 and the store
+                   policies all turn on it.
+       terms     — acceptance of the Terms and the Privacy Policy, which is what
+                   makes §7's "we hold your account" disclosure something the
+                   rider has actually been told rather than something buried.
+
+     Ticking all three is what enables the button, and the result is recorded
+     with the document version and a timestamp (ST.setConsent) so there is a
+     record of WHICH terms were accepted, not just that something was. */
+  function buildConsentBlock(card) {
+    var box = U.el('div', 'consent-block');
+
+    var driveWarn = U.el('div', 'consent-warn');
+    driveWarn.innerHTML =
+      '<b>If you\'re driving, put the phone down.</b>' +
+      '<span>Convoy is built for the passenger. Never operate it, look at it, or ' +
+      'react to it while you\'re in control of a moving vehicle.</span>';
+    box.appendChild(driveWarn);
+
+    function row(html) {
+      var l = U.el('label', 'consent-row');
+      l.innerHTML = '<input type="checkbox"/><span>' + html + '</span>';
+      box.appendChild(l);
+      return l.querySelector('input');
+    }
+
+    var cbPassenger = row('I\'m the <b>passenger</b>, or the car is parked. ' +
+      'The driver\'s eyes stay on the road.');
+    var cbAge = row('I\'m <b>16 or older</b>.');
+    var cbTerms = row('I agree to the <a href="' + legalUrl('/terms') + '" target="_blank" rel="noopener">Terms of Service</a> ' +
+      'and the <a href="' + legalUrl('/privacy') + '" target="_blank" rel="noopener">Privacy Policy</a>.');
+
+    var hold = U.el('div', 'consent-note');
+    hold.innerHTML =
+      '<b>What we hold.</b> If you create an account, we store it on our servers — ' +
+      'your username, profile, car, friends, stats, and your email if you give one — ' +
+      'until you delete it. Riders near you see your live location while you\'re on ' +
+      'the map. We don\'t keep location history, we don\'t record voice, and we ' +
+      'don\'t sell anything. You can delete the account yourself at any time from ' +
+      'Settings, or at <a href="' + legalUrl('/delete-account') + '" target="_blank" rel="noopener">/delete-account</a>.';
+    box.appendChild(hold);
+
+    card.appendChild(box);
+
+    var listeners = [];
+    function allChecked() { return cbPassenger.checked && cbAge.checked && cbTerms.checked; }
+    function fire() { listeners.forEach(function (fn) { fn(allChecked()); }); }
+    [cbPassenger, cbAge, cbTerms].forEach(function (cb) { cb.addEventListener('change', fire); });
+
+    return {
+      onChange: function (fn) { listeners.push(fn); },
+      allChecked: allChecked,
+      get: function () {
+        return { passenger: cbPassenger.checked, age: cbAge.checked, terms: cbTerms.checked };
       }
     };
   }
 
+  /* ---------------- re-consent, for riders already inside ----------------
+     A returning rider carries a consent record from a previous session. If the
+     documents have been revised since (ST.LEGAL_VERSION moved) that record no
+     longer covers what they are agreeing to, so this stands in front of the app
+     until they accept again. Same three boxes, no way past it but forward or
+     out — an "ignore" option would leave someone using the app under terms they
+     have declined. */
+  function showConsentGate(onDone) {
+    var root = document.getElementById('onboarding');
+    var card = U.el('div', 'modal-card');
+    card.appendChild(U.el('div', 'auth-title', S.consent ? 'Our terms have changed' : 'Before you ride'));
+    card.appendChild(U.el('div', 'ob-note', S.consent
+      ? 'We\'ve updated the Terms of Service and Privacy Policy. Please read them and ' +
+        'confirm below to carry on riding.'
+      : 'Two quick confirmations and one agreement, and you\'re on the map.'));
+
+    var consent = buildConsentBlock(card);
+    var btn = U.el('button', 'btn btn-primary btn-block btn-lg', 'Agree &amp; continue');
+    btn.disabled = true;
+    consent.onChange(function (ok) { btn.disabled = !ok; });
+    btn.addEventListener('click', function () {
+      ST.setConsent(consent.get());
+      closeOverlay();
+      if (onDone) onDone();
+    });
+    card.appendChild(btn);
+
+    // Declining has to lead somewhere honest: without consent there is no
+    // lawful basis to put this rider on the map, so the only other door is out.
+    var out = U.el('button', 'btn btn-ghost btn-block btn-danger-text', 'I don\'t agree');
+    out.addEventListener('click', function () {
+      if (!confirm('Without agreeing you can\'t use Convoy. Sign out and clear this device?')) return;
+      if (A.auth && A.auth.isLoggedIn()) A.auth.logout();
+      else ST.reset();
+    });
+    card.appendChild(out);
+
+    root.hidden = false;
+    root.classList.remove('closing');
+    root.innerHTML = '';
+    root.appendChild(card);
+    root.scrollTop = 0;
+    requestAnimationFrame(function () { root.classList.add('show'); });
+  }
+
   /* ----- generic overlay (reuses the modal backdrop while logged in) ----- */
+  /* closeOverlay() hides the card immediately but defers the teardown by 380ms so
+     the exit animation can play. That timer used to be fire-and-forget, which
+     made any overlay opened during those 380ms self-destruct: the stale timeout
+     lands and blanks the modal root that now holds the NEW card.
+
+     It is reachable from every close→open handoff — accepting the consent gate
+     and continuing into the delete-account screen, re-rendering the linked
+     accounts list, a legality notice whose "proceed" opens another card. Holding
+     the handle and cancelling it in openOverlay is what makes those safe. */
+  var overlayCloseTimer = null;
+
+  function cancelOverlayClose() {
+    if (overlayCloseTimer) { clearTimeout(overlayCloseTimer); overlayCloseTimer = null; }
+  }
+
   function openOverlay(card) {
     var root = document.getElementById('onboarding');
+    cancelOverlayClose();
     root.hidden = false;
     root.classList.remove('closing');
     root.innerHTML = '';
@@ -2472,8 +2690,10 @@
   }
   function closeOverlay() {
     var root = document.getElementById('onboarding');
+    cancelOverlayClose();
     root.classList.add('closing');
-    setTimeout(function () {
+    overlayCloseTimer = setTimeout(function () {
+      overlayCloseTimer = null;
       root.hidden = true; root.innerHTML = '';
       root.classList.remove('closing', 'show');
     }, 380);
@@ -2525,6 +2745,10 @@
     btn.addEventListener('click', function () {
       errEl.hidden = true;
       if (!uInput.value.trim()) { showErr(errEl, 'Pick a username'); return; }
+      // Recorded before the account exists: the boxes were ticked on this
+      // screen, and the record has to survive even if the call below fails and
+      // they retry.
+      ST.setConsent(setup.getConsent());
       btn.disabled = true; btn.textContent = 'Setting up…';
       A.auth.oauthComplete(uInput.value.trim(), setup.getProfile()).then(function (r) {
         if (!r.ok) {
@@ -2533,9 +2757,9 @@
           return;
         }
         root.innerHTML = '';
-        root.appendChild(buildRecoveryCard(r.recoveryCode, 'I saved it — start riding →',
+        root.appendChild(buildRecoveryCard(r.recoveryCode, 'I saved it, start riding →',
           function () { closeAuthEnter('Welcome, ' + S.profile.name); },
-          'You\'re in — save your recovery code',
+          'You\'re in. Save your recovery code',
           'Providers go down and accounts get locked. This is your way back in that doesn\'t depend on one.'));
         root.scrollTop = 0;
       });
@@ -2570,7 +2794,7 @@
       if (!np.value) { showErr(err, 'Enter a new password'); return; }
       btn.disabled = true; btn.textContent = 'Saving…';
       A.auth.resetWithToken(token, np.value).then(function (r) {
-        if (r.ok) { closeAuthEnter('Password updated — welcome back'); return; }
+        if (r.ok) { closeAuthEnter('Password updated. Welcome back'); return; }
         showErr(err, r.error);
         btn.disabled = false; btn.innerHTML = 'Set password &amp; sign in';
       });
@@ -2606,7 +2830,7 @@
     box.appendChild(copy);
     card.appendChild(box);
     card.appendChild(U.el('div', 'recovery-warn',
-      'This is the <b>only</b> way to reset your password if you forget it. Save it somewhere safe — we can\'t recover it for you.'));
+      'This is the <b>only</b> way to reset your password if you forget it. Save it somewhere safe. We can\'t recover it for you.'));
     var btn = U.el('button', 'btn btn-primary btn-block btn-lg', continueLabel);
     btn.addEventListener('click', onContinue);
     card.appendChild(btn);
@@ -2633,6 +2857,209 @@
       });
     });
     card.appendChild(btn);
+    openOverlay(card);
+  }
+
+  /* ---------------- feature legality notices ----------------
+     Some of what Convoy can do is lawful in one place and an offence a border
+     away — enforcement markers, a paired radar detector, scanner audio in a
+     moving car, a timed run. Burying that in §5 of the Terms and calling it told
+     is not good enough for a feature someone taps on impulse, so each of these
+     says it once, at the moment it is first switched on, in plain words.
+
+     Once per feature per terms version (ST.ackFeature), not every time: a notice
+     that fires on every tap gets dismissed without reading, which is worse than
+     no notice at all. */
+  var FEATURE_NOTICES = {
+    radar: {
+      title: 'Before you turn on radar',
+      lede: 'Ghost Mode shows police stations, speed and ALPR cameras, and enforcement ' +
+        'hotspots from public data.',
+      points: [
+        'Warning a <b>driver</b> about speed cameras or police is restricted or illegal in ' +
+          'several countries, including Germany, France, Switzerland and Austria. Know the ' +
+          'rule where you are.',
+        'A marker doesn\'t mean anyone is there, and an empty map doesn\'t mean nobody is. ' +
+          'This data is incomplete and often out of date.',
+        'Never use it to evade or interfere with law enforcement.'
+      ]
+    },
+    detector: {
+      title: 'Before you pair a detector',
+      lede: 'Convoy can pair with a hardware radar detector over Bluetooth.',
+      points: [
+        '<b>Radar detectors are illegal in Virginia and Washington DC</b>, in every US ' +
+          'commercial vehicle over 10,000 lbs (49 CFR 392.71), in most Canadian provinces, ' +
+          'and across much of Europe. In some places possession alone is an offence.',
+        'Pairing one where it is unlawful is your act, not ours, and breaches the Terms.'
+      ]
+    },
+    scanner: {
+      title: 'Before you listen in',
+      lede: 'These are public safety radio feeds, streamed from OpenMHz. Convoy never ' +
+        'transmits and never decodes encrypted traffic.',
+      points: [
+        '<b>Listening to a scanner in a moving vehicle is restricted or illegal in several ' +
+          'US states</b> — Florida, Indiana, Kentucky, Minnesota, New York and New Jersey ' +
+          'among them — and some countries require a licence to receive at all.',
+        'Using what you hear to commit or escape an offence is a separate and far more ' +
+          'serious one, almost everywhere.'
+      ]
+    },
+    perf: {
+      title: 'Track and private land only',
+      lede: 'The performance meter and race timer measure acceleration from GPS.',
+      points: [
+        '<b>These are for a closed course, private land, or a licensed track</b> — with the ' +
+          'operator\'s or landowner\'s permission.',
+        'Using them on a public road is street racing. It is illegal everywhere, it is the ' +
+          'fastest way to lose a licence and a car, and it is a breach of the Terms.',
+        'Timing runs is a passenger\'s job. The driver drives.'
+      ]
+    }
+  };
+
+  // Runs `onProceed` once the rider has acknowledged, immediately if they
+  // already have. `onCancel` is optional — callers that toggled something on
+  // before asking use it to put the control back.
+  function legalGate(key, onProceed, onCancel) {
+    var spec = FEATURE_NOTICES[key];
+    if (!spec || (ST.featureAcked && ST.featureAcked(key))) { onProceed(); return; }
+
+    var card = U.el('div', 'modal-card');
+    card.appendChild(U.el('div', 'auth-title', spec.title));
+    card.appendChild(U.el('div', 'ob-note', spec.lede));
+
+    var warn = U.el('div', 'consent-warn');
+    warn.innerHTML = '<b>Where you are decides whether this is legal.</b>' +
+      '<span>Convoy makes it available. Knowing the rule is on you.</span>';
+    card.appendChild(warn);
+
+    var list = U.el('ul', 'legal-list');
+    list.innerHTML = spec.points.map(function (p) { return '<li>' + p + '</li>'; }).join('');
+    card.appendChild(list);
+
+    card.appendChild(U.el('div', 'ob-note',
+      'Full detail in <a href="' + legalUrl('/terms#features') + '" target="_blank" rel="noopener">Terms &sect;5</a>.'));
+
+    var ok = U.el('button', 'btn btn-primary btn-block btn-lg',
+      'I understand — it\'s legal where I am');
+    ok.addEventListener('click', function () {
+      ST.ackFeature(key);
+      closeOverlay();
+      onProceed();
+    });
+    card.appendChild(ok);
+
+    var no = U.el('button', 'btn btn-ghost btn-block', 'Not now');
+    no.addEventListener('click', function () {
+      closeOverlay();
+      if (onCancel) onCancel();
+    });
+    card.appendChild(no);
+
+    openOverlay(card);
+  }
+
+  /* ---------------- delete account (right to erasure) ----------------
+     Reachable from Settings → Legal & data, and from the public
+     /delete-account page via ?cv=delete. Both are required: Google Play wants an
+     in-app path AND a web path that works without installing the app.
+
+     Three deliberate frictions before the button does anything: it says exactly
+     what goes, it re-authenticates, and it asks for the word DELETE. All three
+     are re-checked server-side — this screen is the explanation, not the
+     enforcement. */
+  function showDeleteAccount() {
+    if (!A.auth || !A.auth.isLoggedIn()) {
+      toast('Sign in first — there\'s no account to delete', 'warn');
+      return;
+    }
+    var viaProvider = A.auth.provider() !== 'password';
+    var card = U.el('div', 'modal-card');
+    card.appendChild(authCloseHead('Delete your account', closeOverlay));
+
+    var warn = U.el('div', 'consent-warn consent-warn-danger');
+    warn.innerHTML = '<b>This is permanent. We can\'t undo it.</b>' +
+      '<span>Deleting @' + U.esc(A.auth.username()) + ' erases it from our servers ' +
+      'straight away, and your username goes back in the pool.</span>';
+    card.appendChild(warn);
+
+    card.appendChild(U.el('div', 'section-label', 'What gets deleted'));
+    var list = U.el('ul', 'legal-list');
+    list.innerHTML =
+      '<li>Your username, password and recovery code</li>' +
+      '<li>Your email address and any pending links</li>' +
+      '<li>Your profile — name, handle, avatar, vibe</li>' +
+      '<li>Your garage — every car detail you entered</li>' +
+      '<li>Your friends and friend requests, both directions</li>' +
+      '<li>Your stats and personal bests</li>';
+    card.appendChild(list);
+    card.appendChild(U.el('div', 'ob-note',
+      'We never stored your location history or your voice, so there\'s nothing of ' +
+      'those to remove. Encrypted backups roll off within 30 days. Messages already ' +
+      'delivered to other riders stay on their devices. ' +
+      '<a href="' + legalUrl('/privacy') + '" target="_blank" rel="noopener">Privacy Policy</a>'));
+
+    var err = U.el('div', 'auth-err'); err.hidden = true;
+    var pw = null, un = null;
+    if (viaProvider) {
+      // A provider account has no Convoy password to confirm with, so the check
+      // is that they can name the account they are standing in.
+      un = mkText('', 'Type your username');
+      un.autocomplete = 'off';
+      un.maxLength = 20;
+      card.appendChild(mkField('Confirm your username', un));
+      card.appendChild(U.el('div', 'ob-note',
+        'This account signs in with ' + U.esc(A.auth.provider()) + ', so there\'s no ' +
+        'Convoy password to check. Deleting here does not touch your ' +
+        U.esc(A.auth.provider()) + ' account.'));
+    } else {
+      pw = mkPassword('Your password');
+      card.appendChild(mkField('Confirm your password', pw));
+    }
+
+    var typed = mkText('', 'DELETE');
+    typed.autocomplete = 'off';
+    typed.maxLength = 10;
+    card.appendChild(mkField('Type DELETE to confirm', typed));
+    card.appendChild(err);
+
+    var btn = U.el('button', 'btn btn-block btn-lg btn-danger', 'Delete my account permanently');
+    btn.disabled = true;
+    var recheck = function () {
+      var filled = viaProvider ? !!un.value.trim() : !!pw.value;
+      btn.disabled = !(filled && typed.value.trim().toUpperCase() === 'DELETE');
+    };
+    typed.addEventListener('input', recheck);
+    (viaProvider ? un : pw).addEventListener('input', recheck);
+
+    btn.addEventListener('click', function () {
+      err.hidden = true;
+      if (!confirm('Last check: permanently delete @' + A.auth.username() + '? This cannot be undone.')) return;
+      btn.disabled = true; btn.textContent = 'Deleting…';
+      A.auth.deleteAccount(viaProvider
+        ? { confirmUsername: un.value.trim() }
+        : { password: pw.value }
+      ).then(function (r) {
+        if (!r.ok) {
+          showErr(err, r.error);
+          btn.disabled = false; btn.textContent = 'Delete my account permanently';
+          return;
+        }
+        // The account is gone and the session with it. Clear this device too, so
+        // nothing is left pointing at an identity that no longer exists — and
+        // because someone deleting their account rarely wants their old profile
+        // waiting for them on the next load.
+        ST.reset();
+      });
+    });
+    card.appendChild(btn);
+
+    var cancel = U.el('button', 'btn btn-ghost btn-block', 'Keep my account');
+    cancel.addEventListener('click', closeOverlay);
+    card.appendChild(cancel);
+
     openOverlay(card);
   }
 
@@ -2732,7 +3159,7 @@
         if (!r.ok) { showErr(err, r.error); btn.disabled = false; btn.textContent = 'Add email'; return; }
         renderAccount();
         openOverlay(buildSentCard('Confirm your email',
-          'We\'ve sent a link to ' + em.value.trim() + '. Open it to finish — until then the address does nothing.',
+          'We\'ve sent a link to ' + em.value.trim() + '. Open it to finish. Until then the address does nothing.',
           'Done', closeOverlay));
       });
     });
@@ -2930,7 +3357,7 @@
     } else if (mode === 'magic') {
       card.appendChild(authBackHead('Sign in by email', 'login'));
       card.appendChild(U.el('div', 'ob-note',
-        'We\'ll email you a link that signs you straight in — no password needed. Only works if you confirmed your email.'));
+        'We\'ll email you a link that signs you straight in, no password needed. Only works if you confirmed your email.'));
       var me2 = mkText('', 'you@example.com');
       me2.type = 'email'; me2.autocomplete = 'email'; me2.maxLength = 254;
       var merr = U.el('div', 'auth-err'); merr.hidden = true;
@@ -2972,8 +3399,8 @@
         A.auth.recover(ru.value.trim(), rc.value.trim(), rp.value).then(function (r) {
           if (r.ok) {
             root.innerHTML = '';
-            root.appendChild(buildRecoveryCard(r.recoveryCode, 'Saved — continue →',
-              function () { closeAuthEnter('Password reset — welcome back, ' + S.profile.name); },
+            root.appendChild(buildRecoveryCard(r.recoveryCode, 'Saved, continue →',
+              function () { closeAuthEnter('Password reset. Welcome back, ' + S.profile.name); },
               'Password reset! Here\'s your new recovery code',
               'Your old code no longer works. Save this new one.'));
             root.scrollTop = 0;
@@ -3005,7 +3432,7 @@
           card.appendChild(mkField('Email', eInput));
           card.appendChild(U.el('div', 'ob-note',
             'We send a link to confirm it. Until you open it, other riders show as ' +
-            '&ldquo;Rider&rdquo; with no stats — confirming unlocks names, stats and password reset by email.'));
+            '&ldquo;Rider&rdquo; with no stats. Confirming unlocks names, stats and password reset by email.'));
         }
         card.appendChild(mkField('Password', pInput));
         card.appendChild(errEl);
@@ -3017,10 +3444,13 @@
       setup.onPledge(function (ok) { rbtn.disabled = !ok; });
       rbtn.addEventListener('click', function () {
         var profile = setup.getProfile();
+        // Guests never touch the server, so this local record is the only
+        // evidence that the passenger, age and terms boxes were ticked at all.
+        ST.setConsent(setup.getConsent());
         if (isGuest) {
           ST.saveProfile(profile);
           ST.setOnboarded();
-          closeAuthEnter('Welcome aboard, ' + profile.name + ' — riders are live around you');
+          closeAuthEnter('Welcome aboard, ' + profile.name + '. Riders are live around you');
           return;
         }
         if (errEl) errEl.hidden = true;
@@ -3035,11 +3465,11 @@
           if (r.ok) {
             // show the recovery code before entering the app
             root.innerHTML = '';
-            root.appendChild(buildRecoveryCard(r.recoveryCode, 'I saved it — start riding →',
+            root.appendChild(buildRecoveryCard(r.recoveryCode, 'I saved it, start riding →',
               function () { closeAuthEnter('Welcome, ' + S.profile.name); },
-              'Account created — save your recovery code',
+              'Account created. Save your recovery code',
               addr && r.verificationSent
-                ? 'We\'ve also emailed ' + addr + ' — confirm it to unlock password reset by email.'
+                ? 'We\'ve also emailed ' + addr + '. Confirm it to unlock password reset by email.'
                 : 'You\'ll need this if you ever forget your password.'));
             root.scrollTop = 0;
           } else { showErr(errEl, r.error); rbtn.disabled = false; rbtn.textContent = 'Create account & ride →'; }
@@ -3091,7 +3521,7 @@
         } else if (!verified) {
           mailRow.classList.add('account-row-warn');
           mailRow.innerHTML = '<div class="account-info"><b>' + U.esc(addr) + '</b>' +
-            '<span>Not confirmed yet — reset by email is off until you do</span></div>';
+            '<span>Not confirmed yet. Reset by email is off until you do</span></div>';
           var vBtn = U.el('button', 'btn btn-ghost btn-small', 'Resend');
           vBtn.addEventListener('click', function () {
             vBtn.disabled = true; vBtn.textContent = 'Sending…';
@@ -3111,7 +3541,7 @@
           // with, so the address is theirs to change with the provider.
           if (A.auth.provider() === 'password') edBtn.addEventListener('click', showChangeEmail);
           else edBtn.addEventListener('click', function () {
-            toast('This account signs in with ' + A.auth.provider() + ' — change your email there', 'info');
+            toast('This account signs in with ' + A.auth.provider() + '. Change your email there', 'info');
           });
           mailRow.appendChild(edBtn);
         }
@@ -3211,7 +3641,7 @@
     ST.on('global', function (v) {
       A.mapview.setGlobalVisible(v);
       syncGlobalChip();
-      toast(v ? 'Global drivers on — delayed ~5 min' : 'Global drivers hidden', 'info');
+      toast(v ? 'Global drivers on · delayed ~5 min' : 'Global drivers hidden', 'info');
     });
     ST.on('theme', function () { A.mapview.applyStyle(); });
     ST.on('mapstyle', function () { A.mapview.applyStyle(); });
@@ -3295,6 +3725,11 @@
     // screen for a password-reset link.
     showOAuthSetup: showOAuthSetup,
     showResetPassword: showResetPassword,
+    // Legal surfaces auth.js drives: the re-consent gate every rider passes on
+    // the way into the app, and the erasure flow that /delete-account links to.
+    showConsentGate: showConsentGate,
+    showDeleteAccount: showDeleteAccount,
+    legalGate: legalGate,
     renderAccount: renderAccount,
     welcomeBack: welcomeBack,
     openPanel: openPanel,

@@ -560,6 +560,116 @@ async function magicSignIn(user, hashedToken, ip) {
   return { user: user, session: r.session };
 }
 
+/* ---------------- account deletion ----------------
+   The right-to-erasure path, and a hard requirement of Google Play's account
+   deletion policy: an account someone can create in the app is one they must be
+   able to destroy in the app.
+
+   Order matters, and it is deliberately the safe one:
+     1. flush queued writes, so an in-flight profile/stat write cannot land after
+        the row is gone (it would be dropped as a permanent FK error and logged
+        as if something were broken);
+     2. delete the Postgres profile, which cascades to stats, PBs, friendships,
+        friend requests and recovery codes;
+     3. delete the GoTrue user, which revokes every session and refresh token the
+        account had anywhere;
+     4. only then drop it from the in-memory read model.
+
+   If step 3 fails we are left with an auth user that has no profile. That is the
+   SAFE failure: sign-in resolves to nothing and the rider is not in the map or
+   anyone's friend list. It is reported so the operator can finish the job, and
+   it is why this returns the residue rather than swallowing it. */
+/* Tombstones for deleted accounts.
+
+   Supabase access tokens are stateless ES256 JWTs: deleting the GoTrue user
+   revokes the REFRESH token, but every access token already minted stays
+   cryptographically valid until it expires, roughly an hour later. Nothing about
+   deletion can reach back and invalidate one.
+
+   That matters because a verified token with no profile behind it is exactly the
+   shape of an unfinished provider sign-up, and the server answers that shape by
+   offering to create an account ("pick a username"). Without this, the hour after
+   a deletion is a window in which the deleted rider's own token walks straight
+   back into account setup.
+
+   So the id is remembered for longer than any access token can live, and a token
+   naming a tombstoned subject is refused outright. */
+const TOMBSTONE_MS = 3 * 60 * 60 * 1000;  // 3h — comfortably past a ~1h access token
+const tombstones = new Map();             // id -> expiry ms
+
+function tombstone(id) {
+  tombstones.set(id, Date.now() + TOMBSTONE_MS);
+  // Swept opportunistically rather than on a timer: the map only ever grows by
+  // one per deletion, and this keeps it from being a permanent leak.
+  if (tombstones.size > 64) {
+    const now = Date.now();
+    for (const [k, exp] of tombstones) if (exp <= now) tombstones.delete(k);
+  }
+}
+
+function isDeleted(id) {
+  const exp = tombstones.get(id);
+  if (!exp) return false;
+  if (exp <= Date.now()) { tombstones.delete(id); return false; }
+  return true;
+}
+
+async function deleteAccount(id) {
+  const u = byId[id];
+  if (!u) return { error: 'no-such-account' };
+
+  try { await db.flush(4000); } catch (e) { /* best effort — deletion still proceeds */ }
+
+  try {
+    await db.deleteProfile(id);
+  } catch (e) {
+    console.error('[delete] profile row for ' + u.username + ': ' + (e && e.message));
+    return { error: 'db-failed' };
+  }
+
+  let authResidue = false;
+  try {
+    await sb.deleteUser(id);
+  } catch (e) {
+    authResidue = true;
+    console.error('[delete] ORPHANED AUTH USER ' + id + ' (' + u.username +
+      ') — profile is gone, GoTrue user is not: ' + (e && e.message));
+  }
+
+  // Before the record leaves the read model, so there is no instant in which the
+  // account is unfindable AND not yet tombstoned.
+  tombstone(id);
+
+  // Drop from the read model last, so nothing above can read a half-deleted
+  // account through the cache while the writes are still going out.
+  delete users[u.username.toLowerCase()];
+  delete byId[id];
+  if (u.email) delete byEmail[normalizeEmail(u.email)];
+
+  // The cascade cleared the friendship and friend_request ROWS; these are the
+  // in-memory mirrors of them held on every OTHER account. Missing any of the
+  // three leaves dangling ids that outlive the account until the next restart:
+  // the friend fan-out tries to resolve them on every broadcast, and a pending
+  // request to or from the deleted rider sits in someone's list as an entry that
+  // can never be accepted, declined, or rendered.
+  const drop = (arr) => {
+    if (!Array.isArray(arr)) return;
+    const i = arr.indexOf(id);
+    if (i >= 0) arr.splice(i, 1);
+  };
+  Object.keys(byId).forEach((otherId) => {
+    const o = byId[otherId];
+    if (!o) return;
+    drop(o.friends);
+    drop(o.reqIn);
+    drop(o.reqOut);
+  });
+
+  console.log('[delete] account ' + u.username + ' deleted' +
+    (authResidue ? ' (auth user orphaned — needs manual cleanup)' : ''));
+  return { ok: true, username: u.username, email: u.email || null, authResidue: authResidue };
+}
+
 /* ---------------- profile ---------------- */
 function updateProfile(id, profile) {
   const u = byId[id];
@@ -696,7 +806,7 @@ module.exports = {
   createUser, completeOAuth, signIn, verifyPassword, changePassword, resetWithRecovery, regenRecovery,
   issueEmailToken, consumeEmailToken, purgeExpiredTokens: db.purgeExpiredTokens,
   setEmailFor, markEmailVerified, resetPasswordFor, magicSignIn,
-  updateProfile, flush, close,
+  updateProfile, deleteAccount, isDeleted, flush, close,
   friendLite, sendFriendRequest, acceptFriend, declineFriend, removeFriend, areFriends,
   getStats, recordPB, recordRun, recordWin
 };

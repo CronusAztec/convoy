@@ -270,6 +270,23 @@ function userFromToken(token) {
   return store.getById(claims.sub) || null;
 }
 
+/* Claims from a token, but only for a subject that still exists.
+
+   Everywhere the server accepts a verified token WITHOUT a profile behind it, it
+   is reading that as "provider sign-in that hasn't finished yet" and offering to
+   create the account. A just-deleted rider's access token has exactly that shape
+   and stays valid for up to an hour after the account is gone (stateless JWT —
+   see store.tombstone), so it would be handed the account-setup path.
+
+   Anything that acts on bare claims must come through here instead of calling
+   sb.verify directly. */
+function liveClaims(token) {
+  const claims = sb.verify(token);
+  if (!claims || !claims.sub) return null;
+  if (store.isDeleted(claims.sub)) return null;
+  return claims;
+}
+
 // Pre-fill the "pick a username" step after a provider sign-in. Everything here
 // is a SUGGESTION the rider can overwrite — it is never trusted as an identity,
 // and the username they end up with goes through validUsername() and the same
@@ -441,7 +458,7 @@ async function handleApi(req, res, urlPath) {
       // half-signup: GoTrue knows this person, Convoy doesn't yet. Say so
       // distinctly, so the client can resume at "pick a username" instead of
       // throwing the session away and sending them round the provider again.
-      const claims = sb.verify(token);
+      const claims = liveClaims(token);
       if (claims && claims.sub) {
         return json(res, 409, {
           error: 'no-profile', needsProfile: true,
@@ -641,6 +658,74 @@ async function handleApi(req, res, urlPath) {
         // Hand back the fresh session so the caller stays signed in.
         return json(res, 200, Object.assign({ ok: true }, sessionPayload(changed.session, u)));
       }
+      /* ---- account deletion (right to erasure) ----
+         Google Play's account-deletion policy and GDPR Art. 17 both require this
+         to be reachable by the account holder without asking us, so it is a
+         first-class endpoint rather than a support-inbox workflow.
+
+         Re-authentication is mandatory. A valid access token proves someone has
+         the device, not that they are the owner — and this is the single most
+         destructive thing the API can do, so a borrowed session must not be
+         enough on its own:
+           · password accounts confirm with the password;
+           · provider accounts (Google et al.) have no Convoy password to confirm
+             with, so they type their own username exactly instead. Weaker, but
+             the alternative is a provider account that can never be deleted,
+             which is itself the policy violation. */
+      if (urlPath === '/api/account/delete') {
+        const u = userFromToken(bearer(req));
+        if (!u) return json(res, 401, { error: 'unauthorized' });
+        if (!rateOk('del:' + u.id, 5, RATE_WINDOW) || !rateOk('del:' + ip, 10, RATE_WINDOW)) {
+          return json(res, 429, { error: 'Too many attempts — wait a few minutes' });
+        }
+        // Typed into the UI as a deliberate speed bump, and re-checked here so
+        // the confirmation is not something a client can decide to skip.
+        if (String(body.confirm || '').trim().toUpperCase() !== 'DELETE') {
+          return json(res, 400, { error: 'Type DELETE to confirm' });
+        }
+        const viaProvider = (u.provider || 'password') !== 'password';
+        if (viaProvider) {
+          if (String(body.confirmUsername || '').trim().toLowerCase() !== u.username.toLowerCase()) {
+            return json(res, 401, { error: 'That username doesn\'t match this account' });
+          }
+        } else {
+          const ok = await store.verifyPassword(u, String(body.password || ''), ip);
+          if (authFail(res, ok)) return;
+          if (!ok.ok) return json(res, 401, { error: 'Password is incorrect' });
+        }
+
+        // Captured before the record is destroyed — the notice below needs them.
+        const goneName = u.username;
+        const goneEmail = (u.email && u.emailVerified) ? u.email : null;
+
+        const done = await store.deleteAccount(u.id);
+        if (done.error === 'no-such-account') return json(res, 404, { error: 'No such account' });
+        if (done.error) {
+          console.error('[delete] ' + goneName + ': ' + done.error);
+          return json(res, 502, { error: 'Could not delete the account — try again' });
+        }
+
+        // Drop any live socket still riding on this account. Without it the
+        // rider keeps streaming positions and appearing in other people's maps
+        // and friend lists until they happen to disconnect.
+        //
+        // Closed, not messaged: there is no client handler for a "your account
+        // is gone" frame, and inventing one would be a frame every client
+        // silently drops. The close is what the client reacts to — it reconnects,
+        // the token no longer resolves, and net.js's existing 'auth:invalid' path
+        // signs it out. On the device that did the deleting the UI has already
+        // cleared local state and reloaded, so it never gets that far.
+        for (const [, c] of clients) {
+          if (c.userId !== u.id) continue;
+          try { c.ws.close(); } catch (e) { /* already gone */ }
+        }
+
+        // Best-effort, never blocking: the account is already gone either way.
+        if (goneEmail) mail.send(mail.accountDeletedNotice(goneEmail, goneName));
+
+        return json(res, 200, { ok: true });
+      }
+
       if (urlPath === '/api/recovery') {
         const u = userFromToken(bearer(req));
         if (!u) return json(res, 401, { error: 'unauthorized' });
@@ -948,8 +1033,16 @@ async function handleApi(req, res, urlPath) {
       if (urlPath === '/api/oauth/callback') {
         // If a browser DID send our cvst cookie it must match the state being
         // redeemed — a mismatch is a link minted in someone else's session.
-        const cvstCookie = (String(req.headers.cookie || '').match(/(?:^|;\s*)cvst=([^;]+)/) || [])[1];
-        if (cvstCookie !== undefined && decodeURIComponent(cvstCookie) !== String(body.state || '')) {
+        // decodeURIComponent throws URIError on a malformed escape ('%ZZ', a bare
+        // '%'), and the outer catch would turn that into an opaque 500 instead of
+        // the 400 below. A cookie we cannot decode cannot match the state either,
+        // so fold it into the mismatch case rather than letting it escape.
+        const cvstRaw = (String(req.headers.cookie || '').match(/(?:^|;\s*)cvst=([^;]+)/) || [])[1];
+        let cvstCookie = null;
+        if (cvstRaw !== undefined) {
+          try { cvstCookie = decodeURIComponent(cvstRaw); } catch (e) { cvstCookie = null; }
+        }
+        if (cvstRaw !== undefined && cvstCookie !== String(body.state || '')) {
           return json(res, 400, { error: 'That sign-in link was started somewhere else — sign in again' });
         }
         const pend = oauth.take(body.state);
@@ -987,7 +1080,7 @@ async function handleApi(req, res, urlPath) {
       // Convoy account behind a provider sign-in.
       if (urlPath === '/api/oauth/complete') {
         const token = bearer(req);
-        const claims = sb.verify(token);
+        const claims = liveClaims(token);
         if (!claims || !claims.sub) return json(res, 401, { error: 'unauthorized' });
         if (store.getById(claims.sub)) return json(res, 409, { error: 'This account is already set up' });
         if (!rateOk('oauthdone:' + ip, 20, RATE_WINDOW)) {
@@ -2551,7 +2644,25 @@ const ROOT = path.resolve(__dirname, '..');
 // Explicit allowlist of top-level paths that may be served. Anything else 404s.
 // (Formerly a denylist, which silently served any new file added at the repo root —
 // a path-traversal-class bug waiting for the next config/backup file to land here.)
-const ALLOWED_TOP = ['/', '/index.html', '/js', '/css', '/convoy.apk'];
+const ALLOWED_TOP = ['/', '/index.html', '/js', '/css', '/legal', '/convoy.apk'];
+
+/* ---- legal pages ----
+   Served at clean, stable, linkable paths because other people's rules point at
+   them: Google Play's Data Safety form wants a privacy-policy URL and a
+   *separate* account-deletion URL reachable WITHOUT installing the app, and the
+   in-app consent gate links to /terms and /privacy by these exact names. Keep
+   these paths stable — a store listing points at them, and a 404 here is a
+   policy violation, not a broken link. */
+const LEGAL_PAGES = {
+  '/privacy': 'legal/privacy.html',
+  '/privacy.html': 'legal/privacy.html',
+  '/terms': 'legal/terms.html',
+  '/terms.html': 'legal/terms.html',
+  '/notices': 'legal/notices.html',
+  '/licenses': 'legal/notices.html',
+  '/delete-account': 'legal/delete-account.html',
+  '/account-deletion': 'legal/delete-account.html'
+};
 
 /* ---- Android App Links ----
    Serving /.well-known/assetlinks.json is what lets the APK claim the /l/…
@@ -2774,6 +2885,13 @@ const httpServer = http.createServer((req, res) => {
     return;
   }
 
+  // Legal pages, before the allowlist: /privacy and /terms are the URLs the
+  // consent gate, the store listing and the emails all point at, and they must
+  // resolve whether or not the file layout under legal/ ever changes.
+  if (Object.prototype.hasOwnProperty.call(LEGAL_PAGES, urlPath)) {
+    urlPath = '/' + LEGAL_PAGES[urlPath];
+  }
+
   if (urlPath === '/') urlPath = '/index.html';
   // Resolve first so traversal (e.g. /js/../server/x) is normalized away, THEN
   // check the allowlist against the resolved top-level segment. Checking the
@@ -2872,8 +2990,11 @@ wss.on('connection', (ws, req) => {
     try { m = JSON.parse(buf.toString()); } catch (e) { return; }
     if (!m || typeof m.t !== 'string') return;
     if (m.t !== 'hello' && !c.profile) return; // must say hello first
-    const h = handlers[m.t];
-    if (h) {
+    // Own properties only, and only callables: m.t comes off the wire, and a
+    // bare lookup would hand back inherited Object.prototype members
+    // ('constructor', 'toString', …) as if they were message handlers.
+    const h = Object.prototype.hasOwnProperty.call(handlers, m.t) ? handlers[m.t] : null;
+    if (typeof h === 'function') {
       try { h(c, m); } catch (e) { console.error('[handler ' + m.t + ']', e.message); }
     }
   });

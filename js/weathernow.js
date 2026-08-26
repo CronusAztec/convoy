@@ -28,7 +28,7 @@
 
   function build() {
     box = A.hud.card('hud-weather');
-    box.title = 'Current conditions — tap to refresh';
+    box.title = 'Current conditions · tap to refresh';
     box.innerHTML = '<b class="hc-v" id="wx-v">–°</b><span class="hc-l">weather</span><i class="hc-s" id="wx-s">…</i>';
     elV = box.querySelector('#wx-v');
     elS = box.querySelector('#wx-s');
@@ -56,7 +56,10 @@
       var c = j && j.current;
       if (!c) { if (elS) elS.textContent = 'unavailable'; return; }
       var deg = c.temperature_2m != null ? c.temperature_2m : c.temperature;
-      var w = WMO[c.weather_code] || ['—', ''];
+      // weather_code arrives from the network; an own-property probe keeps a hostile
+      // or garbled 'constructor' from resolving to a prototype member instead of
+      // falling through to the placeholder.
+      var w = (U.own(WMO, c.weather_code) ? WMO[c.weather_code] : null) || ['—', ''];
       if (elV) elV.textContent = Math.round(deg) + '°';
       if (elS) elS.textContent = w[1] + ' ' + w[0];
     }).catch(function () {

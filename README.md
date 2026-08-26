@@ -110,6 +110,42 @@ otherwise it falls back to solo. One dependency (`ws`), no database, no API keys
   gracefully no-op on the web; the BLE/SABRE frame parsers still want validation against
   real hardware before shipping.
 
+## Legal
+
+Convoy handles precise location, broadcasts it to strangers, carries voice and
+chat, and ships features whose legality changes at a border. That is a real
+compliance surface, so it has real documents.
+
+| Document | Served at | Covers |
+|---|---|---|
+| [legal/terms.html](legal/terms.html) | `/terms` | Terms of Service + EULA — passenger-only condition, feature legality by jurisdiction, accuracy disclaimer, liability cap, indemnity |
+| [legal/privacy.html](legal/privacy.html) | `/privacy` | GDPR Art. 13 notice — what we collect, who sees it, processors, retention, rights |
+| [legal/delete-account.html](legal/delete-account.html) | `/delete-account` | Google Play account-deletion URL — works without installing the app |
+| [legal/notices.html](legal/notices.html) | `/notices` | Third-party licences + attribution (also [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)) |
+| [LICENSE](LICENSE) | — | The source is proprietary. Read it before you fork it. |
+
+In the app:
+
+- **A consent gate** stands in front of every entry path — register, guest and
+  social sign-up alike. Three separate confirmations: *I'm the passenger*,
+  *I'm 16+*, and *I agree to the Terms and Privacy Policy*. The result is stored
+  with the document version and a timestamp (`js/state.js` → `LEGAL_VERSION`), so
+  bumping that constant makes every rider re-accept before they can carry on.
+- **Feature legality notices** fire once, at the moment a risky feature is first
+  switched on — radar/enforcement layers, detector pairing, scanner audio, and
+  the drag timer. Each says what is restricted where, and cancelling leaves the
+  feature off.
+- **Account deletion** lives in Settings → Legal & data, and at `/delete-account`
+  for anyone without the app. It re-authenticates, erases the profile row
+  (cascading to stats, friends and recovery codes), deletes the GoTrue user,
+  kicks any live socket, and tombstones the id so the stale access token can't
+  walk back into account setup.
+
+> **Before you ship publicly**, fill in the operator blanks — they are marked in
+> red on every page and listed in [DEPLOY.md](DEPLOY.md#pre-launch-legal-checklist).
+> Documents naming no legal entity and no governing law will not survive Play
+> review and are largely unenforceable anyway.
+
 ## Structure
 
 ```
@@ -130,7 +166,7 @@ js/radar.js             radar HUD: sonar, risk, detector alerts
 js/scanners.js          police-scanner directory (OpenMHz)
 js/overlays.js          weather radar + traffic heatmap + hazard pins
 js/dragy.js             0–60 / drag-timer performance meter
-js/ui.js                panels, dock, forms, settings, onboarding
+js/ui.js                panels, dock, forms, settings, onboarding, consent gate, legality notices
 js/auth.js              register/login/guest/social, email links, session + refresh, boot gating
 js/native.js            Android native bridge (bg GPS, BLE radar, SABRE); no-op on web
 js/app.js               boot
@@ -141,6 +177,7 @@ server/store.js         account store — in-memory read cache over Supabase, re
 server/mailer.js        outbound email over Resend: transport + link/notice templates
 server/oauth.js         social sign-in: provider registry + server-held PKCE state
 server/migrations/      SQL applied to the Supabase project, in order
+legal/                  Terms, Privacy Policy, deletion page, third-party notices (served at /terms, /privacy, …)
 server/tomtom.js        TomTom routing + traffic proxy (key from TOMTOM_KEY env, never client-side)
 server/overpass.js      OpenStreetMap (Overpass) proxy + cache — the endpoint sends no CORS header
 server/bots.js          server-side bots + shared geo helpers

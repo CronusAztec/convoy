@@ -1291,6 +1291,97 @@ body.radar-on .map-controls-left { display: none; }
 }
 .pledge input { margin-top: 2px; accent-color: var(--accent); width: 15px; height: 15px; flex: none; }
 .ob-note { text-align: center; font-size: 11px; color: var(--text-dim); line-height: 1.5; font-family: var(--font-mono); }
+.ob-note a { color: var(--accent); }
+
+/* ============================== consent gate & legal ==============================
+   The sign-up confirmations (passenger / 16+ / terms), the one-shot feature
+   legality notices, and the disclosure block in Settings. Deliberately plainer
+   than the rest of the HUD: this is the one place in the app that has to read
+   like a document rather than a dashboard. */
+.consent-block { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 2px; }
+
+/* The headline colours are tokenised rather than using --warn/--bad directly.
+   Those are neon (#ffb000 / #ff2b5e), tuned for the dark HUD; on the light
+   theme's near-white --surface-solid (#eef3fa) amber lands around 1.9:1 and red
+   around 3.4:1, both under the 4.5:1 needed to read as body text. This is the
+   driving-safety warning and the delete-account warning — the two blocks in the
+   app that must stay legible in every theme — so light mode gets darkened
+   variants that keep the same hue and clear AA. */
+:root { --consent-warn-ink: var(--warn); --consent-danger-ink: var(--bad); }
+[data-theme="light"] { --consent-warn-ink: #7a4e00; --consent-danger-ink: #a30027; }
+
+.consent-warn {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 176, 0, .09);
+  border: 1px solid rgba(255, 176, 0, .38);
+  border-left-width: 3px;
+  font-size: 12.5px; line-height: 1.5;
+}
+[data-theme="light"] .consent-warn { background: rgba(255, 176, 0, .18); }
+.consent-warn b { color: var(--consent-warn-ink); letter-spacing: .01em; }
+.consent-warn span { color: var(--text-dim); font-size: 11.5px; }
+.consent-warn-danger { background: rgba(255, 43, 94, .09); border-color: rgba(255, 43, 94, .4); }
+[data-theme="light"] .consent-warn-danger { background: rgba(255, 43, 94, .12); }
+.consent-warn-danger b { color: var(--consent-danger-ink); }
+
+.consent-row {
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 11px 13px;
+  border-radius: var(--radius-sm);
+  background: rgba(var(--accent-rgb), .06);
+  border: 1px solid rgba(var(--accent-rgb), .3);
+  font-size: 12.5px; line-height: 1.5;
+  cursor: pointer;
+}
+.consent-row:hover { border-color: rgba(var(--accent-rgb), .5); }
+.consent-row input { margin-top: 2px; accent-color: var(--accent); width: 15px; height: 15px; flex: none; }
+.consent-row a { color: var(--accent); text-decoration: underline; }
+
+.consent-note {
+  padding: 11px 13px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  font-size: 11.5px; line-height: 1.55;
+}
+.consent-note b { color: var(--text); }
+.consent-note a { color: var(--accent); }
+
+.legal-list { margin: 6px 0 10px; padding-left: 18px; font-size: 12.5px; line-height: 1.55; color: var(--text-dim); }
+.legal-list li { margin: 5px 0; }
+.legal-list b { color: var(--text); }
+
+.legal-note {
+  padding: 11px 13px; margin-bottom: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  font-size: 11.5px; line-height: 1.55;
+}
+.legal-note b { color: var(--text); }
+
+.legal-links { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-bottom: 8px; }
+.legal-links a { color: var(--accent); font-size: 12px; text-decoration: none; }
+.legal-links a:hover { text-decoration: underline; }
+
+.legal-consent {
+  color: var(--text-dim); font-size: 10.5px; line-height: 1.5;
+  font-family: var(--font-mono); margin: 6px 0 2px;
+}
+
+/* Destructive primary — account deletion only. Loud on purpose: it is the one
+   button in the app that cannot be undone. */
+.btn-danger {
+  color: #fff;
+  background: var(--bad);
+  border-color: var(--bad);
+}
+.btn-danger:hover:not(:disabled) { filter: brightness(1.1); }
+.btn-danger:disabled { opacity: .45; }
 
 /* ============================== auth screen ============================== */
 .modal-card .btn-block + .btn-block { margin-top: -4px; }

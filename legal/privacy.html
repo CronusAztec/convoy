@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Convoy — Privacy Policy</title>
+<link rel="stylesheet" href="/legal/legal.css"/>
+</head>
+<body>
+<div class="wrap">
+
+<header class="site">
+  <svg class="mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 20 7.5 20 16.5 12 21 4 16.5 4 7.5Z"/><path d="M12 8 16 10.3 16 14.7 12 17 8 14.7 8 10.3Z"/></svg>
+  <b>CONVOY</b>
+  <a href="/">&larr; Back to the app</a>
+</header>
+
+<h1>Privacy Policy</h1>
+<p class="meta">Effective 25 August 2026 &middot; Version 1.0</p>
+
+<div class="card">
+  <p style="margin:0"><strong>The short version.</strong> Convoy is a live map. To put
+  you on it we handle your <strong>precise location</strong> and broadcast it to other
+  riders near you. If you make an account, <strong>we hold that account on our
+  servers</strong> &mdash; your username, your profile, your car, your friends, and your
+  email if you gave one &mdash; until you delete it. You can delete it yourself, at
+  any time, from Profile &rarr; Account &rarr; Delete account, or at
+  <a href="/delete-account">odoreeci.tech/delete-account</a>. We do not sell your
+  data and we do not run ads.</p>
+</div>
+
+<div class="warn">
+  <strong>Before you publish this policy:</strong> fill in the operator identity and
+  governing-law blanks marked in red below. A privacy policy naming no controller
+  is not a valid GDPR Article 13 notice, and Google Play review will reject it.
+</div>
+
+<h2 id="who">1. Who we are</h2>
+<p>Convoy (the &ldquo;Service&rdquo;) is operated by <span class="todo">[LEGAL ENTITY NAME]</span>
+of <span class="todo">[REGISTERED ADDRESS]</span> (&ldquo;Convoy&rdquo;, &ldquo;we&rdquo;, &ldquo;us&rdquo;). For the
+purposes of the UK and EU GDPR we are the <strong>data controller</strong> for the
+personal data described here.</p>
+<ul>
+  <li>Privacy and data protection: <a href="mailto:privacy@odoreeci.tech">privacy@odoreeci.tech</a></li>
+  <li>Abuse and safety reports: <a href="mailto:abuse@odoreeci.tech">abuse@odoreeci.tech</a></li>
+  <li>Security vulnerabilities: <a href="mailto:security@odoreeci.tech">security@odoreeci.tech</a></li>
+</ul>
+<p>We have not appointed a Data Protection Officer and are not required to.
+Representative under GDPR Article 27: <span class="todo">[APPOINT, OR STATE &ldquo;not required&rdquo;]</span>.</p>
+
+<h2 id="what">2. What we collect, and why</h2>
+
+<h3>2.1 Location &mdash; the core of the Service</h3>
+<table>
+<tr><th>Data</th><th>Why</th><th>Legal basis</th></tr>
+<tr><td>Precise GPS position, heading, speed, accuracy</td><td>To draw you on the map, place you near other riders, run navigation, and time performance runs</td><td>Consent &mdash; you grant the OS permission and can revoke it</td></tr>
+<tr><td>Background location (Android, while a convoy or trip is active)</td><td>To keep your position live with the screen off, via a foreground service with a visible notification</td><td>Consent</td></tr>
+</table>
+<p><strong>Who sees your location.</strong> While you are connected in live mode:</p>
+<ul>
+  <li>Riders <strong>within about 30&nbsp;km of you</strong> receive your position in real
+  time, roughly once a second, along with your display name, avatar and car.</li>
+  <li>Everyone else, worldwide, may see you on the <strong>delayed global layer</strong>
+  &mdash; a snapshot at least five minutes old, clustered and coarse.</li>
+  <li>Members of your convoy see you continuously, at full rate.</li>
+</ul>
+<p><strong>Ghost Mode</strong> removes you from the feed for everyone outside your convoy,
+including the global layer.</p>
+<p><strong>We do not store location history.</strong> Positions live in server memory only,
+in a rolling buffer of roughly the last five minutes, and are discarded after
+that. Nothing about where you have been is written to our database. Trip logs,
+parking pins and performance runs stay on your own device; if you are signed in,
+only the <em>result</em> of a performance run &mdash; a time, never a route &mdash; is saved to
+your account.</p>
+
+<h3>2.2 Your account &mdash; what we hold</h3>
+<p>If you create an account, we hold the following on our servers for as long as
+that account exists:</p>
+<table>
+<tr><th>Data</th><th>Notes</th></tr>
+<tr><td>Username</td><td>Public to other riders</td></tr>
+<tr><td>Password</td><td>Stored only as a salted hash, by our authentication provider. We never see it.</td></tr>
+<tr><td>Email address, if you give one</td><td>Optional. Used for confirmation, password reset and sign-in links. Never sold; never used for marketing without separate opt-in.</td></tr>
+<tr><td>Recovery code</td><td>Stored only as a salted hash</td></tr>
+<tr><td>Display name, handle, avatar emoji, vibe</td><td>Public to other riders</td></tr>
+<tr><td>Car details &mdash; year, make, model, trim, paint, finish, body, engine, drivetrain, power, mods</td><td>Public to other riders. Supplied by you. Do not enter your registration plate or VIN.</td></tr>
+<tr><td>Friends list and pending friend requests</td><td>Visible to the other party</td></tr>
+<tr><td>Performance stats &mdash; personal bests, runs, wins</td><td>Public on your rider card</td></tr>
+<tr><td>Social sign-in identity, if used</td><td>Provider name, provider user ID, and the email the provider releases to us</td></tr>
+</table>
+<p><strong>Legal basis:</strong> performance of our contract with you (Art. 6(1)(b)) &mdash; we
+cannot give you an account without holding it.</p>
+<p>If you ride as a <strong>guest</strong>, none of this reaches our servers. Your profile and
+settings stay in your browser&rsquo;s local storage on that device, and clearing site
+data erases them.</p>
+
+<h3>2.3 Things you send to other people</h3>
+<ul>
+  <li><strong>Convoy chat</strong> &mdash; relayed through our server to convoy members. Held in
+  memory for the life of the convoy; not written to the database.</li>
+  <li><strong>Walkie-talkie voice</strong> &mdash; peer-to-peer between convoy members wherever
+  possible. If a direct connection fails, audio is relayed live through our
+  server. <strong>We do not record it</strong> and it is never written to disk.</li>
+  <li><strong>Hazard reports and waves</strong> &mdash; broadcast to riders nearby with your
+  rider identity attached.</li>
+</ul>
+<p>Legal basis: contract. Anything you broadcast is seen by other people &mdash; treat
+it as public.</p>
+
+<h3>2.4 Technical data</h3>
+<ul>
+  <li><strong>IP address</strong> &mdash; processed transiently to route your connection, apply
+  rate limits and block abuse. Legal basis: legitimate interests (Art. 6(1)(f)) in
+  keeping the Service available and safe.</li>
+  <li><strong>Session tokens</strong> &mdash; a short-lived access token and a refresh token,
+  held in your device&rsquo;s local storage so that you stay signed in.</li>
+  <li><strong>Server logs</strong> &mdash; account events such as sign-in, password change and
+  email confirmation, for security and abuse investigation.</li>
+</ul>
+<p>Convoy sets <strong>no advertising cookies and no analytics cookies</strong>. It uses
+local storage for your own settings and session, which is strictly necessary for
+the Service to function.</p>
+
+<h2 id="never">3. What we never do</h2>
+<ul>
+  <li>We do not sell or rent personal data. Under the CCPA/CPRA we have not sold
+  or shared personal information in the preceding twelve months.</li>
+  <li>We do not serve advertising, and we share nothing with ad networks or data
+  brokers.</li>
+  <li>We do not build advertising profiles or track you across other apps and
+  sites.</li>
+  <li>We do not record your voice, and we do not store your location history.</li>
+  <li>We do not knowingly collect data from children &mdash; see &sect;8.</li>
+</ul>
+
+<h2 id="sub">4. Who we share it with</h2>
+<p>Other riders see what &sect;2 says they see. Beyond that we use the processors
+below, each only for the purpose named:</p>
+<table>
+<tr><th>Processor</th><th>Purpose</th><th>Data</th></tr>
+<tr><td><a href="https://supabase.com/privacy" rel="noopener" target="_blank">Supabase</a></td><td>Authentication and database &mdash; this is where your account lives</td><td>All account data in &sect;2.2</td></tr>
+<tr><td><a href="https://resend.com/legal/privacy-policy" rel="noopener" target="_blank">Resend</a></td><td>Sending confirmation, reset and sign-in email</td><td>Email address, username</td></tr>
+<tr><td>OAuth providers you choose (Google, Apple, GitHub, Discord, Microsoft)</td><td>Social sign-in</td><td>Whatever you authorise at their consent screen</td></tr>
+<tr><td><a href="https://developer.tomtom.com/" rel="noopener" target="_blank">TomTom</a></td><td>Traffic-aware routing and traffic tiles</td><td>Route coordinates, proxied by our server so your IP is not exposed to TomTom</td></tr>
+<tr><td>CARTO, OpenFreeMap, Nominatim, OSRM, Overpass, RainViewer, OpenSky, airplanes.live, OpenMHz, Open-Meteo</td><td>Map tiles, search, routing, overlays, radar, scanner directory</td><td>Requested <strong>directly by your device</strong>, so these services see your IP address and the map area you are viewing &mdash; see &sect;5</td></tr>
+<tr><td>Our hosting provider</td><td>Running the Service</td><td>All of the above, in transit</td></tr>
+</table>
+<p>We also disclose data where we are legally required to &mdash; a valid court order,
+warrant or equivalent legal process &mdash; and where necessary to investigate abuse
+or protect someone&rsquo;s safety. We will tell you when we are permitted to.</p>
+
+<h2 id="third">5. Requests your device makes directly</h2>
+<p>Map tiles, destination search, keyless routing, weather, precipitation radar,
+aircraft feeds and the scanner directory are fetched by your device from the
+third parties listed above. Those requests carry <strong>your IP address</strong> and the
+area of the map you are viewing, and are governed by each provider&rsquo;s own privacy
+policy, not this one. We proxy what we can &mdash; TomTom, Overpass, incident feeds
+&mdash; specifically so that fewer of these requests leave your device directly. Full
+list and licences: <a href="/notices">third-party notices</a>.</p>
+
+<h2 id="where">6. Where your data is held</h2>
+<p>Our servers and our Supabase project are hosted in
+<span class="todo">[REGION &mdash; e.g. eu-west-2 / us-east-1]</span>. The processors named
+above may process data in the United States and elsewhere. Where personal data
+leaves the UK or EEA we rely on the UK IDTA, the EU Standard Contractual Clauses,
+or an adequacy decision where one applies.</p>
+
+<h2 id="keep">7. How long we keep it</h2>
+<table>
+<tr><th>Data</th><th>Retention</th></tr>
+<tr><td>Live positions</td><td>In memory only; discarded within about 5 minutes</td></tr>
+<tr><td>Chat and voice</td><td>Not stored. Chat is dropped when the convoy ends.</td></tr>
+<tr><td>Account data</td><td>Until you delete your account</td></tr>
+<tr><td>After you delete</td><td>Erased from the live database immediately. Encrypted backups roll off within <strong>30 days</strong>.</td></tr>
+<tr><td>Email tokens (confirmation, reset, sign-in)</td><td>15 minutes to 1 hour, then purged</td></tr>
+<tr><td>Security and abuse logs</td><td>Up to 90 days</td></tr>
+</table>
+
+<h2 id="age">8. Age</h2>
+<p>Convoy is <strong>not for children</strong>. You must be at least <strong>16</strong> to use it, or
+older where your country sets a higher age for consenting to data processing.
+Convoy is not directed to children under 13 and we do not knowingly collect their
+personal data. If you believe a child has given us data, write to
+<a href="mailto:privacy@odoreeci.tech">privacy@odoreeci.tech</a> and we will delete
+the account.</p>
+
+<h2 id="rights">9. Your rights</h2>
+<p>Wherever you live, you can:</p>
+<ul>
+  <li><strong>Delete your account and everything in it</strong> &mdash; Profile &rarr; Account
+  &rarr; Delete account in the app, or
+  <a href="/delete-account">odoreeci.tech/delete-account</a>. It is immediate and
+  irreversible.</li>
+  <li><strong>Get a copy of your data</strong> &mdash; email
+  <a href="mailto:privacy@odoreeci.tech">privacy@odoreeci.tech</a>. We respond within
+  30 days.</li>
+  <li><strong>Correct it</strong> &mdash; most of it is editable in Profile.</li>
+  <li><strong>Withdraw location consent</strong> &mdash; revoke the permission in your OS
+  settings. The map still works; you simply are not on it.</li>
+  <li><strong>Go invisible without leaving</strong> &mdash; Ghost Mode.</li>
+</ul>
+<p>If the UK or EU GDPR applies to you, you also have the rights of access,
+rectification, erasure, restriction, portability and objection, including
+objection to processing based on legitimate interests. You may complain to your
+supervisory authority &mdash; in the UK, the
+<a href="https://ico.org.uk/" rel="noopener" target="_blank">ICO</a>.</p>
+<p>If you are a California resident you have the rights to know, delete, correct,
+and to opt out of sale or sharing. We do not sell or share personal information,
+so there is nothing to opt out of, and we will never discriminate against you for
+exercising a right.</p>
+
+<h2 id="sec">10. Security</h2>
+<p>Traffic is encrypted in transit (HTTPS and WSS; the Android build refuses
+cleartext). Passwords and recovery codes are stored only as salted hashes, by our
+authentication provider &mdash; we cannot read them. Access tokens are short-lived.
+Rate limits and per-IP ceilings apply across the API and the realtime layer. No
+system is perfectly secure; if you find a flaw, please tell
+<a href="mailto:security@odoreeci.tech">security@odoreeci.tech</a> before you tell
+anyone else.</p>
+
+<h2 id="changes">11. Changes</h2>
+<p>If we change this policy materially we will raise the version, change the
+effective date, and show you a notice in the app before the change takes effect
+for you. Continuing to use Convoy after that means you accept the new version.</p>
+
+<h2 id="contact">12. Contact</h2>
+<p><a href="mailto:privacy@odoreeci.tech">privacy@odoreeci.tech</a> &middot;
+<span class="todo">[POSTAL ADDRESS]</span></p>
+
+<footer class="site">
+  <a href="/terms">Terms of Service</a>
+  <a href="/notices">Third-party notices</a>
+  <a href="/delete-account">Delete your account</a>
+  <a href="/">Back to the app</a>
+</footer>
+
+</div>
+</body>
+</html>

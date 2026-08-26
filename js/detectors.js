@@ -54,12 +54,12 @@
     uniden: {
       brand: 'Uniden', proto: 'name', stream: false,
       match: /^(uniden|r[3478]\b|dfr\d)/i,
-      note: 'Bluetooth firmware link — alert stream best-effort'
+      note: 'Bluetooth firmware link · alert stream best-effort'
     },
     whistler: {
       brand: 'Whistler', proto: 'name', stream: false,
       match: /^(whistler|z-?\d)/i,
-      note: 'Recognized — alert stream best-effort'
+      note: 'Recognized · alert stream best-effort'
     },
     escortgen: {
       brand: 'Escort (generic UART)', proto: 'nus', stream: true,

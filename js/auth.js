@@ -169,7 +169,7 @@
         }
         return { ok: false, error: res.body.error || 'Could not create account' };
       })
-      .catch(function () { return { ok: false, error: 'Network error — is the server running?' }; });
+      .catch(function () { return { ok: false, error: 'Network error. Is the server running?' }; });
   }
 
   // `identifier` is a username OR an email address; the server works out which.
@@ -179,7 +179,7 @@
         if (res.status === 200) { ST.setAuth(res.body); scheduleRefresh(); return { ok: true }; }
         return { ok: false, error: res.body.error || 'Could not sign in' };
       })
-      .catch(function () { return { ok: false, error: 'Network error — is the server running?' }; });
+      .catch(function () { return { ok: false, error: 'Network error. Is the server running?' }; });
   }
 
   /* ---------------- email flows ----------------
@@ -286,6 +286,31 @@
       .catch(function () { return { ok: false, error: 'Network error' }; });
   }
 
+  // Right to erasure. `opts` carries whichever re-authentication this account
+  // supports: { password } for a Convoy password, { confirmUsername } for a
+  // provider account that has none. The typed 'DELETE' is checked server-side
+  // too — this is a confirmation, not a client-side formality.
+  //
+  // On success the account no longer exists, so there is nothing left to keep a
+  // session for: clear it and reload into the signed-out app. Deliberately not
+  // calling logout(), which would POST a revoke for a session GoTrue has already
+  // destroyed and log a spurious failure.
+  function deleteAccount(opts) {
+    var payload = { confirm: 'DELETE' };
+    if (opts && opts.password) payload.password = opts.password;
+    if (opts && opts.confirmUsername) payload.confirmUsername = opts.confirmUsername;
+    return authed('/api/account/delete', 'POST', payload)
+      .then(function (res) {
+        if (res.status === 200) {
+          if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
+          ST.clearAuth();
+          return { ok: true };
+        }
+        return { ok: false, error: res.body.error || 'Could not delete the account' };
+      })
+      .catch(function () { return { ok: false, error: 'Network error' }; });
+  }
+
   /* ---------------- social sign-in ---------------- */
 
   function isNativeApp() { return !!(A.config && A.config.isNative); }
@@ -356,7 +381,7 @@
         if (!oauthStateIsOurs(r.state)) {
           console.warn('[auth] ignored a native OAuth redirect with an unexpected state');
           A.ui.showAuth(enterApp);
-          A.ui.toast('That sign-in didn\'t start here — tap the button to sign in', 'warn');
+          A.ui.toast('That sign-in didn\'t start here. Tap the button to sign in', 'warn');
           return;
         }
         handleRedirect({ kind: 'oauth', code: r.code, state: r.state });
@@ -506,9 +531,9 @@
     // silently dropped, so a profile edit could look "saved" without being.
     // Now report failures; the local copy is still persisted either way.
     authed('/api/profile', 'POST', { profile: profile }).then(function (res) {
-      if (res.status !== 200 && A.ui) A.ui.toast('Profile not synced — will retry next edit', 'warn');
+      if (res.status !== 200 && A.ui) A.ui.toast('Profile not synced. Will retry next edit', 'warn');
     }).catch(function () {
-      if (A.ui) A.ui.toast('Profile not synced — check your connection', 'warn');
+      if (A.ui) A.ui.toast('Profile not synced. Check your connection', 'warn');
     });
   }
 
@@ -524,6 +549,10 @@
 
   /* ---------------- boot gating ---------------- */
   var entered = false;
+  // Set when someone arrived from /delete-account signed out: they have to sign
+  // in before there is an account to erase, so the intent is parked here and
+  // honoured the moment they land in the app.
+  var pendingDelete = false;
   function enterApp() {
     if (entered) return;
     entered = true;
@@ -536,6 +565,21 @@
     if (A.ui.refreshVerifyBanner) A.ui.refreshVerifyBanner();
     A.net.init();
     A.net.connect();
+
+    var next = function () {
+      if (!pendingDelete) return;
+      pendingDelete = false;
+      if (hasSession() && A.ui.showDeleteAccount) A.ui.showDeleteAccount();
+    };
+
+    // Everyone who reaches the app comes through here — a restored session, a
+    // returning guest, and a rider who just signed up — which makes this the one
+    // place that can guarantee nobody rides under terms they haven't accepted.
+    // A fresh sign-up already recorded consent on the way in, so the gate is a
+    // no-op for them; it only ever appears for a stored consent that is missing
+    // or predates a revision of the documents.
+    if (ST.hasConsent && !ST.hasConsent()) A.ui.showConsentGate(next);
+    else next();
   }
 
   /* ---------------- links coming back into the app ----------------
@@ -568,9 +612,10 @@
      clients; this one covers the APK and any no-cookie client. */
   var OAUTH_STATE_KEY = 'cv_oauth_state';
   var OAUTH_STATE_TTL_MS = 10 * 60 * 1000;   // matches oauth.js STATE_TTL_MS
+  var oauthStorageOk = true;   // false once a write has thrown (private mode etc.)
   function rememberOauthState(state) {
     try { localStorage.setItem(OAUTH_STATE_KEY, JSON.stringify({ state: state, at: Date.now() })); }
-    catch (e) { /* private mode etc. — the redirect will be refused, sign-in restarts */ }
+    catch (e) { oauthStorageOk = false; }
   }
   function oauthStateExpected() {
     try {
@@ -586,7 +631,12 @@
   }
   // A redirect is only ours if it carries the state we minted. Unknown/stale
   // state ⇒ someone else's sign-in landing in our URL bar — ignore it.
+  // Exception: if OUR storage is broken (private mode), we never managed to
+  // remember anything, so the check can't distinguish ours from foreign — and
+  // an attacker has no way to break the victim's localStorage from another
+  // origin. Fail open there rather than bricking OAuth entirely.
   function oauthStateIsOurs(state) {
+    if (!oauthStorageOk) return true;
     var expected = oauthStateExpected();
     return !!expected && expected === state;
   }
@@ -615,6 +665,13 @@
     if (cv && token && LINK_KINDS.indexOf(cv) >= 0) {
       stripLinkParams(['cv', 'token']);
       return { kind: cv, token: token };
+    }
+    // The one link shape with no token: /delete-account sends people here to
+    // reach the in-app erasure flow. It carries no authority of its own — it
+    // opens a screen that then re-authenticates — so there is nothing to verify.
+    if (cv === 'delete') {
+      stripLinkParams(['cv']);
+      return { kind: 'delete' };
     }
     return null;
   }
@@ -681,6 +738,22 @@
         return false;
       });
     }
+
+    // Arrived from /delete-account. Signed in, we go straight to the erasure
+    // screen; signed out, the rider has to sign in first — there is no account
+    // to delete until we know which one — so hand boot back and open the flow
+    // once they're in.
+    if (r.kind === 'delete') {
+      if (hasSession()) {
+        return me().then(function () {
+          enterApp();
+          A.ui.showDeleteAccount();
+          return true;
+        });
+      }
+      pendingDelete = true;
+      return Promise.resolve(false);
+    }
     return Promise.resolve(false);
   }
 
@@ -738,6 +811,7 @@
     resendVerification: resendVerification,
     addEmail: addEmail,
     changeEmail: changeEmail,
+    deleteAccount: deleteAccount,
     // social
     oauthStart: oauthStart,
     oauthComplete: oauthComplete,

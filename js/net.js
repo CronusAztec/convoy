@@ -86,7 +86,7 @@
     connecting = true;
     var socket;
     try { socket = new WebSocket(wsUrl()); }
-    catch (e) { connecting = false; attempt++; onConnectFailed(); return; }
+    catch (e) { onConnectFailed(); return; }   // clears `connecting`, bumps `attempt`
 
     var settled = false;
     var timer = setTimeout(function () {
@@ -168,7 +168,7 @@
     teardownLive();
     connecting = false;
     attempt++;
-    if (!toldOffline) { toldOffline = true; A.ui.toast('Connection lost — reconnecting…', 'warn'); }
+    if (!toldOffline) { toldOffline = true; A.ui.toast('Connection lost. Reconnecting…', 'warn'); }
     scheduleRetry();
   }
 
@@ -190,8 +190,8 @@
     teardownLive();
     A.sim.enableSolo(); // no-op for fake riders; just keeps netMode honest
     // Retrying really does continue now — scheduleRetry() always arms.
-    if (hadConnection) A.ui.toast('Server unreachable — retrying… (no other riders shown)', 'warn');
-    else A.ui.toast('Offline — retrying in the background', 'info');
+    if (hadConnection) A.ui.toast('Server unreachable. Retrying… (no other riders shown)', 'warn');
+    else A.ui.toast('Offline. Retrying in the background', 'info');
   }
 
   function goLive(m) {
@@ -213,7 +213,7 @@
     if (pv && pv !== 'off') send({ t: 'voice:prox', mode: pv });
     if (!posTimer) posTimer = setInterval(sendPos, 1000);
     ST.emit('nearby:seeded', A.sim.count());
-    A.ui.toast('Connected — ' + (m.online || 1) + ' rider' + (m.online === 1 ? '' : 's') + ' online', 'success');
+    A.ui.toast('Connected · ' + (m.online || 1) + ' rider' + (m.online === 1 ? '' : 's') + ' online', 'success');
   }
 
   // Ask the server once whether it has a TomTom key configured. The result gates
@@ -331,7 +331,7 @@
       A.store.setAuth({ emailVerified: true });
       if (A.ui.refreshVerifyBanner) A.ui.refreshVerifyBanner();
       if (A.ui.renderAccount) A.ui.renderAccount();
-      A.ui.toast('Email confirmed — names and stats are back', 'success');
+      A.ui.toast('Email confirmed. Names and stats are back', 'success');
     },
 
     // A rider set a new dragy PB → update their NPC stats so any open profile
@@ -420,7 +420,7 @@
             connect();   // re-sends `hello` with the refreshed token
             return;
           }
-          A.ui.toast('Your session expired — please sign in again', 'warn');
+          A.ui.toast('Your session expired. Please sign in again', 'warn');
           ST.clearAuth();
           setTimeout(function () { location.reload(); }, 1400);
         });

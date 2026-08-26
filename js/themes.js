@@ -30,15 +30,20 @@
   var current = 'dark';
 
   function register(def) {
-    if (!def || !def.id || REG[def.id]) return;
+    if (!def || !def.id || own(REG, def.id)) return;
     REG[def.id] = def;
     ORDER.push(def.id);
   }
 
-  function get(id) { return REG[id] || null; }
+  // Own properties only. REG is a plain object, so a bare REG[id] also finds
+  // inherited Object.prototype members ('constructor', 'toString', …), which
+  // are truthy and would sail past the `|| REG.dark` fallback in apply().
+  // themes.js binds no util alias, so the probe is local.
+  function own(o, k) { return !!o && Object.prototype.hasOwnProperty.call(o, k); }
+  function get(id) { return own(REG, id) ? REG[id] : null; }
   function list() { return ORDER.map(function (id) { return REG[id]; }); }
   function isDark(id) {
-    var def = REG[id];
+    var def = get(id);
     if (def) return def.dark !== false;
     return id !== 'light';
   }
@@ -76,7 +81,7 @@
   /* Called by store.applyTheme with the resolved theme id. The data-theme attribute
      itself is set by the store; this just makes sure the theme's CSS/fonts exist. */
   function apply(id) {
-    var def = REG[id] || REG.dark;
+    var def = get(id) || REG.dark;
     current = def ? def.id : 'dark';
     if (!def) return;
     ensureCss(def);

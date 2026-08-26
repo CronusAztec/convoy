@@ -28,7 +28,7 @@
   function build() {
     elBox = U.el('div', 'speedo glass');
     elBox.id = 'speedo';
-    elBox.title = 'Session speed — tap to reset';
+    elBox.title = 'Session speed · tap to reset';
     elBox.innerHTML = '<b id="speedo-v">–</b><span id="speedo-u"></span><i id="speedo-sub"></i>';
     document.body.appendChild(elBox);
     elV = elBox.querySelector('#speedo-v');
