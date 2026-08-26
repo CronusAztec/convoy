@@ -745,11 +745,42 @@
       } else {
         el = U.el('div', 'msg msg-them',
           '<span class="msg-from">' + U.esc(m.from) + '</span>' + U.esc(m.text));
+        // Report-on-the-message. Google Play's UGC policy wants reporting on the
+        // CONTENT, not only on the person — and it is what someone reaches for
+        // first anyway, with the offending line still on screen. The text is
+        // snapshotted into the report because convoy chat is never persisted.
+        if (m.fromId) addChatReport(el, m);
       }
       log.appendChild(el);
     }
     log._n = chat.length;
     log.scrollTop = log.scrollHeight;
+  }
+
+  // A small flag button on a received chat line. Opens the same report dialog the
+  // rider card uses, pre-filled with the message and its author.
+  function addChatReport(el, m) {
+    var flag = U.el('button', 'msg-flag',
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" ' +
+      'stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4"/>' +
+      '<path d="M5 4.6c2-1.3 4-1.3 6 0s4 1.3 6 0v8.8c-2 1.3-4 1.3-6 0s-4-1.3-6 0"/></svg>');
+    flag.type = 'button';
+    flag.title = 'Report this message';
+    flag.setAttribute('aria-label', 'Report this message from ' + (m.from || 'this rider'));
+    flag.addEventListener('click', function (e) {
+      e.stopPropagation();
+      // Resolve the rider afresh — they may have left since the line was drawn,
+      // in which case the id and the name from the message are all we have.
+      var npc = A.sim.getNpc(m.fromId);
+      showReportDialog({
+        id: m.fromId,
+        name: (npc && npc.profile && npc.profile.name) || m.from || 'this rider',
+        emoji: m.emoji,
+        account: (npc && npc.account) || null,
+        self: false
+      }, 'chat', m.text);
+    });
+    el.appendChild(flag);
   }
 
   function updateConvoyLive() {
@@ -1274,7 +1305,237 @@
       }
     }
     card.appendChild(act);
+
+    // Safety row — deliberately separated from the social actions above and
+    // styled quietly. It has to be findable on every rider without competing
+    // with "Invite" for attention, because the moment someone needs it they are
+    // already looking for it.
+    if (!subject.self) card.appendChild(buildSafetyRow(subject));
     return card;
+  }
+
+  /* ---------------- block & report ----------------
+     Google Play's UGC policy wants both, in-app, on the content and on the
+     person. Convoy carries chat, voice, profiles and hazard pins, so this row is
+     reachable from any rider card and from any chat message.
+
+     Block and report are separate on purpose. Blocking is the immediate,
+     self-service one and needs no review; reporting reaches an operator and does
+     nothing for the reporter's own feed. Doing only one of them is the common
+     mistake — a block with no report leaves the rider free to do it to the next
+     person, and a report with no block leaves the victim still exposed while
+     they wait. So the block dialog offers to file a report at the same time. */
+
+  // The rider's username, or null if they are a guest (or anonymised behind the
+  // email gate). This — not an account uuid — is what identifies a blockable
+  // rider on the client; see store.isBlockedUsername for why.
+  function riderUsername(subject) {
+    var npc = A.sim.getNpc(subject.id);
+    return (npc && npc.account) || subject.account || null;
+  }
+
+  function buildSafetyRow(subject) {
+    var row = U.el('div', 'pf-safety');
+    var uname = riderUsername(subject);
+    var isBlocked = uname ? ST.isBlockedUsername(uname)
+                          : (S.hiddenRiders.indexOf(subject.id) >= 0);
+
+    var blockBtn = U.el('button', 'btn btn-ghost btn-small btn-danger-text',
+      isBlocked ? 'Unblock' : 'Block');
+    blockBtn.addEventListener('click', function () {
+      if (isBlocked) {
+        // Resolve the account id from the canonical list — the server keys
+        // block:remove on it, and it is the one place the client holds it.
+        var entry = (S.blocked || []).filter(function (b) { return b.username === uname; })[0];
+        doUnblock(entry && entry.id, subject.id, subject.name);
+        closeOverlay();
+        return;
+      }
+      showBlockDialog(subject);
+    });
+    row.appendChild(blockBtn);
+
+    var repBtn = U.el('button', 'btn btn-ghost btn-small', 'Report');
+    repBtn.addEventListener('click', function () { showReportDialog(subject, 'profile', null); });
+    row.appendChild(repBtn);
+    return row;
+  }
+
+  function doBlock(subject) {
+    var uname = riderUsername(subject);
+    if (uname && A.auth && A.auth.isLoggedIn()) {
+      // No optimistic list entry. The server answers block:add with the
+      // canonical block:list — including the account id that unblocking needs —
+      // and inventing a half-populated row here would put an Unblock button on
+      // screen with nothing to send. The pin is removed below either way, so the
+      // block is visibly instant without the list having to guess.
+      if (A.net && A.net.sendBlock) A.net.sendBlock(subject.id, '');
+      toast('Blocked ' + subject.name + '. They can no longer see you either', 'success');
+    } else {
+      // No account on one side or the other — say what actually happens rather
+      // than pretending this is the same thing.
+      ST.hideRider(subject.id);
+      // Mirrors the dialog's three cases: whose missing account is the reason.
+      toast(!(A.auth && A.auth.isLoggedIn())
+        ? 'Hidden for this session. Create an account to block for good'
+        : subject.name + ' is riding as a guest — hidden for this session', 'info');
+    }
+    // Drop them off the map right now rather than waiting for the server's
+    // rider:remove. If the block somehow fails server-side the next scope tick
+    // puts them back, which is the correct outcome — the block did not take.
+    if (A.sim && A.sim.remoteRemove) A.sim.remoteRemove(subject.id);
+    if (A.voice && A.voice.dropPeer) A.voice.dropPeer(subject.id);
+    ST.emit('blocked', S.blocked);
+  }
+
+  function doUnblock(userId, riderId, name) {
+    if (userId) {
+      ST.removeBlock(userId);
+      if (A.net && A.net.sendUnblock) A.net.sendUnblock(userId);
+    }
+    if (riderId) {
+      var i = S.hiddenRiders.indexOf(riderId);
+      if (i >= 0) S.hiddenRiders.splice(i, 1);
+    }
+    toast('Unblocked' + (name ? ' ' + name : ''), 'info');
+    ST.emit('blocked', S.blocked);
+  }
+
+  function showBlockDialog(subject) {
+    var uname = riderUsername(subject);
+    var durable = !!(uname && A.auth && A.auth.isLoggedIn());
+    var card = U.el('div', 'modal-card');
+    card.appendChild(authCloseHead('Block ' + subject.name, closeOverlay));
+
+    // Three distinct situations, and they must not be described in the same
+    // words. A signed-out viewer being told "they're riding as a guest" is
+    // simply false — it is the VIEWER who has no account to hang a block on.
+    var meSignedIn = !!(A.auth && A.auth.isLoggedIn());
+    var warn = U.el('div', 'consent-warn consent-warn-danger');
+    if (durable) {
+      warn.innerHTML = '<b>You won\'t see each other again.</b>' +
+        '<span>Their pin disappears from your map and yours from theirs. No chat, ' +
+        'no voice, no waves, no convoy invites, in either direction. If you\'re ' +
+        'friends, that ends too.</span>';
+    } else if (!meSignedIn) {
+      warn.innerHTML = '<b>Hidden for this session only.</b>' +
+        '<span>You\'re riding as a guest, so there\'s no account to save a block to. ' +
+        U.esc(subject.name) + ' will be hidden on this device until you close the app. ' +
+        'Create an account to block riders for good.</span>';
+    } else {
+      warn.innerHTML = '<b>Hidden for this session only.</b>' +
+        '<span>' + U.esc(subject.name) + ' is riding as a guest, so there\'s no account ' +
+        'to block permanently. They\'ll be hidden on this device until you close the app.</span>';
+    }
+    card.appendChild(warn);
+
+    var alsoReport = U.el('label', 'consent-row');
+    alsoReport.innerHTML = '<input type="checkbox" checked/><span>Also report them, so we can ' +
+      'review it. Blocking alone only protects you.</span>';
+    if (A.auth && A.auth.isLoggedIn()) card.appendChild(alsoReport);
+
+    var go = U.el('button', 'btn btn-block btn-lg btn-danger', 'Block ' + subject.name);
+    go.addEventListener('click', function () {
+      var wantsReport = !!(alsoReport.parentNode && alsoReport.querySelector('input').checked);
+      doBlock(subject);
+      if (wantsReport) showReportDialog(subject, 'profile', null);
+      else closeOverlay();
+    });
+    card.appendChild(go);
+
+    var no = U.el('button', 'btn btn-ghost btn-block', 'Cancel');
+    no.addEventListener('click', closeOverlay);
+    card.appendChild(no);
+    openOverlay(card);
+  }
+
+  var REPORT_REASONS = [
+    ['harassment', 'Harassment or bullying'],
+    ['threats', 'Threats or violence'],
+    ['hate', 'Hate speech'],
+    ['sexual', 'Sexual or explicit content'],
+    ['dangerous', 'Dangerous driving or street racing'],
+    ['impersonation', 'Impersonating someone'],
+    ['spam', 'Spam or a scam'],
+    ['false-reports', 'Deliberately false hazard reports'],
+    ['other', 'Something else']
+  ];
+
+  // `context` is where it happened ('chat' | 'voice' | 'profile' | 'map') and
+  // `quoted` is the message being reported, snapshotted here because convoy chat
+  // is never persisted server-side — by the time anyone reviews this, the convoy
+  // and its history are gone.
+  function showReportDialog(subject, context, quoted) {
+    if (!A.auth || !A.auth.isLoggedIn()) {
+      toast('Sign in to report a rider', 'warn');
+      return;
+    }
+    var card = U.el('div', 'modal-card');
+    card.appendChild(authCloseHead('Report ' + subject.name, closeOverlay));
+    card.appendChild(U.el('div', 'ob-note',
+      'This goes to a human to review. It doesn\'t tell ' + U.esc(subject.name) +
+      ' anything, and it doesn\'t block them — use Block for that.'));
+
+    if (quoted) {
+      var q = U.el('div', 'report-quote');
+      q.innerHTML = '<span class="report-quote-label">Reported message</span>' +
+        '<span class="report-quote-text">' + U.esc(quoted) + '</span>';
+      card.appendChild(q);
+    }
+
+    card.appendChild(U.el('div', 'section-label', 'What happened?'));
+    var chosen = '';
+    var list = U.el('div', 'report-reasons');
+    REPORT_REASONS.forEach(function (r) {
+      var b = U.el('button', 'report-reason', U.esc(r[1]));
+      b.type = 'button';
+      b.addEventListener('click', function () {
+        chosen = r[0];
+        list.querySelectorAll('.report-reason').forEach(function (o) { o.classList.remove('on'); });
+        b.classList.add('on');
+        send.disabled = false;
+      });
+      list.appendChild(b);
+    });
+    card.appendChild(list);
+
+    var detail = U.el('textarea', 'input report-detail');
+    detail.placeholder = 'Anything else we should know? (optional)';
+    detail.maxLength = 1000;
+    card.appendChild(mkField('Details', detail));
+
+    var err = U.el('div', 'auth-err'); err.hidden = true;
+    card.appendChild(err);
+
+    var send = U.el('button', 'btn btn-primary btn-block btn-lg', 'Send report');
+    send.disabled = true;
+    send.addEventListener('click', function () {
+      err.hidden = true;
+      if (!chosen) { showErr(err, 'Pick a reason'); return; }
+      send.disabled = true; send.textContent = 'Sending…';
+      A.auth.report({
+        riderId: subject.id,
+        subjectLabel: subject.name,
+        reason: chosen,
+        detail: detail.value.trim(),
+        context: context || 'profile',
+        evidence: quoted ? { quoted: quoted, at: Date.now() } : null
+      }).then(function (r) {
+        if (!r.ok) {
+          showErr(err, r.error);
+          send.disabled = false; send.textContent = 'Send report';
+          return;
+        }
+        closeOverlay();
+        toast('Report sent. Thanks — we\'ll look at it', 'success');
+      });
+    });
+    card.appendChild(send);
+
+    var cancel = U.el('button', 'btn btn-ghost btn-block', 'Cancel');
+    cancel.addEventListener('click', closeOverlay);
+    card.appendChild(cancel);
+    openOverlay(card);
   }
 
   // Open the profile overlay for 'self' or an NPC id. Re-renders on 'stats' events
@@ -2019,6 +2280,20 @@
         'passenger and are 16 or older.'));
     }
 
+    /* ---- Blocked riders ----
+       The other half of "you can block someone": being able to see who, and
+       change your mind. A block list you cannot inspect or undo is a trap, and
+       the store policies that ask for blocking ask for this too. */
+    body.appendChild(U.el('div', 'section-label', 'Blocked riders'));
+    var blockHost = U.el('div', 'blocked-host');
+    blockHost.id = 'blocked-host';
+    body.appendChild(blockHost);
+    renderBlockedList();
+    body.appendChild(U.el('div', 'legal-consent',
+      'Blocking hides you from each other completely — pins, chat, voice, waves ' +
+      'and invites, both ways. To report a rider for review, open their card and ' +
+      'tap Report.'));
+
     body.appendChild(U.el('div', 'section-label', 'Data'));
     var reset = U.el('button', 'btn btn-ghost btn-block btn-danger-text', 'Reset app data');
     reset.addEventListener('click', function () {
@@ -2046,6 +2321,47 @@
       'Routing by OSRM & TomTom · Radar by RainViewer · Aircraft by OpenSky.<br>' +
       '<a href="' + legalUrl('/notices') + '" target="_blank" rel="noopener">Full attribution &amp; licences</a>');
     body.appendChild(about);
+  }
+
+  // Redraws the blocked list in place. Safe to call when Settings isn't open —
+  // net.js calls it whenever the server pushes a new canonical list.
+  function renderBlockedList() {
+    var host = document.getElementById('blocked-host');
+    if (!host) return;
+    host.innerHTML = '';
+    var list = S.blocked || [];
+    var hiddenCount = (S.hiddenRiders || []).length;
+
+    if (!list.length) {
+      host.appendChild(U.el('div', 'hint-card', hiddenCount
+        ? 'No blocked accounts. ' + hiddenCount + ' guest rider' + (hiddenCount === 1 ? '' : 's') +
+          ' hidden for this session.'
+        : 'You haven\'t blocked anyone.'));
+      return;
+    }
+
+    list.forEach(function (b) {
+      var row = U.el('div', 'blocked-row');
+      row.innerHTML =
+        '<span class="blocked-ava">' + U.esc(b.emoji || '🚗') + '</span>' +
+        '<span class="blocked-info"><b>' + U.esc(b.name || b.username || 'Rider') + '</b>' +
+        (b.username ? '<span>@' + U.esc(b.username) + '</span>' : '<span>account removed</span>') +
+        '</span>';
+      var un = U.el('button', 'btn btn-ghost btn-small', 'Unblock');
+      un.addEventListener('click', function () {
+        un.disabled = true;
+        doUnblock(b.id, null, b.name || b.username);
+        renderBlockedList();
+      });
+      row.appendChild(un);
+      host.appendChild(row);
+    });
+
+    if (hiddenCount) {
+      host.appendChild(U.el('div', 'legal-consent',
+        'Plus ' + hiddenCount + ' guest rider' + (hiddenCount === 1 ? '' : 's') +
+        ' hidden for this session. Guests have no account to block permanently.'));
+    }
   }
 
   function mkRow(title, sub, control) {
@@ -3745,6 +4061,11 @@
     // Legal surfaces auth.js drives: the re-consent gate every rider passes on
     // the way into the app, and the erasure flow that /delete-account links to.
     showConsentGate: showConsentGate,
+    // Block & report: net.js redraws the list when the server pushes a new one,
+    // and party.js opens the report dialog from a chat line.
+    refreshBlockedList: renderBlockedList,
+    showReportDialog: showReportDialog,
+    showBlockDialog: showBlockDialog,
     showDeleteAccount: showDeleteAccount,
     legalGate: legalGate,
     renderAccount: renderAccount,

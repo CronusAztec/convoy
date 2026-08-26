@@ -204,6 +204,9 @@
     if (m.account) {
       S.friends = m.account.friends || [];
       S.friendReqs = m.account.requests || [];
+      // The server is the authority on who this account has blocked — it is what
+      // enforces it — so its list replaces whatever this device had cached.
+      ST.setBlocks(m.account.blocked || []);
       ST.emit('friends');
     }
     probeRoutingCaps();
@@ -267,7 +270,16 @@
   function mapChatEntry(e) {
     if (e.sys) return { from: null, sys: true, text: e.text, t: e.t };
     if (e.from && e.from.id === myId) return { from: 'me', text: e.text, t: e.t };
-    return { from: e.from ? e.from.name : '?', emoji: e.from ? e.from.emoji : '', text: e.text, t: e.t };
+    // fromId is carried through so a message can be reported. Without it the UI
+    // has only a display name, which is not enough to identify the rider — and
+    // convoy chat is never persisted server-side, so the report has to name who
+    // said it at the moment it is filed.
+    return {
+      from: e.from ? e.from.name : '?',
+      fromId: e.from ? e.from.id : null,
+      emoji: e.from ? e.from.emoji : '',
+      text: e.text, t: e.t
+    };
   }
 
   function applyParty(p) {
@@ -312,7 +324,13 @@
   var handlers = {
     welcome: goLive,
 
-    'rider:add': function (m) { A.sim.remoteAdd(m.rider); },
+    // The server already refuses to send a blocked rider, so this is belt-and-
+    // braces for the two cases it cannot cover: a session-only guest hide, and a
+    // frame that was already in flight when the block was made.
+    'rider:add': function (m) {
+      if (m.rider && ST.isBlockedRider(m.rider)) return;
+      A.sim.remoteAdd(m.rider);
+    },
 
     'rider:remove': function (m) {
       var npc = A.sim.getNpc(m.id);
@@ -372,6 +390,7 @@
 
     chat: function (m) {
       if (!S.party) return;
+      if (m.from && ST.isBlockedRider(m.from)) return;
       S.party.chat.push(mapChatEntry({ from: m.from, sys: m.sys, text: m.text, t: m.t2 }));
       if (S.party.chat.length > 100) S.party.chat.shift();
       ST.emit('chat');
@@ -379,6 +398,12 @@
 
     wave: function (m) {
       A.ui.toast((m.from || 'Someone') + ' waved at you', 'success');
+    },
+
+    // Canonical block list, pushed after every block/unblock.
+    'block:list': function (m) {
+      ST.setBlocks(m.blocked || []);
+      if (A.ui && A.ui.refreshBlockedList) A.ui.refreshBlockedList();
     },
 
     /* ----- walkie-talkie voice ----- */
@@ -520,6 +545,11 @@
     sendFriendAccept: function (id) { send({ t: 'friend:accept', id: id }); },
     sendFriendDecline: function (id) { send({ t: 'friend:decline', id: id }); },
     sendFriendRemove: function (id) { send({ t: 'friend:remove', id: id }); },
+    // Blocking. Queued rather than raw-sent: a block made while the socket is
+    // reconnecting is the one message that must not be silently dropped — the
+    // rider believes they are protected the moment they tap it.
+    sendBlock: function (riderId, userId) { sendQueued({ t: 'block:add', to: riderId || '', userId: userId || '' }); },
+    sendUnblock: function (userId) { sendQueued({ t: 'block:remove', userId: userId }); },
     // Walkie-talkie voice signaling (convoy-only; server validates party membership).
     sendVoiceSignal: function (payload) { send({ t: 'voice:signal', payload: payload }); },
     sendVoiceRelay: function (chunk, rate) { send({ t: 'voice:relay', chunk: chunk, rate: rate || 0 }); },

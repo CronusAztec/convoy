@@ -546,7 +546,12 @@
       '--surface-2': 'rgba(255, 255, 255, .5)',
       '--surface-solid': '#f7f9fc',
       '--text': '#17181c',
-      '--text-dim': '#75798a',
+      // Was #75798a, which measured 4.1:1 against --surface-solid — under the
+      // 4.5:1 AA needs for the small text this token is used for (panel
+      // subtitles, field hints, @handles, timestamps). Frost was the only theme
+      // that failed. Darkened just enough to clear it at 5.3:1, keeping the same
+      // cool grey.
+      '--text-dim': '#5f6478',
       '--line': 'rgba(20, 30, 50, .08)',
       '--line-strong': 'rgba(20, 30, 50, .18)',
       '--good': '#30d158',

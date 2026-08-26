@@ -123,6 +123,8 @@ function blank(id, username, profile, email, emailVerified, provider) {
     friends: [],
     reqIn: [],
     reqOut: [],
+    blocked: [],
+    blockedBy: [],
     stats: { pb: {}, runs: 0, wins: 0 },
     createdAt: Date.now()
   };
@@ -663,6 +665,12 @@ async function deleteAccount(id) {
     drop(o.friends);
     drop(o.reqIn);
     drop(o.reqOut);
+    // The blocks rows cascade with the profile, so these mirrors have to go too.
+    // Note this is the one place a deletion is visible to someone else: a rider
+    // who had blocked the deleted account will find it gone from their block
+    // list, which is correct — there is no longer an account to block.
+    drop(o.blocked);
+    drop(o.blockedBy);
   });
 
   console.log('[delete] account ' + u.username + ' deleted' +
@@ -677,6 +685,87 @@ function updateProfile(id, profile) {
   u.profile = profile;
   db.queueProfile(id, profile);
   return true;
+}
+
+/* ---------------- blocking ----------------
+
+   Symmetric by design. The row records a direction, because a reviewer needs to
+   know who blocked whom, but `blockedBetween` is what every visibility check
+   calls and it reads both ways.
+
+   The reason is specific to this app: Convoy streams live position. A one-way
+   block would take the harasser off the victim's map while leaving the victim's
+   pin, heading and speed flowing to the harasser — the exact capability someone
+   blocks to remove. See migrations/003_blocks_reports.sql. */
+
+function blockUser(userId, targetId) {
+  const u = byId[userId], t = byId[targetId];
+  if (!u || !t) return { error: 'no-such-account' };
+  if (userId === targetId) return { error: 'self' };
+  if (u.blocked.indexOf(targetId) >= 0) return { ok: true, already: true };
+  u.blocked.push(targetId);
+  t.blockedBy.push(userId);
+  db.queueBlock(userId, targetId);
+  return { ok: true };
+}
+
+function unblockUser(userId, targetId) {
+  const u = byId[userId], t = byId[targetId];
+  if (!u) return { error: 'no-such-account' };
+  const i = u.blocked.indexOf(targetId);
+  if (i < 0) return { ok: true, already: true };
+  u.blocked.splice(i, 1);
+  // The target may have been deleted since the block was made; the row is gone
+  // either way and the mirror simply has nowhere to be removed from.
+  if (t) {
+    const j = t.blockedBy.indexOf(userId);
+    if (j >= 0) t.blockedBy.splice(j, 1);
+  }
+  db.queueUnblock(userId, targetId);
+  return { ok: true };
+}
+
+// TRUE if either account has blocked the other. Both ids are account ids; a
+// guest has none, and guests can neither block nor be blocked durably.
+function blockedBetween(aId, bId) {
+  if (!aId || !bId || aId === bId) return false;
+  const a = byId[aId];
+  if (!a) return false;
+  return a.blocked.indexOf(bId) >= 0 || a.blockedBy.indexOf(bId) >= 0;
+}
+
+// The viewer's own list, resolved for display: who they blocked and when the
+// account still exists to name.
+function blockList(userId) {
+  const u = byId[userId];
+  if (!u) return [];
+  return u.blocked.map((id) => {
+    const t = byId[id];
+    return {
+      id: id,
+      username: t ? t.username : null,
+      name: t && t.profile ? (t.profile.name || t.username) : 'Removed account',
+      emoji: t && t.profile ? t.profile.emoji : null
+    };
+  });
+}
+
+/* ---------------- reports ---------------- */
+
+// Awaited, not queued — see db.insertReport. Returns { ok, id } or { error }.
+async function fileReport(rep) {
+  try {
+    const id = await db.insertReport(rep);
+    return { ok: true, id: id };
+  } catch (e) {
+    console.error('[report] insert failed: ' + (e && e.message));
+    return { error: 'insert-failed' };
+  }
+}
+
+async function recentReportCount(reporterId, windowMs) {
+  try { return await db.countRecentReports(reporterId, windowMs); }
+  catch (e) { return 0; }   // never let a counting failure block a real report
 }
 
 /* ---------------- stats ---------------- */
@@ -747,6 +836,10 @@ function sendFriendRequest(fromId, toUsername) {
   if (!from) return { error: 'unauthorized' };
   if (!to) return { error: 'No rider with that username' };
   if (to.id === from.id) return { error: "You can't friend yourself" };
+  // Deliberately the same message a wrong username gets. A distinct "they
+  // blocked you" would turn this endpoint into a block-detector, and letting
+  // someone confirm they were blocked is the first step to working around it.
+  if (blockedBetween(from.id, to.id)) return { error: 'No rider with that username' };
   if (from.friends.indexOf(to.id) >= 0) return { error: 'Already friends' };
   if (from.reqOut.indexOf(to.id) >= 0) return { error: 'Request already sent' };
 
@@ -808,5 +901,7 @@ module.exports = {
   setEmailFor, markEmailVerified, resetPasswordFor, magicSignIn,
   updateProfile, deleteAccount, isDeleted, flush, close,
   friendLite, sendFriendRequest, acceptFriend, declineFriend, removeFriend, areFriends,
+  blockUser, unblockUser, blockedBetween, blockList,
+  fileReport, recentReportCount,
   getStats, recordPB, recordRun, recordWin
 };

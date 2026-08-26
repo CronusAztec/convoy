@@ -658,6 +658,76 @@ async function handleApi(req, res, urlPath) {
         // Hand back the fresh session so the caller stays signed in.
         return json(res, 200, Object.assign({ ok: true }, sessionPayload(changed.session, u)));
       }
+      /* ---- abuse reports ----
+         The other half of the UGC obligation. Blocking protects the reporter;
+         this is what lets an operator act on the rider, which blocking alone
+         never does.
+
+         Deliberately NOT rate-limited into uselessness: someone being harassed
+         in real time may file several reports in a minute, and refusing them is
+         the wrong failure. The budgets below are sized to stop scripted
+         report-bombing (which is its own abuse vector — weaponised reporting)
+         while leaving genuine bursts through, and the durable per-account count
+         is the one that survives cycling IPs or devices. */
+      if (urlPath === '/api/report') {
+        const u = userFromToken(bearer(req));
+        if (!u) return json(res, 401, { error: 'Sign in to report a rider' });
+        if (!rateOk('report:' + u.id, 12, 10 * 60 * 1000) || !rateOk('reportip:' + ip, 30, 10 * 60 * 1000)) {
+          return json(res, 429, { error: 'Too many reports right now — give it a few minutes' });
+        }
+        const REASONS = ['harassment', 'hate', 'sexual', 'threats', 'spam',
+          'impersonation', 'dangerous', 'false-reports', 'other'];
+        const reason = String(body.reason || '').slice(0, 24);
+        if (REASONS.indexOf(reason) < 0) return json(res, 400, { error: 'Pick a reason' });
+
+        // The subject may be an account, or a guest with only a display name.
+        // Both are worth recording: a pattern of reports against one guest name
+        // in one area is still a signal, and the reporter should never be told
+        // "we can't take that" for reporting the rider actually bothering them.
+        const subjectRider = getRider(String(body.riderId || '').slice(0, 40));
+        const subjectUserId = (subjectRider && subjectRider.userId) ||
+          String(body.subjectUserId || '').slice(0, 40) || null;
+        const subjectAccount = subjectUserId ? store.getById(subjectUserId) : null;
+        const subjectLabel = subjectRider
+          ? String((subjectRider.profile && subjectRider.profile.name) || subjectRider.name || '').slice(0, 60)
+          : String(body.subjectLabel || '').slice(0, 60);
+        if (!subjectAccount && !subjectLabel) {
+          return json(res, 400, { error: 'Nothing to report — pick a rider' });
+        }
+        if (subjectAccount && subjectAccount.id === u.id) {
+          return json(res, 400, { error: "You can't report yourself" });
+        }
+
+        // A soft ceiling on the durable count. Past this the report is ACCEPTED
+        // and stored — dropping it would let an abuser silence a victim by
+        // provoking them into reporting a lot — but flagged so a reviewer sees
+        // the volume rather than being buried by it.
+        const recent = await store.recentReportCount(u.id, 24 * 60 * 60 * 1000);
+
+        const filed = await store.fileReport({
+          reporterId: u.id,
+          reporterUsername: u.username,
+          subjectId: subjectAccount ? subjectAccount.id : null,
+          subjectUsername: subjectAccount ? subjectAccount.username : null,
+          subjectLabel: subjectLabel || null,
+          reason: reason,
+          detail: String(body.detail || '').slice(0, 1000) || null,
+          context: ['chat', 'voice', 'profile', 'map'].indexOf(String(body.context)) >= 0
+            ? String(body.context) : null,
+          evidence: body.evidence && typeof body.evidence === 'object'
+            ? { quoted: String(body.evidence.quoted || '').slice(0, 500),
+                at: Number(body.evidence.at) || Date.now(),
+                highVolumeReporter: recent >= 20 }
+            : { highVolumeReporter: recent >= 20 }
+        });
+        if (filed.error) return json(res, 502, { error: 'Could not file the report — try again' });
+
+        console.log('[report] ' + u.username + ' reported ' +
+          (subjectAccount ? '@' + subjectAccount.username : '"' + subjectLabel + '" (guest)') +
+          ' for ' + reason + ' (#' + filed.id + ')');
+        return json(res, 200, { ok: true, id: filed.id });
+      }
+
       /* ---- account deletion (right to erasure) ----
          Google Play's account-deletion policy and GDPR Art. 17 both require this
          to be reachable by the account holder without asking us, so it is a
@@ -1529,12 +1599,16 @@ const VOICE_PROX_MAX = 10;   // nearest-N cap so a dense area can't fan audio ou
 // (always, unchanged behavior) plus, for opted-in riders, other opted-in
 // riders within the proximity envelope. Ghost riders are invisible — they
 // neither send nor receive proximity voice (convoy voice still works).
+// Every voice path — SDP/ICE signalling, the PCM relay fallback, and mic-state
+// announcements — routes through this one set, so the block check belongs here
+// and nowhere else. Blocking someone silences them in both directions: they are
+// not offered a peer connection, and none of their audio is relayed.
 function voiceTargets(c) {
   const out = new Set();
   const party = c.party && parties.get(c.party);
   if (party) {
     for (const id of party.members) {
-      if (id !== c.id && clients.has(id)) out.add(id);
+      if (id !== c.id && clients.has(id) && !blockedPair(c, clients.get(id))) out.add(id);
     }
   }
   if (c.voiceProx && !c.ghost && c.pos) {
@@ -1542,6 +1616,7 @@ function voiceTargets(c) {
     for (const [id, other] of clients) {
       if (id === c.id || out.has(id)) continue;
       if (!other.voiceProx || other.ghost || !other.pos) continue;
+      if (blockedPair(c, other)) continue;
       const d = B.haversine(c.pos, other.pos);
       if (d <= VOICE_PROX_M) cand.push({ id, d });
     }
@@ -1562,6 +1637,27 @@ function sendRaw(c, str) {
 /* ================= scope (who sees whom) ================= */
 // `pool` (optional) is a prebuilt array of all riders; the 1 Hz tick passes one
 // shared list so we don't spread both Maps into a fresh array for every client.
+/* Is either of these two riders blocking the other?
+
+   Takes CLIENTS (or bots) rather than account ids, because that is what every
+   fan-out site here already holds. Two shapes fall through as "not blocked":
+
+     bots      — server-generated, nobody's harasser, and they have no account.
+     guests    — a block has to survive the other side reconnecting, and a guest
+                 has no durable identity to hang one on. The in-app copy is
+                 explicit that blocking needs an account on both sides; the
+                 client still hides a guest locally for the session (see
+                 js/state.js), which is the most an anonymous id can honestly
+                 promise.
+
+   Everything else defers to store.blockedBetween, which reads the relationship
+   in BOTH directions — see server/store.js. */
+function blockedPair(a, b) {
+  if (!a || !b || a.bot || b.bot) return false;
+  if (!a.userId || !b.userId) return false;
+  return store.blockedBetween(a.userId, b.userId);
+}
+
 function scopeFor(c, pool) {
   const out = new Set();
   if (!c.pos) return out;
@@ -1578,10 +1674,20 @@ function scopeFor(c, pool) {
     if (r.id === c.id || (!r.bot && !r.profile) || !r.pos) continue;
     // ghosted riders are hidden — unless they're in the viewer's convoy
     if (r.ghost && !sameParty(r)) continue;
+    // A block outranks everything above it, convoy membership included: two
+    // people who have blocked each other must not appear on each other's map
+    // even if they end up in the same convoy.
+    if (blockedPair(c, r)) continue;
     if (B.haversine(c.pos, r.pos) <= radius) out.add(r.id);
   }
   if (c.party) {
-    if (viewerParty) for (const id of viewerParty.members) if (id !== c.id) out.add(id);
+    if (viewerParty) {
+      for (const id of viewerParty.members) {
+        if (id === c.id) continue;
+        if (blockedPair(c, getRider(id))) continue;
+        out.add(id);
+      }
+    }
   }
   return out;
 }
@@ -1605,32 +1711,76 @@ function syncScope(c, pool) {
 function ensureKnown(c, id) {
   if (id !== c.id && !c.known.has(id)) {
     const r = getRider(id);
-    if (r && r.pos) {
+    // Blocked riders are never force-known. This is the path convoy membership
+    // uses to pull a member onto your map regardless of distance, so without the
+    // check a block could be defeated by joining the target's convoy.
+    if (r && r.pos && !blockedPair(c, r)) {
       c.known.add(id);
       send(c, { t: 'rider:add', rider: riderRecord(r, c) });
     }
   }
 }
 
+/* Tear down a live pairing the instant a block is made.
+
+   Waiting for the next scope tick would leave the blocked rider's pin on screen
+   and, worse, keep the blocker's position streaming to them for up to a second
+   after they asked for it to stop. Both sides are dropped from each other's
+   known-set here, and any shared convoy is re-broadcast so the member lists and
+   chat backlogs are rebuilt with the other party filtered out. */
+function applyBlockNow(c, targetUserId) {
+  const tc = online.get(targetUserId);
+  if (tc) {
+    if (c.known && c.known.has(tc.id)) { c.known.delete(tc.id); send(c, { t: 'rider:remove', id: tc.id }); }
+    if (tc.known && tc.known.has(c.id)) { tc.known.delete(c.id); send(tc, { t: 'rider:remove', id: c.id }); }
+    // Mic state is sticky on the receiving end — clear it, or a rider blocked
+    // mid-transmission stays lit up as "speaking" forever.
+    send(c, { t: 'voice:mic', from: tc.id, on: false, name: '' });
+    send(tc, { t: 'voice:mic', from: c.id, on: false, name: '' });
+    const shared = c.party && tc.party && c.party === tc.party && parties.get(c.party);
+    if (shared) sendPartyState(shared);
+  }
+  syncScope(c);
+}
+
 /* ================= parties ================= */
 function liteOf(r) { return { id: r.id, name: riderName(r), emoji: r.bot ? r.emoji : r.profile.emoji }; }
 
+// The roster and the chat backlog are built PER RECIPIENT rather than once for
+// the convoy. Two riders who have blocked each other can legitimately be in the
+// same convoy — one of them joined first — and each has to see it without the
+// other in it: no pin, no name in the member list, and no replay of their
+// messages when the panel re-renders.
 function sendPartyState(party) {
-  const lites = party.members.map((id) => liteOf(getRider(id))).filter(Boolean);
   for (const id of party.members) {
     const c = clients.get(id);
     if (!c) continue;
-    for (const mid of party.members) ensureKnown(c, mid);
+    const visible = party.members.filter((mid) => mid === c.id || !blockedPair(c, getRider(mid)));
+    const lites = visible.map((mid) => liteOf(getRider(mid))).filter(Boolean);
+    for (const mid of visible) ensureKnown(c, mid);
     send(c, {
       t: 'party',
       party: {
         id: party.id, name: party.name, emoji: party.emoji, leader: party.leader,
         mode: party.mode, code: party.code,
-        members: lites, chat: party.chat.slice(-50),
+        members: lites,
+        chat: visibleChat(party, c, 50),
         rally: party.rally || null
       }
     });
   }
+}
+
+// The last `n` messages this rider is allowed to see. System messages have no
+// author and always pass.
+function visibleChat(party, c, n) {
+  const out = [];
+  for (let i = party.chat.length - 1; i >= 0 && out.length < n; i--) {
+    const msg = party.chat[i];
+    if (msg && msg.from && msg.from.id && blockedPair(c, getRider(msg.from.id))) continue;
+    out.push(msg);
+  }
+  return out.reverse();
 }
 
 function partySys(party, text) {
@@ -1911,7 +2061,15 @@ const handlers = {
       t: 'welcome',
       id: c.id,
       online: humans().length,
-      account: c.userId ? { username: c.username, friends: friendData.friends, requests: friendData.requests } : null,
+      account: c.userId ? {
+        username: c.username,
+        friends: friendData.friends,
+        requests: friendData.requests,
+        // Sent at join so the client can render the blocked list in Settings and
+        // suppress anything that slips through locally (a guest it hid for the
+        // session, a frame already in flight).
+        blocked: store.blockList(c.userId)
+      } : null,
       riders: [...c.known].map((id) => riderRecord(getRider(id), c)),
       // Anonymised here as well when the gate applies — this frame is the
       // rider's first sight of the global layer.
@@ -2012,6 +2170,10 @@ const handlers = {
     // m.to may be a rider/client id (nearby) or a friend's account id (any distance)
     const target = getRider(str(m.to, 40)) || clientByUserId(str(m.to, 40));
     if (!target || party.members.indexOf(target.id) >= 0) return;
+    // Silently dropped rather than refused: telling the sender 'that rider blocked
+    // you' hands them confirmation they were blocked, which is exactly the signal
+    // someone blocks to avoid giving.
+    if (blockedPair(c, target)) return;
 
     if (target.bot) {
       const pid = party.id, tid = target.id;
@@ -2097,6 +2259,55 @@ const handlers = {
     if (text) partySys(party, text);
   },
 
+  /* ----- blocking (account required both sides) -----
+     Blocking is the half of the UGC obligation that has to WORK, not just be
+     recorded: the point is that the other rider stops reaching you. So the
+     handler does the durable write and then immediately tears down every live
+     relationship the two of them have, rather than waiting for the next scope
+     tick to notice. */
+  'block:add'(c, m) {
+    if (!c.userId) return send(c, { t: 'err', msg: 'Sign in to block riders' });
+    if (!rateOk('block:' + c.userId, 30, 60 * 1000)) {
+      return send(c, { t: 'err', msg: 'Too many changes — give it a minute' });
+    }
+    // Accepts a live rider id or an account id, matching party:invite — the
+    // rider card has the former, the friends list the latter.
+    const target = getRider(str(m.to, 40)) || clientByUserId(str(m.to, 40));
+    const targetUserId = (target && target.userId) || str(m.userId, 40);
+    if (!targetUserId) {
+      return send(c, { t: 'err', msg: 'That rider is a guest — blocking needs an account on both sides' });
+    }
+    const r = store.blockUser(c.userId, targetUserId);
+    if (r.error === 'self') return send(c, { t: 'err', msg: "You can't block yourself" });
+    if (r.error) return send(c, { t: 'err', msg: 'Could not block that rider' });
+
+    // A block also ends any relationship that would keep them in contact.
+    // Leaving the friendship in place would keep them on each other's friends
+    // list, online status and all, which is not what "block" means to anyone.
+    if (store.areFriends(c.userId, targetUserId)) {
+      store.removeFriend(c.userId, targetUserId);
+      const tc = online.get(targetUserId);
+      if (tc) pushFriends(tc);
+      pushFriends(c);
+    }
+    applyBlockNow(c, targetUserId);
+    send(c, { t: 'block:list', blocked: store.blockList(c.userId) });
+  },
+
+  'block:remove'(c, m) {
+    if (!c.userId) return send(c, { t: 'err', msg: 'Sign in to manage blocks' });
+    if (!rateOk('block:' + c.userId, 30, 60 * 1000)) {
+      return send(c, { t: 'err', msg: 'Too many changes — give it a minute' });
+    }
+    const r = store.unblockUser(c.userId, str(m.userId, 40));
+    if (r.error) return send(c, { t: 'err', msg: 'Could not unblock that rider' });
+    // Re-scope both sides so the pins come back without a reconnect.
+    syncScope(c);
+    const tc = online.get(str(m.userId, 40));
+    if (tc) syncScope(tc);
+    send(c, { t: 'block:list', blocked: store.blockList(c.userId) });
+  },
+
   /* ----- friends (account required) ----- */
   'friend:add'(c, m) {
     if (!c.userId) return send(c, { t: 'err', msg: 'Sign in to add friends' });
@@ -2168,7 +2379,12 @@ const handlers = {
     if (party.chat.length > 100) party.chat.shift();
     for (const id of party.members) {
       const member = clients.get(id);
-      if (member) send(member, { t: 'chat', from: entry.from, text, t2: now });
+      if (!member) continue;
+      // Two riders who have blocked each other can still share a convoy — one of
+      // them may have been in it first. Neither hears the other, and neither is
+      // told the other is there.
+      if (blockedPair(c, member)) continue;
+      send(member, { t: 'chat', from: entry.from, text, t2: now });
     }
 
     const botMembers = party.members.filter((id) => bots.has(id));
@@ -2196,6 +2412,8 @@ const handlers = {
     if (!rateOk('wave:' + c.id, 20, 60 * 1000)) return;
     const target = getRider(str(m.to, 40));
     if (!target) return;
+    // A wave is a notification on someone's screen; a block has to stop it.
+    if (blockedPair(c, target)) return;
     if (target.bot) {
       const tid = target.id, cid = c.id;
       setTimeout(() => {
@@ -2464,6 +2682,9 @@ const handlers = {
     const radius = NEARBY_KM * 1000;
     for (const other of clients.values()) {
       if (!other.pos || other.id === c.id) continue;
+      // The pin carries the reporter's identity (liteOf), so it is content from
+      // them and a block applies to it like any other.
+      if (blockedPair(c, other)) continue;
       if (B.haversine(pos, other.pos) <= radius) send(other, payload);
     }
   }

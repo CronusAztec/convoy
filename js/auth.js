@@ -311,6 +311,20 @@
       .catch(function () { return { ok: false, error: 'Network error' }; });
   }
 
+  // File an abuse report. Lives here rather than in net.js because it is an
+  // authenticated REST call — it has to reach an operator's review queue and be
+  // stored durably, which is not something to trust to a socket that may be
+  // mid-reconnect at the moment someone needs it most.
+  function report(payload) {
+    return authed('/api/report', 'POST', payload || {})
+      .then(function (res) {
+        if (res.status === 200) return { ok: true, id: res.body.id };
+        if (res.status === 401) return { ok: false, error: 'Sign in to report a rider' };
+        return { ok: false, error: res.body.error || 'Could not file the report' };
+      })
+      .catch(function () { return { ok: false, error: 'Network error' }; });
+  }
+
   /* ---------------- social sign-in ---------------- */
 
   function isNativeApp() { return !!(A.config && A.config.isNative); }
@@ -812,6 +826,7 @@
     addEmail: addEmail,
     changeEmail: changeEmail,
     deleteAccount: deleteAccount,
+    report: report,
     // social
     oauthStart: oauthStart,
     oauthComplete: oauthComplete,

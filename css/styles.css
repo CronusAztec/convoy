@@ -1382,6 +1382,87 @@ body.radar-on .map-controls-left { display: none; }
   font-family: var(--font-mono); margin: 6px 0 2px;
 }
 
+/* ============================== block & report ==============================
+   The safety affordances have to be findable on every rider without shouting
+   over the social actions beside them, so they sit in their own row, separated
+   by a rule and set quieter than the buttons above. Someone reaching for these
+   is already looking for them. */
+.pf-safety {
+  display: flex; gap: 8px; justify-content: flex-end;
+  margin-top: 10px; padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+/* Report flag on a received chat line. Hidden until the message is hovered or
+   the button itself is focused — always visible would put a flag against every
+   line of a normal conversation, which reads as hostile. Focus-visible keeps it
+   reachable by keyboard, and coarse pointers get it permanently since there is
+   no hover to reveal it. */
+.msg-them { position: relative; padding-right: 26px; }
+.msg-flag {
+  position: absolute; top: 4px; right: 4px;
+  width: 20px; height: 20px; padding: 0;
+  display: grid; place-items: center;
+  border: 0; border-radius: 5px;
+  background: transparent; color: var(--text-dim);
+  opacity: 0; transition: opacity 140ms var(--ease), color 140ms var(--ease);
+  cursor: pointer;
+}
+.msg-flag svg { width: 13px; height: 13px; }
+.msg-them:hover .msg-flag, .msg-flag:focus-visible { opacity: 1; }
+.msg-flag:hover { color: var(--bad); }
+@media (hover: none) { .msg-flag { opacity: .55; } }
+
+.report-quote {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 10px 12px; margin: 4px 0 2px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--bad);
+}
+.report-quote-label {
+  font: 700 9.5px var(--font-mono);
+  letter-spacing: .16em; text-transform: uppercase; color: var(--text-dim);
+}
+.report-quote-text { font-size: 12.5px; line-height: 1.5; word-break: break-word; }
+
+.report-reasons { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
+.report-reason {
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+  font: 500 12.5px var(--font-body);
+  cursor: pointer;
+  transition: border-color 140ms var(--ease), background 140ms var(--ease);
+}
+.report-reason:hover { border-color: var(--line-strong); }
+.report-reason.on {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), .12);
+}
+.report-detail { min-height: 68px; resize: vertical; padding: 9px 11px; line-height: 1.5; }
+
+.blocked-host { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.blocked-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.blocked-ava { font-size: 17px; line-height: 1; flex: none; }
+.blocked-info { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.blocked-info b { font-size: 12.5px; }
+.blocked-info span {
+  font: 400 10.5px var(--font-mono);
+  color: var(--text-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
 /* Destructive primary — account deletion only. Loud on purpose: it is the one
    button in the app that cannot be undone. */
 .btn-danger {

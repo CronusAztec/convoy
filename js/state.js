@@ -111,6 +111,15 @@
     // terms was accepted and at what moment — see LEGAL_VERSION.
     consent: null,         // { version, at, passenger, age, terms }
     featureAck: {},        // riskyFeature -> ms timestamp of the legality notice
+    // Riders this account has blocked: [{ id (account id), username, name, emoji }].
+    // Server-authoritative when signed in — the socket sends the canonical list
+    // at join and after every change — and the only copy there is for a guest.
+    blocked: [],
+    // Session-only, keyed by RIDER id rather than account id. This is how a guest
+    // gets hidden at all: they have no durable identity to block, so the best
+    // that can be offered is "not for the rest of this session", and the UI says
+    // exactly that rather than implying more.
+    hiddenRiders: [],
     auth: null,            // { token, username } when signed in
     friends: [],           // [{id, username, name, emoji, paint, online}] (server-synced)
     friendReqs: [],        // incoming friend requests [{id, username, name, emoji, paint}]
@@ -170,6 +179,7 @@
       state.onboarded = !!saved.onboarded;
       if (saved.consent && saved.consent.version) state.consent = saved.consent;
       if (saved.featureAck && typeof saved.featureAck === 'object') state.featureAck = saved.featureAck;
+      if (Array.isArray(saved.blocked)) state.blocked = saved.blocked;
       if (saved.auth && saved.auth.token) state.auth = saved.auth;
     } catch (e) { console.warn('[convoy] could not load saved state', e); }
   }
@@ -182,6 +192,10 @@
         onboarded: state.onboarded,
         consent: state.consent,
         featureAck: state.featureAck,
+        // hiddenRiders is deliberately NOT persisted — a rider id is only
+        // meaningful for the life of that socket, so keeping it would hide a
+        // stranger who happened to be assigned the same id later.
+        blocked: state.blocked,
         auth: state.auth
       }));
     } catch (e) { /* storage full/blocked — non-fatal */ }
@@ -350,7 +364,7 @@
      stored consent, so the gate reappears and everyone re-accepts before they
      can ride. Bump it whenever either document changes materially, and keep it
      in step with the version printed at the top of legal/terms.html. */
-  var LEGAL_VERSION = '1.0';
+  var LEGAL_VERSION = '1.1';
 
   // TRUE only for a consent recorded against the CURRENT documents, with every
   // box actually ticked. An older version, or a partial record, reads as no
@@ -376,6 +390,85 @@
   // depends on where the rider is (radar detector, enforcement layers, scanner
   // audio, timed runs). Keyed per feature, and cleared by a legal-version bump
   // for the same reason consent is.
+  /* ---------- blocking ----------
+     Two tiers, because two kinds of rider exist.
+
+     An ACCOUNT block is durable and symmetric and the server owns it: setBlocks
+     replaces the local copy with what the socket sent, and the server refuses to
+     relay anything between the two either way. addBlock/removeBlock update
+     locally first so the UI responds immediately, then the socket confirms.
+
+     A GUEST has no durable id, so there is nothing to write down. hideRider is
+     the honest alternative: the rider's id is suppressed on THIS device for the
+     rest of the session, and the UI says that rather than implying a real block.
+     Rider ids are recycled per socket, which is why this is never persisted. */
+
+  function blockedIds() { return state.blocked.map(function (b) { return b.id; }); }
+
+  function isBlockedAccount(userId) {
+    if (!userId) return false;
+    for (var i = 0; i < state.blocked.length; i++) {
+      if (state.blocked[i].id === userId) return true;
+    }
+    return false;
+  }
+
+  /* Matching is by USERNAME, not by account id.
+
+     A rider record from the realtime feed carries `account` (the username) and
+     deliberately does not carry the account uuid — see riderRecord in
+     server/server.js. The username is already public, it is what the UI shows,
+     and there is no rename feature for it to drift under. Sending the uuid to
+     every nearby client purely so this check could use it would hand out a
+     stable cross-session identifier for no gain.
+
+     A rider anonymised by the email gate has account: null, so they read as
+     unblockable here — which is honest, since you cannot tell who they are. If
+     you had already blocked them the server filters them out before the record
+     is ever built, so they never reach this check at all. */
+  function isBlockedUsername(username) {
+    if (!username) return false;
+    for (var i = 0; i < state.blocked.length; i++) {
+      if (state.blocked[i].username === username) return true;
+    }
+    return false;
+  }
+
+  // Does this rider record need hiding? Checks the durable account block and the
+  // session-only rider hide. `npc` is a rider record from the realtime feed.
+  function isBlockedRider(npc) {
+    if (!npc) return false;
+    if (npc.id && state.hiddenRiders.indexOf(npc.id) >= 0) return true;
+    return isBlockedUsername(npc.account || npc.username || null);
+  }
+
+  function setBlocks(list) {
+    state.blocked = Array.isArray(list) ? list.slice() : [];
+    save();
+    emit('blocked', state.blocked);
+  }
+
+  function addBlock(entry) {
+    if (!entry || !entry.id || isBlockedAccount(entry.id)) return;
+    state.blocked.push(entry);
+    save();
+    emit('blocked', state.blocked);
+  }
+
+  function removeBlock(userId) {
+    var next = state.blocked.filter(function (b) { return b.id !== userId; });
+    if (next.length === state.blocked.length) return;
+    state.blocked = next;
+    save();
+    emit('blocked', state.blocked);
+  }
+
+  function hideRider(riderId) {
+    if (!riderId || state.hiddenRiders.indexOf(riderId) >= 0) return;
+    state.hiddenRiders.push(riderId);
+    emit('blocked', state.blocked);
+  }
+
   function featureAcked(key) {
     var c = state.consent;
     if (!c || c.version !== LEGAL_VERSION) return false;
@@ -456,6 +549,9 @@
     LEGAL_VERSION: LEGAL_VERSION,
     hasConsent: hasConsent, setConsent: setConsent,
     featureAcked: featureAcked, ackFeature: ackFeature,
+    blockedIds: blockedIds, isBlockedAccount: isBlockedAccount, isBlockedUsername: isBlockedUsername,
+    isBlockedRider: isBlockedRider,
+    setBlocks: setBlocks, addBlock: addBlock, removeBlock: removeBlock, hideRider: hideRider,
     setAuth: setAuth, clearAuth: clearAuth,
     dur: dur
   };

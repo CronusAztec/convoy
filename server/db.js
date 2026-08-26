@@ -101,13 +101,14 @@ function query(text, params) { return pool.query(text, params); }
    rows; if this ever outgrows memory the store's read API is the thing to
    change, not this. */
 async function loadAll() {
-  const [profiles, friendships, requests, stats, pbs] = await Promise.all([
+  const [profiles, friendships, requests, stats, pbs, blocks] = await Promise.all([
     query('select id, username, profile, email, email_verified, auth_provider, ' +
       'extract(epoch from created_at) * 1000 as created_ms from public.profiles'),
     query('select user_a, user_b from public.friendships'),
     query('select from_id, to_id from public.friend_requests'),
     query('select user_id, runs, wins from public.user_stats'),
-    query('select user_id, mode_id, time_s, trap, extract(epoch from achieved_at) * 1000 as when_ms from public.dragy_pbs')
+    query('select user_id, mode_id, time_s, trap, extract(epoch from achieved_at) * 1000 as when_ms from public.dragy_pbs'),
+    query('select blocker_id, blocked_id from public.blocks')
   ]);
 
   const byId = new Map();
@@ -124,6 +125,12 @@ async function loadAll() {
       friends: [],
       reqIn: [],
       reqOut: [],
+      // Who this account has blocked, and who has blocked it. Both directions are
+      // held because every visibility check is symmetric — see
+      // migrations/003_blocks_reports.sql for why a one-way block is unsafe in an
+      // app that broadcasts live location.
+      blocked: [],
+      blockedBy: [],
       stats: { pb: {}, runs: 0, wins: 0 },
       createdAt: Number(r.created_ms) || Date.now()
     });
@@ -138,6 +145,13 @@ async function loadAll() {
   requests.rows.forEach((r) => {
     const f = byId.get(r.from_id), t = byId.get(r.to_id);
     if (f && t) { f.reqOut.push(t.id); t.reqIn.push(f.id); }
+  });
+  blocks.rows.forEach((r) => {
+    const b = byId.get(r.blocker_id), t = byId.get(r.blocked_id);
+    if (b) b.blocked.push(r.blocked_id);
+    // Mirrored onto the target so the symmetric check is a set lookup on either
+    // side rather than a scan of every account's block list.
+    if (t) t.blockedBy.push(r.blocker_id);
   });
   stats.rows.forEach((r) => {
     const u = byId.get(r.user_id);
@@ -420,6 +434,48 @@ function queueUnfriend(a, b) {
   enqueue('delete from public.friendships where user_a = $1 and user_b = $2', p);
 }
 
+/* blocks */
+// Directional rows — who blocked whom is a fact a reviewer needs — even though
+// every visibility check reads them symmetrically.
+function queueBlock(blockerId, blockedId) {
+  enqueue('insert into public.blocks (blocker_id, blocked_id) values ($1, $2) on conflict do nothing',
+    [blockerId, blockedId]);
+}
+function queueUnblock(blockerId, blockedId) {
+  enqueue('delete from public.blocks where blocker_id = $1 and blocked_id = $2',
+    [blockerId, blockedId]);
+}
+
+/* reports */
+// Awaited rather than queued, unlike every other write here. A rider who taps
+// "Report" is told it was filed, and that has to be true — the queue drops
+// permanent failures on the floor (by design, see isPermanent), which is the
+// wrong behaviour for the one write a person is explicitly promised.
+async function insertReport(r) {
+  const res = await query(
+    `insert into public.reports
+       (reporter_id, reporter_username, subject_id, subject_username, subject_label,
+        reason, detail, context, evidence)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
+     returning id`,
+    [r.reporterId || null, r.reporterUsername || null,
+     r.subjectId || null, r.subjectUsername || null, r.subjectLabel || null,
+     r.reason, r.detail || null, r.context || null,
+     r.evidence ? JSON.stringify(r.evidence) : null]);
+  return res.rows[0] ? res.rows[0].id : null;
+}
+
+// How many reports this account has filed in the last `windowMs`. The rate limit
+// on /api/report is per-IP and per-session; this is the durable one, and it is
+// what stops a rider cycling devices to bury someone under complaints.
+async function countRecentReports(reporterId, windowMs) {
+  const res = await query(
+    'select count(*)::int as n from public.reports ' +
+    'where reporter_id = $1 and created_at > now() - ($2::bigint * interval \'1 millisecond\')',
+    [reporterId, Math.round(windowMs)]);
+  return res.rows[0] ? res.rows[0].n : 0;
+}
+
 /* ---------------- shutdown ---------------- */
 // Flush everything still queued. Bounded so a dead database can't hang the
 // restart past the drain window server.js allows.
@@ -447,5 +503,6 @@ module.exports = {
   setEmail, markEmailVerified, setProvider,
   putEmailToken, takeEmailToken, purgeExpiredTokens,
   queueProfile, queuePB, queueRunIncrement, queueWinIncrement,
-  queueFriendRequest, queueClearRequests, queueFriendship, queueUnfriend
+  queueFriendRequest, queueClearRequests, queueFriendship, queueUnfriend,
+  queueBlock, queueUnblock, insertReport, countRecentReports
 };

@@ -151,6 +151,14 @@
   /* ---------------- WebRTC mesh ---------------- */
   function ensurePeer(id) {
     if (peers[id]) return peers[id];
+    // Never open a connection to someone blocked. Without this, syncMembers
+    // re-creates the peer dropPeer just tore down on the very next roster
+    // broadcast — the block would appear to work for about a second.
+    // Fall back to a bare {id} when sim has no record: a proximity peer can be
+    // adopted from a signalling frame before their pin exists, and passing null
+    // would skip the session-hide check that keys on the rider id.
+    var npc = (A.sim && A.sim.getNpc && A.sim.getNpc(id)) || { id: id };
+    if (ST && ST.isBlockedRider && ST.isBlockedRider(npc)) return null;
     var peer = { pc: null, relayOnly: false, makingOffer: false };
     peers[id] = peer;
     setupPeer(id, peer);
@@ -214,6 +222,7 @@
     // routes on payload.to now, but an old server broadcasts to the whole party).
     if (msg.payload && msg.payload.to && msg.payload.to !== myId()) return;
     var peer = ensurePeer(id);
+    if (!peer) return;            // blocked — no connection to negotiate
     var pc = peer.pc;
     if (!pc) { peer.relayOnly = true; return; }
     try {
@@ -265,6 +274,7 @@
     if (ctx.state === 'suspended') { try { ctx.resume(); } catch (e) {} }
     var peer = peers[fromId];
     if (!peer) peer = ensurePeer(fromId);
+    if (!peer) return;            // blocked — drop the relayed audio
     if (peer.pc && peer.pc.connectionState === 'connected') return; // P2P wins
     peer.relayOnly = true;
     // The sender downsamples before encoding, so it stamps the effective sample
@@ -437,6 +447,7 @@
     active = true;
     members.forEach(function (id) {
       var peer = ensurePeer(id);
+      if (!peer) return;          // blocked — skip
       // A peer created before the mic existed (a proximity rider adopted while
       // answering their signal) has no local track — add it and renegotiate,
       // otherwise they'd hear nothing from us over P2P.
@@ -482,6 +493,22 @@
       }
     });
     members.forEach(function (id) { if (!peers[id]) ensurePeer(id); });
+  }
+
+  // Tear down one peer immediately. The server already stops relaying a blocked
+  // rider's audio, but an ESTABLISHED WebRTC connection is peer-to-peer and does
+  // not pass through the server at all — nothing server-side can close it. So the
+  // client has to drop it the moment the block is made, or the person just
+  // blocked keeps talking straight into the blocker's ear over the existing pipe.
+  function dropPeer(id) {
+    var p = peers[id];
+    if (!p) return;
+    try { if (p.pc) p.pc.close(); } catch (e) { }
+    try { if (p.snd) p.snd.disconnect(); } catch (e) { }
+    try { if (p.el) { p.el.pause(); p.el.srcObject = null; } } catch (e) { }
+    delete peers[id];
+    var i = members.indexOf(id);
+    if (i >= 0) members.splice(i, 1);
   }
 
   /* ---------------- PTT / toggle controls ---------------- */
@@ -666,6 +693,7 @@
     startParty: startParty,
     stopParty: stopParty,
     syncMembers: syncMembers,
+    dropPeer: dropPeer,
     pttDown: pttDown,
     pttUp: pttUp,
     toggle: toggle,
