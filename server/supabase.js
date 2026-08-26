@@ -164,10 +164,36 @@ async function createUser(username, password, ip, email) {
   }
   // Builds predating error_code: fall back to the prose. GoTrue's own wording is
   // "...has already been registered", which does NOT contain "already registered".
+  /* A raw Postgres unique-violation on GoTrue's own users table.
+
+     GoTrue's duplicate check is itself a check-then-insert, so two requests for
+     the same identifier arriving together both pass the check and the SECOND
+     fails on the index — surfacing 'duplicate key value violates unique
+     constraint "users_email_partial_key"' as a 500 instead of the tidy
+     email_exists above.
+
+     That is still "taken", and it matters because the identifier is usually the
+     SYNTHETIC <username>@users.convoy.local address: a username-only account has
+     no real email, so a duplicate USERNAME collides on GoTrue's email index.
+     Unclassified, it fell through to the generic branch and /api/register
+     answered 502 "Could not create the account — try again" rather than "That
+     username is taken". Double-tapping Create account on a slow connection is
+     exactly this race.
+
+     Checked OUTSIDE the `if (!code)` fallback below, deliberately: a 500 carries
+     an error_code of its own (unexpected_failure), so a check that only ran when
+     GoTrue supplied no code would never see this. The message is unambiguous
+     either way. Matched narrowly, so a duplicate-key on an unrelated constraint
+     is not reported as a taken identifier. */
+  const raw = errText(r.body).toLowerCase();
+  if (raw.indexOf('duplicate key') >= 0 &&
+      (raw.indexOf('users_email') >= 0 || raw.indexOf('users_phone') >= 0 ||
+       raw.indexOf('users_pkey') >= 0)) {
+    return { error: 'taken', status: r.status };
+  }
   if (!code) {
-    const msg = errText(r.body).toLowerCase();
-    if (msg.indexOf('already been registered') >= 0 || msg.indexOf('already registered') >= 0 ||
-        msg.indexOf('already exists') >= 0) return { error: 'taken', status: r.status };
+    if (raw.indexOf('already been registered') >= 0 || raw.indexOf('already registered') >= 0 ||
+        raw.indexOf('already exists') >= 0) return { error: 'taken', status: r.status };
   }
   return { error: errText(r.body), status: r.status };
 }

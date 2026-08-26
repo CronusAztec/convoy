@@ -12,7 +12,8 @@
     "android:open": "cap open android",
     "test:blocking": "node test/block-integration.js",
     "test:race": "node test/race-lifecycle.js",
-    "test:fuzz": "node test/ws-fuzz.js"
+    "test:fuzz": "node test/ws-fuzz.js",
+    "test:concurrent": "node test/concurrency.js"
   },
   "dependencies": {
     "@capacitor/android": "^8.0.0",

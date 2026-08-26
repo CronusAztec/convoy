@@ -123,6 +123,7 @@ node server/server.js        # one terminal
 npm run test:blocking        # blocking + reporting, end to end
 npm run test:race            # race lifecycle
 npm run test:fuzz            # malformed frames at every ws handler
+npm run test:concurrent      # simultaneous requests, invariant checks
 ```
 
 Both exist because their areas kept producing the same class of bug and reading
@@ -145,6 +146,13 @@ ignored and the action silently never happens. After a run the server should hav
 logged neither `[handler …]` nor `[db] DROPPED …`; anything else is a finding. It
 reuses two fixed accounts rather than creating new ones, because a run
 deliberately exhausts the delete endpoint's rate limit.
+
+`test:concurrent` fires simultaneous requests at the places a race can actually
+exist — the async REST handlers, and caps enforced across several frames — and
+asserts **invariants** rather than winners, since a concurrency test that expects
+a particular ordering is a flaky test. Where the auth rate limit stops a case
+running it says so and skips; it never reports a pass it did not earn. Found the
+duplicate-registration 502.
 
 ## Legal
 

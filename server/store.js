@@ -170,9 +170,17 @@ function authErrorKind(r) {
 async function createUser(username, password, profile, ip, email) {
   email = email ? normalizeEmail(email) : null;
   const created = await sb.createUser(username, password, ip, email);
-  // sb.createUser reports a duplicate as 'taken' regardless of which identifier
-  // collided, but at this point only one of them CAN have: the username hasn't
-  // been offered to GoTrue at all. So a duplicate here is always the address.
+  /* Which identifier collided depends on whether an address was given, and the
+     old comment here had it backwards — it claimed the username "hasn't been
+     offered to GoTrue at all", which is not true. A username-only account is
+     registered with the SYNTHETIC <username>@users.convoy.local address, so with
+     no real email a duplicate here is a duplicate USERNAME, and falls through to
+     the generic 'taken' below that /api/register renders as "That username is
+     taken".
+
+     With a real address supplied, that address is what GoTrue was given, so a
+     duplicate is the email. A duplicate username in that case is not visible to
+     GoTrue at all and is caught by our own unique index in insertProfile. */
   if (created.error === 'taken' && email) return { error: 'email-taken' };
   if (created.error) return { error: created.error, detail: created.detail };
   const id = created.user && created.user.id;
