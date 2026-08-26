@@ -1658,6 +1658,14 @@ function blockedPair(a, b) {
   return store.blockedBetween(a.userId, b.userId);
 }
 
+// Cheap pre-check so the 45s global broadcast only pays for a per-viewer build
+// where one is actually needed.
+function hasBlocks(c) {
+  if (!c || !c.userId) return false;
+  const u = store.getById(c.userId);
+  return !!(u && ((u.blocked && u.blocked.length) || (u.blockedBy && u.blockedBy.length)));
+}
+
 function scopeFor(c, pool) {
   const out = new Set();
   if (!c.pos) return out;
@@ -1731,20 +1739,44 @@ function ensureKnown(c, id) {
 function applyBlockNow(c, targetUserId) {
   const tc = online.get(targetUserId);
   if (tc) {
+    // ORDER MATTERS. The client refuses a rider:remove for anyone still flagged
+    // as a convoy member ("party members stay visible", net.js) — a guard that
+    // keeps a member's pin from flickering out when they drift past the 30km
+    // scope radius. Sent the other way round, the removes below would arrive
+    // first, be refused, and leave each rider's pin on the other's map with
+    // nothing to re-send it. Re-broadcasting the party state first drops them
+    // from each other's roster, which clears the flag and lets the removes land.
+    const shared = c.party && tc.party && c.party === tc.party && parties.get(c.party);
+    if (shared) sendPartyState(shared);
+
     if (c.known && c.known.has(tc.id)) { c.known.delete(tc.id); send(c, { t: 'rider:remove', id: tc.id }); }
     if (tc.known && tc.known.has(c.id)) { tc.known.delete(c.id); send(tc, { t: 'rider:remove', id: c.id }); }
     // Mic state is sticky on the receiving end — clear it, or a rider blocked
     // mid-transmission stays lit up as "speaking" forever.
     send(c, { t: 'voice:mic', from: tc.id, on: false, name: '' });
     send(tc, { t: 'voice:mic', from: c.id, on: false, name: '' });
-    const shared = c.party && tc.party && c.party === tc.party && parties.get(c.party);
-    if (shared) sendPartyState(shared);
+    // A shared race is the realistic mid-block case: you are racing someone when
+    // they turn abusive. race:fix already refuses to cross a block, so leaving
+    // them both in would produce a race neither can see the other in. The rider
+    // who blocked leaves it — they chose to end the interaction.
+    if (c.raceId && tc.raceId && c.raceId === tc.raceId) {
+      leaveRace(c, false);
+      send(c, { t: 'err', msg: 'You left the race with that rider' });
+    }
   }
   syncScope(c);
 }
 
 /* ================= parties ================= */
-function liteOf(r) { return { id: r.id, name: riderName(r), emoji: r.bot ? r.emoji : r.profile.emoji }; }
+// Null-safe because its one map/filter caller already expects nulls: the
+// `.filter(Boolean)` beside it in sendPartyState was unreachable, since liteOf
+// threw on `r.id` before the filter ever saw the null. A member id that outlives
+// its client for even one tick — a socket closing mid-broadcast — would have
+// taken down the whole party-state send instead of dropping one row.
+function liteOf(r) {
+  if (!r) return null;
+  return { id: r.id, name: riderName(r), emoji: r.bot ? r.emoji : (r.profile && r.profile.emoji) };
+}
 
 // The roster and the chat backlog are built PER RECIPIENT rather than once for
 // the convoy. Two riders who have blocked each other can legitimately be in the
@@ -2073,7 +2105,7 @@ const handlers = {
       riders: [...c.known].map((id) => riderRecord(getRider(id), c)),
       // Anonymised here as well when the gate applies — this frame is the
       // rider's first sight of the global layer.
-      global: gated(c) ? anonymiseGlobal(buildGlobalFC()) : buildGlobalFC()
+      global: gated(c) ? anonymiseGlobal(buildGlobalFC(c)) : buildGlobalFC(c)
     });
     console.log(`[join] ${c.profile.name}${c.userId ? ' @' + c.username : ' (guest)'} — ${humans().length} online`);
   },
@@ -2270,10 +2302,14 @@ const handlers = {
     if (!rateOk('block:' + c.userId, 30, 60 * 1000)) {
       return send(c, { t: 'err', msg: 'Too many changes — give it a minute' });
     }
-    // Accepts a live rider id or an account id, matching party:invite — the
-    // rider card has the former, the friends list the latter.
+    // Three ways to name the target, tried in order. The username matters:
+    // without it, blocking someone who disconnected between opening their card
+    // and tapping Block would fail with "that rider is a guest", because the
+    // rider id no longer resolves to anyone. Someone reaching for Block has a
+    // reason to, and a rider going offline is not a reason to refuse.
     const target = getRider(str(m.to, 40)) || clientByUserId(str(m.to, 40));
-    const targetUserId = (target && target.userId) || str(m.userId, 40);
+    const byName = !target && m.username ? store.getByUsername(str(m.username, 20)) : null;
+    const targetUserId = (target && target.userId) || (byName && byName.id) || str(m.userId, 40);
     if (!targetUserId) {
       return send(c, { t: 'err', msg: 'That rider is a guest — blocking needs an account on both sides' });
     }
@@ -2540,6 +2576,15 @@ const handlers = {
     if (host && host.pos && B.haversine(c.pos, host.pos) > NEARBY_KM * 1000) {
       return send(c, { t: 'err', msg: 'Too far to race — move closer to the host' });
     }
+    // Refuse the pairing outright rather than letting them in and quietly
+    // withholding the position stream: a race where one entrant is invisible to
+    // another is a broken race, and neither of them would know why. Better to
+    // never start it. The wording names no one, so it does not confirm who.
+    for (const mid of race.members) {
+      if (blockedPair(c, getRider(mid))) {
+        return send(c, { t: 'err', msg: 'You can\'t join this race' });
+      }
+    }
     if (c.raceId) leaveRace(c, true);
     race.members.push(c.id);
     race.ready[c.id] = false;
@@ -2602,7 +2647,13 @@ const handlers = {
     for (const id of race.members) {
       if (id === c.id) continue;
       const tc = clients.get(id);
-      if (tc) send(tc, payload);
+      if (!tc) continue;
+      // race:fix is a continuous stream of live lat/lng/speed/heading — the most
+      // sensitive frame the server sends. Joining a race must not become a way
+      // around a block, and a block made MID-race has to stop the stream on the
+      // very next fix rather than at the end of the race.
+      if (blockedPair(c, tc)) continue;
+      send(tc, payload);
     }
   },
 
@@ -2635,6 +2686,9 @@ const handlers = {
     if (!race || race.host !== c.id) return;
     const target = getRider(str(m && m.to, 40));
     if (!target || !target.pos || !c.pos) return;
+    // Silently dropped, like party:invite — a distinct refusal would confirm the
+    // block to the sender.
+    if (blockedPair(c, target)) return;
     if (B.haversine(c.pos, target.pos) > NEARBY_KM * 1000) {
       return send(c, { t: 'err', msg: 'Too far to challenge — move closer' });
     }
@@ -2768,6 +2822,10 @@ setInterval(() => {
     const rec = riderRecord(r);
     items.push({
       id: r.id, // server-side only (never serialized to clients) — lets buildGlobalFC drop riders who ghost AFTER this snapshot was taken
+      // Also server-side only. Needed because the delayed feed can outlive the
+      // socket: by the time this snapshot is sent, the rider may be gone, so a
+      // block check has to key on the durable account rather than the rider id.
+      userId: r.userId || null,
       name: rec.name + ' ' + (rec.handle ? rec.handle[0].toUpperCase() + '.' : ''),
       emoji: rec.emoji,
       car: rec.car.year + ' ' + rec.car.make + ' ' + rec.car.model,
@@ -2802,7 +2860,16 @@ function anonymiseGlobal(fc) {
   };
 }
 
-function buildGlobalFC() {
+// `viewer` is optional. Passing one filters riders they have blocked (in either
+// direction) out of the delayed layer. It is optional because the layer is built
+// ONCE per 45s cycle and shared by every client — rebuilding per viewer would be
+// wasteful when almost nobody has blocked anyone. The broadcast below only asks
+// for a filtered build for the clients that actually have blocks.
+//
+// Without this the delayed layer contradicts what blocking promises: a blocked
+// rider still surfaces there by name, car and city. Coarse and five minutes old,
+// but still on the map the Terms say they disappear from.
+function buildGlobalFC(viewer) {
   const features = [];
   if (ambient.length) for (const a of ambient) {
     if (!a.online) continue; // offline ambient drivers don't appear
@@ -2831,6 +2898,8 @@ function buildGlobalFC() {
       // honor their CURRENT ghost state, not the one from capture time.
       const liveClient = it.id ? clients.get(it.id) : null;
       if (liveClient && liveClient.ghost) continue;
+      if (viewer && viewer.userId && it.userId &&
+          store.blockedBetween(viewer.userId, it.userId)) continue;
       const jit = globalJitter(it.name);
       features.push({
         type: 'Feature',
@@ -2854,6 +2923,15 @@ setInterval(() => {
   const raw = JSON.stringify({ t: 'global', fc: fc });
   let rawHidden = null;
   for (const c of humans()) {
+    // The exception to "serialize once": a client who has blocked someone needs
+    // that rider filtered out of the layer, which is a different FeatureCollection.
+    // Kept to clients that actually have blocks so the common path is unchanged —
+    // almost nobody has blocked anyone, and this runs for every client every 45s.
+    if (hasBlocks(c)) {
+      const own = buildGlobalFC(c);
+      sendRaw(c, JSON.stringify({ t: 'global', fc: gated(c) ? anonymiseGlobal(own) : own }));
+      continue;
+    }
     if (!gated(c)) { sendRaw(c, raw); continue; }
     if (rawHidden === null) rawHidden = JSON.stringify({ t: 'global', fc: anonymiseGlobal(fc) });
     sendRaw(c, rawHidden);

@@ -548,7 +548,12 @@
     // Blocking. Queued rather than raw-sent: a block made while the socket is
     // reconnecting is the one message that must not be silently dropped — the
     // rider believes they are protected the moment they tap it.
-    sendBlock: function (riderId, userId) { sendQueued({ t: 'block:add', to: riderId || '', userId: userId || '' }); },
+    // username is the durable half: a rider who disconnects between the card
+    // opening and the tap no longer resolves by rider id, and refusing to block
+    // someone because they went offline is the wrong failure.
+    sendBlock: function (riderId, username) {
+      sendQueued({ t: 'block:add', to: riderId || '', username: username || '' });
+    },
     sendUnblock: function (userId) { sendQueued({ t: 'block:remove', userId: userId }); },
     // Walkie-talkie voice signaling (convoy-only; server validates party membership).
     sendVoiceSignal: function (payload) { send({ t: 'voice:signal', payload: payload }); },

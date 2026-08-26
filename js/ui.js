@@ -1369,7 +1369,7 @@
       // and inventing a half-populated row here would put an Unblock button on
       // screen with nothing to send. The pin is removed below either way, so the
       // block is visibly instant without the list having to guess.
-      if (A.net && A.net.sendBlock) A.net.sendBlock(subject.id, '');
+      if (A.net && A.net.sendBlock) A.net.sendBlock(subject.id, uname);
       toast('Blocked ' + subject.name + '. They can no longer see you either', 'success');
     } else {
       // No account on one side or the other — say what actually happens rather
