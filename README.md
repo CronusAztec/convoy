@@ -110,6 +110,32 @@ otherwise it falls back to solo. One dependency (`ws`), no database, no API keys
   gracefully no-op on the web; the BLE/SABRE frame parsers still want validation against
   real hardware before shipping.
 
+## Tests
+
+`npm test` runs the unit suites — no server, no network, no database.
+
+Two suites are deliberately **not** in that run, because they need a live server
+and a real Supabase project. They register throwaway accounts and delete them in
+a `finally` block whatever happens:
+
+```bash
+node server/server.js        # one terminal
+npm run test:blocking        # blocking + reporting, end to end
+npm run test:race            # race lifecycle
+```
+
+Both exist because their areas kept producing the same class of bug and reading
+the code was not catching it. `test:blocking` walks every path that reached
+another rider before it was closed — the map, convoy roster and chat backlog,
+invites, waves, friend requests, races — and asserts frame *ordering* where the
+order is what matters. `test:race` pins down the rule that only a race reaching
+the green light records anything, with a genuine finish as the control so the
+guard can't silently over-reach.
+
+Some things neither can assert: a DNF is invisible over the websocket, because
+the penalised rider is removed from the race before any broadcast. Those are
+checked by querying `user_stats` directly — see the note each suite prints.
+
 ## Legal
 
 Convoy handles precise location, broadcasts it to strangers, carries voice and

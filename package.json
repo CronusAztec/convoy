@@ -10,7 +10,8 @@
     "android:add": "npm run copy-web && cap add android",
     "android:sync": "npm run copy-web && cap sync android",
     "android:open": "cap open android",
-    "test:blocking": "node test/block-integration.js"
+    "test:blocking": "node test/block-integration.js",
+    "test:race": "node test/race-lifecycle.js"
   },
   "dependencies": {
     "@capacitor/android": "^8.0.0",

@@ -1935,24 +1935,38 @@ function raceFinished(race) {
 // Resolve a race: mark anyone without a finish as DNF, credit the winner, broadcast.
 function endRace(race) {
   if (race.status === 'finished') return;
-  // A race that never left the lobby was never raced. Ending one — the host
-  // changes their mind, or nobody stages — used to DNF every member and count
-  // it as a run, so creating a race and cancelling it put a loss on your record
-  // for something that never started. Only a race that actually got to 'running'
-  // has results worth recording.
-  const wasRunning = race.status === 'running';
+  /* A race that never reached the green light was never raced.
+
+     There are three statuses — 'lobby', 'countdown', 'running' — and only the
+     last one means anybody actually drove: clients arm their timer on 'running'.
+     Ending before that used to do two wrong things at once. It DNF'd every
+     member and counted the run, so creating a race and cancelling it (nobody
+     stages, host changes their mind, host leaves during the 3s countdown) put a
+     loss on everyone's record for something that never happened. And it flipped
+     the race to 'finished', so the clients drew a results screen for a race with
+     no results in it.
+
+     Abandoning is the honest outcome for both: tear it down, record nothing,
+     show nobody a leaderboard. Handled here rather than at each call site so
+     every path into endRace gets it — the host leaving, the early-end button,
+     and the last racer walking out. */
+  if (race.status !== 'running') {
+    abandonRace(race, 'Race cancelled before it started — nothing recorded');
+    return;
+  }
   race.status = 'finished';
   // Mark no-shows as DNF. A DNF is still a race entered, so it counts as a run —
   // otherwise the denominator behind the win rate only ever includes finishers.
-  if (wasRunning) for (const id of race.members) {
+  for (const id of race.members) {
     if (race.results[id]) continue;
     race.results[id] = { time: null, trap: null, dnf: true };
     const dc = clients.get(id);
     if (dc && dc.userId) { dc.stats = store.recordRun(dc.userId); fanoutStat(dc, dc.stats); }
   }
   // Fastest legal time wins. Tally a win on the winner's user record.
-  // `r` is now optional: a race abandoned in the lobby records no results at
-  // all, so this no longer runs over a fully-populated table.
+  // The loop above fills a result for every member, so `r` is always set by the
+  // time we get here — the guard is belt-and-braces against a future caller that
+  // reaches this without going through it.
   let winnerId = null, bestTime = Infinity;
   for (const id of race.members) {
     const r = race.results[id];
