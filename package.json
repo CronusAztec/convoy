@@ -11,7 +11,8 @@
     "android:sync": "npm run copy-web && cap sync android",
     "android:open": "cap open android",
     "test:blocking": "node test/block-integration.js",
-    "test:race": "node test/race-lifecycle.js"
+    "test:race": "node test/race-lifecycle.js",
+    "test:fuzz": "node test/ws-fuzz.js"
   },
   "dependencies": {
     "@capacitor/android": "^8.0.0",

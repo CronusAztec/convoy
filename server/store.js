@@ -35,18 +35,37 @@ const sb = require('./supabase');
 // that used to live here, and honours the VPS DATA_DIR override through it.
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 
-let users = {};   // usernameLower -> user record
-let byId = {};    // id (auth.users uuid) -> user record
-let byEmail = {}; // emailLower -> user record (only accounts that have one)
+/* The three account indexes.
+
+   Object.create(null), not {}, and that is load-bearing. Every key here comes
+   off the wire — a username, an account id from a client frame, an address from
+   a form — so with a normal object literal, looking up 'constructor',
+   'toString' or 'valueOf' returns an inherited Function instead of undefined.
+   It is TRUTHY, so it sails past every `if (!u) return` guard in this file and
+   is then treated as an account: getById('constructor') hands back a Function,
+   getByUsername('toString') hands back another, and the first field access on
+   the impostor throws somewhere unrelated.
+
+   That was not theoretical. Fuzzing the websocket surface with 'constructor' as
+   a rider id crashed friend:decline — byId[otherId] resolved to Function, and
+   pull(o.reqOut, …) dereferenced undefined. The dispatcher swallows handler
+   throws, so it failed silently and the decline simply never happened.
+
+   Guarding each accessor would work until the next one is added without the
+   guard. Removing the prototype removes the class. */
+let users = Object.create(null);   // usernameLower -> user record
+let byId = Object.create(null);    // id (auth.users uuid) -> user record
+let byEmail = Object.create(null); // emailLower -> user record (only accounts that have one)
 let ready = false;
 
 /* ---------------- boot ---------------- */
 async function init() {
   const info = await db.init();
   const rows = await db.loadAll();
-  users = {};
-  byId = {};
-  byEmail = {};
+  // Rebuilt on every load — same null prototype, same reason as above.
+  users = Object.create(null);
+  byId = Object.create(null);
+  byEmail = Object.create(null);
   rows.forEach((u) => { index(u); });
   ready = true;
   console.log('[store] loaded ' + rows.length + ' accounts from Supabase (role: ' + info.role + ')');
@@ -827,7 +846,15 @@ function friendLite(u) {
   const car = p.car || {};
   return { id: u.id, username: u.username, name: p.name, emoji: p.emoji, paint: car.paint };
 }
-function pull(arr, v) { const i = arr.indexOf(v); if (i >= 0) arr.splice(i, 1); }
+// Tolerates a missing array. The null-prototype indexes above are what stop a
+// non-account ever reaching here, but this is called on half a dozen fields
+// across the friend paths and a throw in any of them is swallowed by the
+// websocket dispatcher — silent, not loud.
+function pull(arr, v) {
+  if (!Array.isArray(arr)) return;
+  const i = arr.indexOf(v);
+  if (i >= 0) arr.splice(i, 1);
+}
 
 // Returns { error } | { ok, autoAccepted, target }
 function sendFriendRequest(fromId, toUsername) {
@@ -866,20 +893,29 @@ function acceptFriend(userId, otherId) {
   return true;
 }
 
+// Both of these take an id straight off the wire, so the account has to EXIST
+// before a write is queued against it. Queueing unconditionally meant any client
+// could post an id that is not a uuid and have the server spend a real Postgres
+// round-trip discovering that ('22P02 invalid input syntax for type uuid'). The
+// queue drops those correctly, as permanent errors — but it drops them AFTER the
+// query, so the cost is the server's and the spam is free. Found by fuzzing.
+//
+// There is no case where the row should be deleted but the account is gone: a
+// deleted account cascades its friend rows away already.
 function declineFriend(userId, otherId) {
   const u = byId[userId], o = byId[otherId];
-  if (!u) return false;
+  if (!u || !o) return false;
   pull(u.reqIn, otherId); pull(u.reqOut, otherId);
-  if (o) { pull(o.reqOut, userId); pull(o.reqIn, userId); }
+  pull(o.reqOut, userId); pull(o.reqIn, userId);
   db.queueClearRequests(userId, otherId);
   return true;
 }
 
 function removeFriend(userId, otherId) {
   const u = byId[userId], o = byId[otherId];
-  if (!u) return false;
+  if (!u || !o) return false;
   pull(u.friends, otherId);
-  if (o) pull(o.friends, userId);
+  pull(o.friends, userId);
   db.queueUnfriend(userId, otherId);
   return true;
 }

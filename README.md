@@ -122,6 +122,7 @@ a `finally` block whatever happens:
 node server/server.js        # one terminal
 npm run test:blocking        # blocking + reporting, end to end
 npm run test:race            # race lifecycle
+npm run test:fuzz            # malformed frames at every ws handler
 ```
 
 Both exist because their areas kept producing the same class of bug and reading
@@ -135,6 +136,15 @@ guard can't silently over-reach.
 Some things neither can assert: a DNF is invisible over the websocket, because
 the penalised rider is removed from the race before any broadcast. Those are
 checked by querying `user_stats` directly — see the note each suite prints.
+
+`test:fuzz` is different again — it **asserts nothing**. It throws ~8k malformed
+frames at every handler from inside real convoy, race and friend state, and the
+result is read from the *server's* output. The dispatcher catches handler throws
+and logs them, so a broken handler is invisible to the client: the frame is
+ignored and the action silently never happens. After a run the server should have
+logged neither `[handler …]` nor `[db] DROPPED …`; anything else is a finding. It
+reuses two fixed accounts rather than creating new ones, because a run
+deliberately exhausts the delete endpoint's rate limit.
 
 ## Legal
 

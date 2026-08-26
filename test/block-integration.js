@@ -295,10 +295,21 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     fail++; console.log('\nTHREW: ' + e.message);
   } finally {
     head('cleanup');
+    // A 429 here is not a test failure. Deleting is capped at 10 per IP per ten
+    // minutes, and running the fuzz suite (or these suites back to back) spends
+    // that budget — so a rate-limited cleanup means 'try again shortly', not
+    // 'the code is broken'. Anything OTHER than 429 still fails the run, because
+    // that would be a real deletion bug and silently downgrading it is how orphan
+    // accounts pile up unnoticed.
+    const stranded = [];
     for (const [n, t] of [[A_NAME, aTok], [B_NAME, bTok]]) {
       if (!t) continue;
       const d = await api('/api/account/delete', 'POST', { confirm: 'DELETE', password: PW }, t);
+      if (d.status === 429) { stranded.push(n); console.log('  ~ ' + n + ' not deleted yet (rate limited)'); continue; }
       ok('deleted ' + n, d.status === 200, d.body);
+    }
+    if (stranded.length) {
+      console.log('    delete endpoint is rate limited; re-run in ~10 min to remove: ' + stranded.join(', '));
     }
     console.log('\n' + (fail ? '\u2717 ' + fail + ' failed, ' : '\u2713 ') + pass + ' passed');
     process.exit(fail ? 1 : 0);
