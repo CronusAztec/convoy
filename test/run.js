@@ -6,7 +6,8 @@ const path = require('path');
 const suites = ['physics.test.js', 'behaviour.test.js', 'boundary.test.js',
   'auth.test.js', 'supabase.test.js', 'store.test.js',
   'mailer.test.js', 'oauth.test.js', 'overpass.test.js',
-  'serverpolicy.test.js', 'hotspots.test.js', 'net.test.js'];
+  'serverpolicy.test.js', 'hotspots.test.js', 'net.test.js',
+  'routegeo.test.js'];
 let failed = 0;
 
 for (const s of suites) {
