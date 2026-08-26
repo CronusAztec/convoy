@@ -1757,11 +1757,16 @@ function applyBlockNow(c, targetUserId) {
     send(tc, { t: 'voice:mic', from: c.id, on: false, name: '' });
     // A shared race is the realistic mid-block case: you are racing someone when
     // they turn abusive. race:fix already refuses to cross a block, so leaving
-    // them both in would produce a race neither can see the other in. The rider
-    // who blocked leaves it — they chose to end the interaction.
+    // them both in would produce a race neither can see the other in.
+    //
+    // The race is ABANDONED rather than left, and nobody is charged for it.
+    // Routing this through leaveRace looked right and was not: when the blocker
+    // happened to be the host it cascaded into endRace, which DNFs everyone
+    // still in and counts the run — so the OTHER rider took a recorded loss
+    // because someone else blocked them. Neither rider chose to abandon this
+    // race, so neither pays for it.
     if (c.raceId && tc.raceId && c.raceId === tc.raceId) {
-      leaveRace(c, false);
-      send(c, { t: 'err', msg: 'You left the race with that rider' });
+      abandonRace(races.get(c.raceId), 'A rider blocked another — race abandoned, nothing recorded');
     }
   }
   syncScope(c);
@@ -1930,20 +1935,28 @@ function raceFinished(race) {
 // Resolve a race: mark anyone without a finish as DNF, credit the winner, broadcast.
 function endRace(race) {
   if (race.status === 'finished') return;
+  // A race that never left the lobby was never raced. Ending one — the host
+  // changes their mind, or nobody stages — used to DNF every member and count
+  // it as a run, so creating a race and cancelling it put a loss on your record
+  // for something that never started. Only a race that actually got to 'running'
+  // has results worth recording.
+  const wasRunning = race.status === 'running';
   race.status = 'finished';
   // Mark no-shows as DNF. A DNF is still a race entered, so it counts as a run —
   // otherwise the denominator behind the win rate only ever includes finishers.
-  for (const id of race.members) {
+  if (wasRunning) for (const id of race.members) {
     if (race.results[id]) continue;
     race.results[id] = { time: null, trap: null, dnf: true };
     const dc = clients.get(id);
     if (dc && dc.userId) { dc.stats = store.recordRun(dc.userId); fanoutStat(dc, dc.stats); }
   }
   // Fastest legal time wins. Tally a win on the winner's user record.
+  // `r` is now optional: a race abandoned in the lobby records no results at
+  // all, so this no longer runs over a fully-populated table.
   let winnerId = null, bestTime = Infinity;
   for (const id of race.members) {
     const r = race.results[id];
-    if (!r.dnf && r.time != null && r.time < bestTime) { bestTime = r.time; winnerId = id; }
+    if (r && !r.dnf && r.time != null && r.time < bestTime) { bestTime = r.time; winnerId = id; }
   }
   if (winnerId) {
     const wc = clients.get(winnerId);
@@ -1959,10 +1972,35 @@ function endRace(race) {
     races.delete(id);
   }, 8000).unref();
 }
+/* Tear a race down with no result for anyone.
+
+   Distinct from endRace, which resolves a race: it DNFs whoever has not finished
+   and counts the run, because they entered a race and it ran. Abandoning is for
+   when the race stops being a race through nobody's fault — today that means a
+   block was made between two of its entrants. Recording a loss against either of
+   them for that would make the safety tool cost something to use, and would
+   charge the rider who was blocked for a decision that was not theirs. */
+function abandonRace(race, reason) {
+  if (!race) return;
+  for (const id of race.members) {
+    const mc = clients.get(id);
+    if (!mc) continue;
+    mc.raceId = null;
+    send(mc, { t: 'race:state', race: null });
+    send(mc, { t: 'err', msg: reason });
+  }
+  race.members.length = 0;
+  races.delete(race.id);
+}
+
 // A racer leaves (or disconnects). DNF them if the race is running; if the host
 // leaves mid-race, the race ends. `silent` suppresses the re-broadcast (used
 // when the rider is mid-join into another race).
-function leaveRace(c, silent) {
+// `noPenalty` skips the DNF and the run counter. Used only when the rider is
+// being pulled out of the race by a BLOCK: they did not bail on the race, they
+// removed themselves from someone who was abusing them, and charging a recorded
+// loss for that makes the safety tool cost something to use.
+function leaveRace(c, silent, noPenalty) {
   const race = c.raceId && races.get(c.raceId);
   c.raceId = null;
   if (!race) return;
@@ -1971,7 +2009,7 @@ function leaveRace(c, silent) {
   delete race.ready[c.id];
   // If they finished already, keep their result; otherwise DNF them so the race
   // can still resolve (only meaningful while running).
-  if (race.status === 'running' && !race.results[c.id]) {
+  if (race.status === 'running' && !race.results[c.id] && !noPenalty) {
     race.results[c.id] = { time: null, trap: null, dnf: true };
     // Bailing out mid-race is still a race entered — count the run so the win
     // rate isn't computed against finishers only.

@@ -26,8 +26,22 @@
     sync();
   }
 
+  // TRUE while the route-preview player is driving the meter instead of real GPS
+  // — the same condition the 'tick' handler in init() uses to decide whether to
+  // advance by the simulated pace.
+  function previewDriving() {
+    var trip = S.trip;
+    return !!(trip && trip.active && !(trip.live && trip.gotFix));
+  }
+
   // Add a position sample; accumulate distance + moving time when actually moving.
   function sample(pos, t, speed) {
+    // Real GPS keeps arriving during a preview — the device has no idea the map
+    // is playing back a route — so without this both paths accumulate and a
+    // preview watched while genuinely moving counts the distance twice. The
+    // position is still recorded, so the preview ending doesn't read as a
+    // teleport on the next real sample.
+    if (previewDriving()) { lastPos = pos.slice(); lastAt = t; return; }
     if (lastPos) {
       var d = U.haversine(lastPos, pos);
       var dt = t - lastAt;
@@ -68,8 +82,8 @@
     // Route preview (no GPS): advance by the simulated pace between ticks.
     var lastTick = 0;
     ST.on('tick', function () {
-      var trip = S.trip;
-      if (trip && trip.active && !(trip.live && trip.gotFix)) {
+      if (previewDriving()) {
+        var trip = S.trip;
         var now = Date.now();
         if (lastTick) {
           var dt = now - lastTick;
