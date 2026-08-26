@@ -213,10 +213,39 @@
     return A.themes ? A.themes.isDark(t) : t !== 'light';
   }
 
+  /* How bright the theme's panels actually are, as a data-ui attribute.
+
+     Not the same question as the theme registry's `dark` flag: that describes the
+     MAP (zelda is parchment, so routes and glows key off it) while its panels are
+     near-black. And it can't be answered by listing theme ids either, because the
+     custom-theme editor lets a rider pick any surface colour they like.
+
+     So it is measured, once per theme change, off the surface the panels are
+     actually painted with. CSS that must stay legible on top of a panel — the
+     driving-safety warning, the delete-account warning — keys off [data-ui]
+     instead of guessing from the theme name, and every theme added later is
+     covered without touching that CSS. */
+  function applyUiBrightness() {
+    var root = document.documentElement;
+    var solid = '';
+    try {
+      solid = getComputedStyle(root).getPropertyValue('--surface-solid').trim();
+    } catch (e) { /* no computed style (tests, detached doc) — fall through */ }
+    // --surface-solid is authored as a hex in every theme; anything else (a
+    // half-applied stylesheet, an rgb() override) leaves the previous value in
+    // place rather than guessing wrong about the safety warning's legibility.
+    if (!/^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(solid)) return;
+    // luma() is 0..255 perceived brightness; the midpoint splits panel families
+    // cleanly (light #eef3fa ≈ 241, frost #f7f9fc ≈ 249, dark #15171b ≈ 23).
+    root.setAttribute('data-ui', U.luma(solid) > 140 ? 'light' : 'dark');
+  }
+
   function applyTheme() {
     var t = themeResolved();
     if (A.themes) A.themes.apply(t); // inject the theme's CSS vars/fonts before the attr flips
     document.documentElement.setAttribute('data-theme', t);
+    // After data-theme, so the measurement reads the theme that is now live.
+    applyUiBrightness();
     emit('theme', t);
   }
 
@@ -418,6 +447,7 @@
     on: on, off: off, emit: emit,
     themeResolved: themeResolved, themeIsDark: themeIsDark,
     applyTheme: applyTheme, applyAccent: applyAccent, applyAnim: applyAnim, applyDotColors: applyDotColors,
+    applyUiBrightness: applyUiBrightness,
     setTheme: setTheme, setAccent: setAccent, setMapStyle: setMapStyle,
     setUnits: setUnits, setShowGlobal: setShowGlobal, setAnim: setAnim,
     setFollowCam: setFollowCam, setVoiceNav: setVoiceNav, setNavVoice: setNavVoice, setGhost: setGhost,

@@ -362,9 +362,21 @@ async function health() {
   // SITE_URL is the public domain (Caddy's cert is for the domain, not the raw
   // IP — probing https://<IP>/ fails TLS SNI). Probe the app root and the APK
   // route so a half-deploy (site up, APK missing) shows up plainly.
+  //
+  // The legal routes are checked too, and they are not padding. They live in a
+  // directory the tarball's file list has to name explicitly, so forgetting one
+  // line there deploys a site where /terms and /privacy 404 — which is what
+  // happened the first time legal/ shipped. Probing only / and /convoy.apk
+  // reported that release as healthy. These four are also the URLs the in-app
+  // consent gate links to and the one Google Play holds on file for account
+  // deletion, so a 404 here is a store-policy failure, not a broken link.
   const checks = [
     { name: 'site', url: SITE_URL + '/' },
-    { name: 'APK download', url: SITE_URL + '/convoy.apk' }
+    { name: 'APK download', url: SITE_URL + '/convoy.apk' },
+    { name: 'terms', url: SITE_URL + '/terms' },
+    { name: 'privacy policy', url: SITE_URL + '/privacy' },
+    { name: 'account deletion', url: SITE_URL + '/delete-account' },
+    { name: 'third-party notices', url: SITE_URL + '/notices' }
   ];
   let allOk = true;
   for (const c of checks) {

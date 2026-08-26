@@ -678,7 +678,14 @@
     REG.custom = def;
     var tag = document.getElementById('theme-css-custom');
     if (tag) tag.parentNode.removeChild(tag); // stale block — apply() re-injects
-    if (current === 'custom') ensureCss(def);
+    if (current === 'custom') {
+      ensureCss(def);
+      // Editing the custom background can take the panels from dark to light
+      // without any theme CHANGE, so applyTheme never runs. Re-measure here or
+      // the safety-warning ink stays keyed to the brightness it had before the
+      // edit — see store.applyUiBrightness.
+      if (A.store && A.store.applyUiBrightness) A.store.applyUiBrightness();
+    }
     return def;
   }
 

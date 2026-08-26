@@ -1300,15 +1300,24 @@ body.radar-on .map-controls-left { display: none; }
    like a document rather than a dashboard. */
 .consent-block { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 2px; }
 
-/* The headline colours are tokenised rather than using --warn/--bad directly.
-   Those are neon (#ffb000 / #ff2b5e), tuned for the dark HUD; on the light
-   theme's near-white --surface-solid (#eef3fa) amber lands around 1.9:1 and red
-   around 3.4:1, both under the 4.5:1 needed to read as body text. This is the
-   driving-safety warning and the delete-account warning — the two blocks in the
-   app that must stay legible in every theme — so light mode gets darkened
-   variants that keep the same hue and clear AA. */
-:root { --consent-warn-ink: var(--warn); --consent-danger-ink: var(--bad); }
-[data-theme="light"] { --consent-warn-ink: #7a4e00; --consent-danger-ink: #a30027; }
+/* These two headline colours are tokenised rather than reusing --warn / --bad.
+   Those are neon (#ffb000 / #ff2b5e) and tuned for the dark HUD; measured
+   against each theme's own --surface-solid they fail AA in both directions —
+   amber sits at 1.6:1 on `toon` and 2.0:1 on `frost`, and red at 3.9:1 on
+   `gta5`, all under the 4.5:1 a body-text warning needs.
+
+   These are the driving-safety warning and the delete-account warning, the two
+   blocks in the app that must stay readable no matter what, so they get inks
+   picked for contrast rather than for the neon palette.
+
+   Keyed on [data-ui], which store.applyUiBrightness() sets by MEASURING the
+   live --surface-solid. Not on [data-theme]: the registry's `dark` flag
+   describes the map, not the panels (zelda is light parchment over near-black
+   panels), and the custom-theme editor lets a rider pick any background at all,
+   so no list of theme names can be right. Any theme added later is covered
+   automatically. */
+:root, [data-ui="dark"] { --consent-warn-ink: #ffc94d; --consent-danger-ink: #ff8fa6; }
+[data-ui="light"] { --consent-warn-ink: #7a4e00; --consent-danger-ink: #a30027; }
 
 .consent-warn {
   display: flex; flex-direction: column; gap: 4px;
@@ -1319,11 +1328,11 @@ body.radar-on .map-controls-left { display: none; }
   border-left-width: 3px;
   font-size: 12.5px; line-height: 1.5;
 }
-[data-theme="light"] .consent-warn { background: rgba(255, 176, 0, .18); }
+[data-ui="light"] .consent-warn { background: rgba(255, 176, 0, .2); }
 .consent-warn b { color: var(--consent-warn-ink); letter-spacing: .01em; }
 .consent-warn span { color: var(--text-dim); font-size: 11.5px; }
 .consent-warn-danger { background: rgba(255, 43, 94, .09); border-color: rgba(255, 43, 94, .4); }
-[data-theme="light"] .consent-warn-danger { background: rgba(255, 43, 94, .12); }
+[data-ui="light"] .consent-warn-danger { background: rgba(255, 43, 94, .12); }
 .consent-warn-danger b { color: var(--consent-danger-ink); }
 
 .consent-row {

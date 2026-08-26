@@ -213,6 +213,15 @@
     btn.setAttribute('aria-checked', on ? 'true' : 'false');
   }
 
+  /* Live subscriptions owned by the detector settings section. That section is
+     destroyed and rebuilt on every Profile-panel open, so its listeners have to
+     be detachable — ST.on returns an unsubscribe function for exactly this. */
+  var detectorSubs = [];
+  function detachDetectorSubs() {
+    detectorSubs.forEach(function (off) { try { off(); } catch (e) { /* already gone */ } });
+    detectorSubs = [];
+  }
+
   function mkSwatches(paints, value, onChange) {
     var w = U.el('div', 'swatches');
     var custom;
@@ -2066,7 +2075,14 @@
           : (name ? ('Saved: ' + U.esc(name) + ' · not connected') : 'No detector connected'));
     }
     renderStatus(A.native && A.native.state ? A.native.state().det : null);
-    ST.on('detector:state', renderStatus);
+    // Detach the previous render's subscriptions first. buildSettings() clears
+    // and rebuilds this whole section every time the Profile panel is opened
+    // (openPanel → buildSettings → here), so subscribing without unsubscribing
+    // grew the 'detector:state' and 'detector:device' listener lists by two on
+    // every open — permanently, each old closure still doing DOM work against a
+    // detached node on every BLE state change.
+    detachDetectorSubs();
+    detectorSubs.push(ST.on('detector:state', renderStatus));
     body.appendChild(status);
 
     // Scan + device picker.
@@ -2095,8 +2111,9 @@
       toast('Connecting to ' + (d.name || 'detector') + '…', 'info');
       picker.hidden = true;
     }
-    // Live-stream devices as the native scan discovers them.
-    ST.on('detector:device', addDevice);
+    // Live-stream devices as the native scan discovers them. Tracked with the
+    // status subscription above so both come off on the next rebuild.
+    detectorSubs.push(ST.on('detector:device', addDevice));
 
     scanBtn.addEventListener('click', function () {
       if (!isNative || !A.native.listDetectors) {
