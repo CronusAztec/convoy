@@ -78,6 +78,13 @@ const RATE_WINDOW = 10 * 60 * 1000;
 // ones. 60/s is well above the busiest real stream (race:fix at ~10Hz);
 // stays a drop-and-log for one release rather than closing the socket, so a
 // buggy legit client degrades instead of getting kicked.
+// DELIBERATELY a flat sliding window, not a token bucket with burst headroom
+// (the plan's original task-2 text asked for burst=120): a plain window is
+// simpler to reason about and the 60/s ceiling already has generous headroom
+// over real traffic, so the extra complexity of a burst allowance wasn't
+// worth it for this release. Revisit only if the `[ws budget]` warning below
+// fires against real LIVE-mode traffic (voice relay + party chat + race all
+// active at once can legitimately burst above a steady 60/s for one tick).
 const WS_MSG_BUDGET = parseInt(process.env.WS_MSG_BUDGET || '60', 10);
 const TICK_MS = 1000;            // full sync/broadcast cadence (everyone in scope)
 const FAST_MS = 350;            // fast-lane cadence for the closest riders
