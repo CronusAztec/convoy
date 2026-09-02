@@ -240,12 +240,17 @@
 
   function uploadPB(modeId, time, trap) {
     if (typeof fetch !== 'function') return;
+    // isLoggedIn() can be true (a profile/username exists) while the auth
+    // token itself is missing or already expired — sending 'Bearer false' or
+    // 'Bearer undefined' in that case just spams the server log with 401s.
+    var tok = A.state.auth && A.state.auth.token;
+    if (!tok) return;
     var base = (A.config && A.config.base) || '';
     fetch(base + '/api/dragy/pb', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + (A.state.auth && A.state.auth.token)
+        'Authorization': 'Bearer ' + tok
       },
       body: JSON.stringify({ modeId: modeId, time: time, trap: trap != null ? trap : null })
     }).then(function (r) {
@@ -493,7 +498,8 @@
     modeById: modeById,
     // test/inspection helpers (used to verify the timing core without real GPS)
     _feed: onFix,
-    _state: function () { return { phase: phase, staged: staged, runDist: runDist, result: result, splits: splits }; }
+    _state: function () { return { phase: phase, staged: staged, runDist: runDist, result: result, splits: splits }; },
+    _uploadPB: uploadPB
   };
   // Publish the preset table + lookup on the shared racetimer module so the race
   // system can build per-racer RaceTimer instances against the SAME modes dragy uses.

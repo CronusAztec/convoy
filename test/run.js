@@ -14,7 +14,7 @@ if (!fs.existsSync(wwwIndex)) {
 const suites = ['physics.test.js', 'behaviour.test.js', 'boundary.test.js',
   'auth.test.js', 'supabase.test.js', 'store.test.js',
   'mailer.test.js', 'oauth.test.js', 'overpass.test.js',
-  'serverpolicy.test.js', 'hotspots.test.js', 'net.test.js',
+  'serverpolicy.test.js', 'hotspots.test.js', 'net.test.js', 'netparty.test.js',
   'routegeo.test.js', 'voice.test.js', 'aircraft.test.js', 'riderarrows.test.js', 'telemetry.test.js', 'deletion.test.js',
   'sdk-inventory.test.js', 'ota.test.js', 'admin.test.js'];
 let failed = 0;

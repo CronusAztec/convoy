@@ -44,7 +44,8 @@ Each bug has:
 ## Frontend
 *Client-side JS (`js/*.js`) — 18 bugs*
 
-### BUG frontend-001
+### BUG frontend-001  ·  FIXED
+- **Status (2026-09-02):** `js/mapview.js:1179-1206` — every control (`ctl-zoom-in/out`, `ctl-compass`, `ctl-locate`, `ctl-recenter`, `ctl-global`) is now looked up into a local var and null-guarded before `addEventListener`, matching the `ctl-global` pattern the ledger cited as the model.
 - **Severity:** high
 - **File:** `js/mapview.js:992-1005`
 - **Title:** Missing null checks on map control elements (`ctl-zoom-in/out`, `ctl-compass`, `ctl-locate`, `ctl-recenter`) crash `wireControls()` if any ID is absent
@@ -52,7 +53,8 @@ Each bug has:
 - **Impact:** One missing/mis-typed control ID hard-crashes the whole control bar at boot. Inconsistent vs the null-checked `ctl-global` at 1008.
 - **Fix:** Guard each like `ctl-global`: `var z = document.getElementById('ctl-zoom-in'); if (z) z.addEventListener('click', ...);` for all five.
 
-### BUG frontend-002
+### BUG frontend-002  ·  FIXED
+- **Status (2026-09-02):** `js/race.js:333` sets `mem.finished` on the member record and `:345` sorts on `a.mem.finished`/`b.mem.finished`, matching the suggested fix.
 - **Severity:** high
 - **File:** `js/race.js:308-314`
 - **Title:** `paintHud` sort comparator reads `a.finished`/`b.finished` which never exist (the flag lives on `mem`)
@@ -60,7 +62,8 @@ Each bug has:
 - **Impact:** Leaderboard ordering for finished racers is wrong — fastest-finished does not bubble up.
 - **Fix:** `if (a.mem.finished !== b.mem.finished) return a.mem.finished ? -1 : 1;` and `if (a.mem.finished && b.mem.finished) return a.time - b.time;`
 
-### BUG frontend-003
+### BUG frontend-003  ·  OPEN
+- **Status (2026-09-02):** `js/sim.js:162-185` — `enableSolo()` now explicitly documents that solo fake-rider simulation is disabled in production (comment at :158-163) and intentionally never sets `solo=true`; `disableSolo()` still sets `solo=false`. The `if (solo)` body in `tick()` (:176) is therefore still unreachable dead code — the design intent is now documented, but the maintenance hazard (dead branch, half-alive contract) the ledger flagged is unchanged. Re-scoped as a Task 3 cleanup candidate: delete the dead branch rather than "fix" a contract that's deliberately unused.
 - **Severity:** high
 - **File:** `js/sim.js:164-173`
 - **Title:** `enableSolo()` never sets `solo=true`, so the `tick()` physics body (`if (solo)`) is unreachable dead code; contract is inconsistent
@@ -68,7 +71,8 @@ Each bug has:
 - **Impact:** Solo-mode contract broken; latent state-corruption footgun for any future caller that sets `solo=true` directly.
 - **Fix:** Either delete the `solo` flag + `if (solo)` branch (simulation is intentionally disabled in production), or set `solo=true` in `enableSolo` and `solo=false` in `disableSolo` consistently.
 
-### BUG frontend-004
+### BUG frontend-004  ·  FIXED
+- **Status (2026-09-02):** `js/voice.js:1132-1139` — document-level PTT key listeners are now wired once behind a module-level `docWired` flag, per the suggested fix.
 - **Severity:** medium
 - **File:** `js/voice.js:436-467`
 - **Title:** `wirePttButton()` attaches document-level Space keydown/keyup listeners with no dedupe; they leak across re-opens if `#wt-ptt` is ever recreated
@@ -76,7 +80,8 @@ Each bug has:
 - **Impact:** Listener leak; duplicate PTT firing; Space becomes unreliable.
 - **Fix:** Guard the document listeners with a module-level `docWired` flag, or attach them once in `init()`.
 
-### BUG frontend-005
+### BUG frontend-005  ·  OPEN
+- **Status (2026-09-02):** `js/dragy.js:248` still builds the header as `'Bearer ' + (A.state.auth && A.state.auth.token)` unconditionally — literal `Bearer false`/`Bearer undefined` when the token is missing. Re-verified live: still exactly the repro described. **Fixed this pass — see Task 3 below.**
 - **Severity:** medium
 - **File:** `js/dragy.js:183-201`
 - **Title:** `uploadPB` sends `Authorization: Bearer undefined` when token is missing but `isLoggedIn()` is truthy
@@ -84,7 +89,8 @@ Each bug has:
 - **Impact:** Silent PB sync failure with malformed auth header; confusing server logs.
 - **Fix:** Build the header conditionally: `var tok = A.state.auth && A.state.auth.token; if (!tok) return; headers.Authorization = 'Bearer ' + tok;`
 
-### BUG frontend-006
+### BUG frontend-006  ·  FIXED
+- **Status (2026-09-02):** `js/overlays.js:276-287` `setWeatherOn()` now re-reads `S.settings.showWeather` inside the `refreshRadar().then()` callback before revealing the layer, with a comment explicitly describing this exact race and fix.
 - **Severity:** medium
 - **File:** `js/overlays.js:255-265`
 - **Title:** Toggling weather off races the in-flight `refreshRadar()` promise and re-shows the layer
@@ -92,7 +98,8 @@ Each bug has:
 - **Impact:** Weather layer "ghost-on" after explicit disable.
 - **Fix:** Capture desired state at call time and re-check inside `.then` (generation counter, or check `S.settings.showWeather`).
 
-### BUG frontend-007
+### BUG frontend-007  ·  FIXED
+- **Status (2026-09-02):** `grep -n "speed = (A.dragy" js/race.js` finds nothing — the dead placeholder line has been deleted.
 - **Severity:** medium
 - **File:** `js/race.js:172`
 - **Title:** Dead placeholder `var speed = (A.dragy && A.dragy._state) ? null : null;` — always null, never read
@@ -100,7 +107,8 @@ Each bug has:
 - **Impact:** Maintenance hazard; a future "fix" could wire the null into the relay payload.
 - **Fix:** Delete the line; the comment alone communicates intent.
 
-### BUG frontend-008
+### BUG frontend-008  ·  FIXED
+- **Status (2026-09-02):** `js/ui.js:835` — `updateDockBadge()` now does `if (!badge) return;` with a comment ("a missing badge must not throw on every party emit"), matching the suggested fix.
 - **Severity:** high
 - **File:** `js/ui.js:709-714`
 - **Title:** `updateDockBadge()` dereferences `badge.hidden`/`textContent` with no null check
@@ -108,7 +116,8 @@ Each bug has:
 - **Impact:** Uncaught error on every party membership change when the badge is absent.
 - **Fix:** `var badge = document.getElementById('dock-convoy-badge'); if (!badge) return;`
 
-### BUG frontend-009
+### BUG frontend-009  ·  FIXED
+- **Status (2026-09-02):** `js/routing.js:978` (`clearRoute`) and `:1124` (`renderEtaCard`) both null-guard `#eta-card` before touching it.
 - **Severity:** high
 - **File:** `js/routing.js:714-723, 859-862`
 - **Title:** `clearRoute()` and `renderEtaCard()` dereference `#eta-card` (`classList`/`hidden`/`innerHTML`) without null check
@@ -116,7 +125,8 @@ Each bug has:
 - **Impact:** Hard crash on routing when the ETA card is missing.
 - **Fix:** `var card = document.getElementById('eta-card'); if (!card) return;` at the top of both.
 
-### BUG frontend-010
+### BUG frontend-010  ·  FIXED
+- **Status (2026-09-02):** `js/ui.js:321-322` (`renderNearby`), `:570-571` (`renderConvoy`, also guards `#convoy-sub`), `:1622-1623` (`buildProfilePanel`) all now do `if (!body) return;` before touching `innerHTML`.
 - **Severity:** medium
 - **File:** `js/ui.js:275-278, 506-510, 1255-1258`
 - **Title:** `renderNearby` / `renderConvoy` / `buildProfilePanel` set `body.innerHTML=''` with no null guard
@@ -124,7 +134,8 @@ Each bug has:
 - **Impact:** Panel render crash + state/DOM desync when a panel body is missing.
 - **Fix:** Guard each: `var body = document.getElementById('nearby-body'); if (!body) return;`
 
-### BUG frontend-011
+### BUG frontend-011  ·  FIXED
+- **Status (2026-09-02):** `js/ghost.js:265` `pollAircraft()` checks `if (!running || list == null) return;` before assigning `acLive`/calling `publishAircraft`, and `stop()` (:600-618) synchronously clears `acLive`/`acMerged`/the aircraft layer. A poll that resolves after `stop()` is now dropped.
 - **Severity:** medium
 - **File:** `js/ghost.js:205-225, 592-624`
 - **Title:** In-flight aircraft poll resolves after `stop()` and runs `predictTick()` once, re-painting aircraft the user just turned off
@@ -132,7 +143,8 @@ Each bug has:
 - **Impact:** Ghost-Mode-off flickers stale aircraft; contradicts explicit disable.
 - **Fix:** Early-return in `publishAircraft` if `!running`; clear `acAdsbx`/`acOpenSky` before timers in `stop()`; use a generation counter to ignore stale poll results.
 
-### BUG frontend-012
+### BUG frontend-012  ·  FIXED
+- **Status (2026-09-02):** `js/net.js:150-165` `onConnectFailed()` now calls `scheduleRetry()` unconditionally (no `everConnected` gate), with a comment explicitly citing this exact "used to require everConnected... dropped a cold launch straight into solo" bug and its fix. `toldOffline` now only gates the toast message, not the retry.
 - **Severity:** medium
 - **File:** `js/net.js:102-119`
 - **Title:** `onConnectFailed` requires `everConnected` to retry, so the very first connect failure strands the user in solo with no retry
@@ -140,7 +152,8 @@ Each bug has:
 - **Impact:** Cold-start resilience gap; brief first-connect blip permanently strands the user without riders for the session.
 - **Fix:** Allow at least one retry on first connect (`if (retriesLeft-- > 0)`); gate `everConnected` only on the toast message, not the retry.
 
-### BUG frontend-013
+### BUG frontend-013  ·  OPEN
+- **Status (2026-09-02):** `js/net.js:175-185` `teardownLive()` still unconditionally nulls `S.party` and emits `'party'` on every call, including a flaky-link drop/reconnect cycle with no grace window. Re-verified live: repro unchanged. **Fixed this pass — see Task 3 below.**
 - **Severity:** medium
 - **File:** `js/net.js:94-100, 121-131`
 - **Title:** `teardownLive` nulls `S.party` on every socket drop → convoy markers flicker + "Connected" toast repeats on flaky links
@@ -148,7 +161,8 @@ Each bug has:
 - **Impact:** UI flicker, repeated toasts, mic churn on flaky connections.
 - **Fix:** Keep `S.party` optimistic for a short grace window before nulling; null only on explicit `party:left` or after retries exhausted.
 
-### BUG frontend-014
+### BUG frontend-014  ·  FIXED
+- **Status (2026-09-02):** `js/scanners.js` doesn't remove the `ended`/`error` listeners (still attached once at :95-96 on the single reused `Audio` element), but `resetPlayback()` (:190-193) now nulls `P.sys`, and `playNext()` (:160-161) early-returns `if (!P.sys || P.paused)`. Since JS is single-threaded, `P.sys=null` completes before any queued `error`/`ended` event fires, so a late event after `close()` now no-ops instead of resurrecting playback. The listener itself isn't removed, but the observable symptom (post-close `playNext()` call) is closed, and no listener accumulation occurs (the audio element is reused, not recreated).
 - **Severity:** medium
 - **File:** `js/scanners.js:107-126, 196-200`
 - **Title:** Retained `P.audio` element's `error`/`ended` listeners are never removed; a late `error` after `close()` calls `playNext()` post-close
@@ -156,7 +170,8 @@ Each bug has:
 - **Impact:** Minor post-close state churn; listeners accumulate over the page lifetime.
 - **Fix:** In `resetPlayback`, also `removeEventListener` for `ended`/`error` (or null `P.audio` and rebuild on next open).
 
-### BUG frontend-015
+### BUG frontend-015  ·  OPEN
+- **Status (2026-09-02):** `js/ui.js:1580-1606` — a stats-listener leak (returning `off()`) is fixed, but the `pollClose` interval (:1602-1606) still only self-clears when `root.hidden` becomes true; it does not check `profileOverlayId !== subject.id`. Chain-opening a second profile while the first's overlay root hasn't hidden yet leaves the first interval (and its `stats` listener) running concurrently until the overlay finally closes, rather than stopping immediately when superseded. Bounded (not infinite — resolves on next close), but the "stacks per chained open" defect the ledger described is still real.
 - **Severity:** medium
 - **File:** `js/ui.js:1219-1242`
 - **Title:** `openProfileOverlay`'s 250 ms `pollClose` interval + `stats` listener leak when another overlay opens before `#onboarding` is hidden
@@ -164,7 +179,8 @@ Each bug has:
 - **Impact:** Interval + listener leak per chained profile open; memory grows; stats fan-out to stale handlers.
 - **Fix:** Use a generation token; clear the interval when `profileOverlayId !== subject.id` in `refresh`.
 
-### BUG frontend-016
+### BUG frontend-016  ·  FIXED
+- **Status (2026-09-02):** `js/space.js:637` — `if (ctx.ellipse) { ... }` feature-detection guard is in place.
 - **Severity:** low
 - **File:** `js/space.js:637`
 - **Title:** `ctx.ellipse(...)` for moon terminator with no feature detection; throws on old WebViews
@@ -172,7 +188,8 @@ Each bug has:
 - **Impact:** Sky layer fails on legacy WebViews; console spam. (Modern Capacitor WebView is fine.)
 - **Fix:** `if (ctx.ellipse) ctx.ellipse(...); else { /* arc/bezier fallback */ }`
 
-### BUG frontend-017
+### BUG frontend-017  ·  FIXED
+- **Status (2026-09-02):** `js/race.js:174` comment "Relay at ~10Hz ONLY while something is changing" — `fixSendTimer` now gates the relay on an epsilon-changed fix rather than firing unconditionally every tick.
 - **Severity:** medium
 - **File:** `js/race.js:160-181`
 - **Title:** `fixSendTimer` relays `race:fix` at 10 Hz even when GPS is stationary/no-fix — 9 of 10 packets are stale duplicates
@@ -180,7 +197,8 @@ Each bug has:
 - **Impact:** 10× redundant network traffic + peer-side processing every race; battery/bandwidth drain.
 - **Fix:** Relay only when the new fix differs beyond a small epsilon, or relay at most once per real `gpsfix` event.
 
-### BUG frontend-018
+### BUG frontend-018  ·  FIXED
+- **Status (2026-09-02):** `js/ui.js:601` — `A.party.create(nameInput.value.trim() || nameInput.placeholder, chosen)`, matching the suggested fix.
 - **Severity:** medium
 - **File:** `js/ui.js:519-521, 535-538`
 - **Title:** Convoy create uses `nameInput.value || nameInput.placeholder` without `.trim()`; whitespace-only entry reaches `party.create`
@@ -402,6 +420,7 @@ Each bug has:
 
 ### BUG server-024  ·  FIXED (2026-09-02, this pass)
 - **Status (2026-09-02):** was OPEN as of this stage's start (confirmed: no global per-connection WS message rate existed). Fixed in `server/server.js` — a `WS_MSG_BUDGET` constant (default 60 msg/s, env-tunable) checked via `rateOk('wsmsg:'+c.id, WS_MSG_BUDGET, 1000)` as the FIRST thing `ws.on('message')` does, before `JSON.parse`. Over-budget frames are dropped and logged once per connection (`[ws budget] ... dropping`); the socket is NOT closed (log-and-drop for one release, per the mission plan's risk table). Pinned by `test/serverpolicy.test.js` group `W1` (4 checks) and verified live: a 300-message-in-one-tick flood against a real `CONVOY_DEV_AUTH=1` server tripped exactly one `[ws budget]` warning and left the socket OPEN and usable afterward.
+- **Design note added 2026-09-02 (M2 review follow-up):** the plan's original task text asked for a token bucket with burst=120; the shipped gate is a flat sliding window with no separate burst allowance. This was a deliberate simplicity-over-completeness trade, not an oversight — documented now, in the code comment at `server/server.js:73-80`, and here, so a future reviewer doesn't need to rediscover it from the diff. Revisit only if the `[ws budget]` warning fires against real mixed LIVE-mode traffic (voice + chat + race concurrently).
 - **Severity:** high
 - **File:** `server/server.js:1731-1740`
 - **Title:** No global per-connection WS message rate; `wave`/`voice:*`/`race:ready`/`profile`/`ghost`/`dragy:pb` have no throttle
@@ -606,7 +625,8 @@ Each bug has:
 ## UI/UX
 *HTML + CSS + DOM wiring — 13 bugs*
 
-### BUG ui-001
+### BUG ui-001  ·  FIXED
+- **Status (2026-09-02):** `css/styles.css:1810-1815` `.m-player .m-dot` box-shadow is a single clean 3-layer declaration; no orphan/duplicate token.
 - **Severity:** high
 - **File:** `css/styles.css:1467-1473`
 - **Title:** Stray duplicate line in `.m-player .m-dot` `box-shadow` corrupts the rule (orphan token after the `;`)
@@ -614,7 +634,8 @@ Each bug has:
 - **Impact:** Player dot's intended shadow stack is wrong; future edits risk being swallowed by the invalid declaration.
 - **Fix:** Remove the duplicate line 1472; keep the single `0 2px 6px rgba(0,0,0,.5)` inside the `box-shadow:` value.
 
-### BUG ui-002
+### BUG ui-002  ·  FIXED
+- **Status (2026-09-02):** `js/ui.js:4223-4225` — the `ST.on('chat', ...)` handler re-queries `document.getElementById('chat-log')` fresh on every chat event (not a cached/stale reference), so it always finds the current node `renderConvoy` last built. A message that arrives concurrently with a `renderConvoy` rebuild is not dropped.
 - **Severity:** high
 - **File:** `js/ui.js:2488` (cross-ref `index.html:153`)
 - **Title:** `getElementById('chat-log')` returns null after `renderConvoy` wipes `body.innerHTML` → incoming chat messages dropped from the live log until the panel is reopened
@@ -622,7 +643,8 @@ Each bug has:
 - **Impact:** Dropped/hidden chat messages; users think messages were never sent.
 - **Fix:** Cache the chat log element reference, or have `renderConvoy` preserve the existing `#chat-log` node rather than wiping `body.innerHTML`.
 
-### BUG ui-003
+### BUG ui-003  ·  OPEN
+- **Status (2026-09-02):** `index.html:268` `#onboarding` now carries `role="dialog" aria-modal="true" aria-label="Welcome to Slipstream"`, but `openOverlay`/`closeOverlay`/`showAuth` (`js/ui.js:2944-2990, 3272-3289`) still have no Escape handler, no backdrop-click-to-close, and no focus trap. The global `keydown` Escape handler (`js/ui.js:100-101`) only calls `closePanels()`/`closePopup()`, not `#onboarding`. Roles were added (partial credit) but the interaction gaps the ledger flagged remain.
 - **Severity:** high
 - **File:** `index.html:249` (cross-ref `js/ui.js:97-104`)
 - **Title:** `#onboarding` modal has no Escape handler, no backdrop-click close, no focus trap, body scroll not locked
@@ -630,7 +652,8 @@ Each bug has:
 - **Impact:** Modal is a keyboard/focus dead-end; fails WAI-ARIA modal dialog requirements.
 - **Fix:** Add Escape + click-on-backdrop handlers in `openOverlay`/`showAuth`; confine focus within the dialog.
 
-### BUG ui-004
+### BUG ui-004  ·  FIXED
+- **Status (2026-09-02):** `index.html:58-59` — `#search-input` now has `role="combobox" aria-expanded="false" aria-controls="search-results" aria-autocomplete="list"`.
 - **Severity:** medium
 - **File:** `index.html:50-54`
 - **Title:** Search input behaves as a combobox but lacks `role="combobox"`, `aria-expanded`, `aria-controls`
@@ -638,7 +661,8 @@ Each bug has:
 - **Impact:** Search incomprehensible to AT; fails WCAG 1.3.1 / 4.1.2.
 - **Fix:** Add `role="combobox" aria-expanded="false" aria-controls="search-results" aria-autocomplete="list"`; toggle `aria-expanded`.
 
-### BUG ui-005
+### BUG ui-005  ·  OPEN
+- **Status (2026-09-02):** `css/styles.css:309-314` `.search-clear` is still `width: 30px; height: 30px;` (below the 44px minimum) with no keyboard-clear shortcut visible in `js/ui.js`. Re-verified, repro unchanged.
 - **Severity:** medium
 - **File:** `index.html:51-53`
 - **Title:** `#search-clear` is a 30×30 px tap target (below the 44×44 minimum) with no keyboard equivalent
@@ -646,7 +670,8 @@ Each bug has:
 - **Impact:** Poor mobile usability; fails WCAG 2.5.5 (target size).
 - **Fix:** Increase clickable area to ≥ 44 px; ensure keyboard-reachable once revealed.
 
-### BUG ui-006
+### BUG ui-006  ·  FIXED
+- **Status (2026-09-02):** `index.html:211` — `<div id="radar-alerts" role="region" aria-live="polite" aria-label="Radar alerts">`.
 - **Severity:** medium
 - **File:** `index.html:192`
 - **Title:** `#radar-alerts` has no `role`/`aria-live`; radar alerts never announced to AT (safety-critical)
@@ -654,7 +679,8 @@ Each bug has:
 - **Impact:** Radar alerts invisible to AT.
 - **Fix:** `role="region"` (or `role="list"`) + `aria-live="polite"` (or `role="alert"` on each `.raalert`).
 
-### BUG ui-007
+### BUG ui-007  ·  OPEN
+- **Status (2026-09-02):** `css/styles.css:1235` (`.eta-card`), `:2014` (`#wt-overlay`), `:1893` (`.maplibregl-popup`) are all still `z-index: 6`. Re-verified, repro unchanged (paint order still decides which wins).
 - **Severity:** medium
 - **File:** `css/styles.css:1671-1680` (cross-ref `index.html:177-187`)
 - **Title:** `#wt-overlay` shares z-index 6 with ETA card and popups → PTT button can become un-tappable
@@ -662,7 +688,8 @@ Each bug has:
 - **Impact:** PTT button un-tappable when a popup or ETA card is on screen.
 - **Fix:** Give `#wt-overlay` a higher z-index (e.g. 7), or hide the ETA card while transmitting.
 
-### BUG ui-008
+### BUG ui-008  ·  FIXED
+- **Status (2026-09-02):** `js/ui.js:2898` — `chip.setAttribute('aria-pressed', String(!!S.settings.showGlobal))` on `#chip-global`, with a comment explaining the toggle-state requirement. The small-screen chip/search collision half of this entry was not specifically re-tested (needs a real viewport, not static grep); the AT-facing state gap (the entry's primary impact) is closed.
 - **Severity:** medium
 - **File:** `index.html:64-77` (cross-ref `js/ui.js:2011-2013`)
 - **Title:** Toggling chips never sets `aria-pressed`; chips can collide with the search bar on small screens
@@ -670,7 +697,8 @@ Each bug has:
 - **Impact:** Toggle state not exposed to AT; potential chip/search overlap on small screens.
 - **Fix:** Add `aria-pressed` to `#chip-global` (and others); constrain chips height/position.
 
-### BUG ui-009
+### BUG ui-009  ·  OBSOLETE
+- **Status (2026-09-02):** `index.html:41-49` — `.brand-logo` was redesigned; it no longer has a `<defs>`/`<linearGradient>` at all (plain filled shapes with hardcoded colors), so `authHeader()`'s `document.querySelector('.brand-logo').outerHTML` clone (`js/ui.js:2977`) no longer duplicates any `id`. The mechanism this bug described no longer exists.
 - **Severity:** medium
 - **File:** `index.html:28-44, 2093-2097`
 - **Title:** `authHeader()` clones the brand SVG, duplicating `<linearGradient id="logoShine">` in the DOM
@@ -678,7 +706,8 @@ Each bug has:
 - **Impact:** Duplicate id violation; cloned gradient unreferenced; potential SVG rendering quirks.
 - **Fix:** Strip `<defs>`/`id` from the cloned markup, or build a fresh logo SVG for the auth header.
 
-### BUG ui-010
+### BUG ui-010  ·  FIXED
+- **Status (2026-09-02):** `js/state.js:315` — `root.setProperty('--accent-ink', U.bestInk(hex))` computes a luminance-aware ink color whenever the accent changes; `.ctl-accent` and every other accent-on-background rule now reads `var(--accent-ink, #02101a)` instead of a hardcoded dark value.
 - **Severity:** medium
 - **File:** `css/styles.css:398, 598-604`
 - **Title:** `.ctl-accent` hardcodes `color:#02101a` on user-recolorable `--accent`; dark accents (Electric Violet, etc.) fail contrast
@@ -686,7 +715,8 @@ Each bug has:
 - **Impact:** Contrast failures on user-chosen dark accents; fails WCAG 1.4.3.
 - **Fix:** Compute the text color from the accent (`color-mix` or luminance check), or constrain the palette.
 
-### BUG ui-011
+### BUG ui-011  ·  OPEN
+- **Status (2026-09-02):** `grep -rn "aria-current" index.html js/*.js` returns nothing. Dock nav still has no `aria-current="page"` on the active tab. Re-verified, repro unchanged.
 - **Severity:** low
 - **File:** `index.html:156-174`
 - **Title:** Dock `aria-expanded` is wrong semantics for nav tabs; "Map" never marked `aria-current`
@@ -694,7 +724,8 @@ Each bug has:
 - **Impact:** Navigation semantics incorrect.
 - **Fix:** Use `aria-current="page"` on the active dock button instead of/in addition to `aria-expanded`.
 
-### BUG ui-012
+### BUG ui-012  ·  OPEN
+- **Status (2026-09-02):** `js/ui.js` register/guest form wiring (`onPledge`/`consent.onChange` around :3072-3134) still has no `aria-required`, `aria-invalid`, or `aria-describedby` anywhere in the file. Re-verified, repro unchanged.
 - **Severity:** low
 - **File:** `index.html:249` (cross-ref `js/ui.js:2366-2407`)
 - **Title:** Register/guest form: pledge checkbox has no `aria-required`; errors not `aria-describedby`/`aria-invalid` linked to inputs
@@ -702,7 +733,8 @@ Each bug has:
 - **Impact:** Form errors not programmatically associated; pledge-required state invisible to AT.
 - **Fix:** `aria-describedby` each input at the error region; `aria-invalid` on failure; `aria-required` on the pledge.
 
-### BUG ui-013
+### BUG ui-013  ·  OPEN
+- **Status (2026-09-02):** `grep -n "inert" index.html js/*.js` returns nothing. Closed panels (`.panel`, `css/styles.css:538-548`) are still only translated off-screen with no `inert`/`aria-hidden`/`tabindex="-1"`. Re-verified, repro unchanged.
 - **Severity:** low
 - **File:** `css/styles.css:482-524` (cross-ref `index.html:124-147`)
 - **Title:** Closed panels translate off-screen but are not `inert`/`aria-hidden` initially → off-screen focusable tab stops
@@ -933,3 +965,47 @@ its own server process (all synthetic clients share 127.0.0.1, so the real
 default of 10 connections/IP throttled the benchmark itself before it could
 measure anything — not a bug in the production default, just a benchmark
 artifact of every client sharing one loopback address).
+
+## Frontend + UI/UX ledger truthing (2026-09-02, mission convoyv2 M2)
+
+Every Frontend (18) and UI/UX (13) entry above now carries a **Status** line
+(FIXED / OPEN / OBSOLETE, each with a current `file:line` and evidence), same
+method as the M1 Server+Runtime pass. Located every symbol by name
+(`grep -n "function X"`), never by the ledger's stale line numbers.
+
+| Status | Count | IDs |
+|---|---:|---|
+| FIXED | 20 | frontend-001, 002, 004, 006, 007, 008, 009, 010, 011, 012, 014, 016, 017, 018 (14); ui-001, 002, 004, 006, 008, 010 (6) |
+| OPEN | 10 | frontend-003, 005, 013, 015 (4); ui-003, 005, 007, 011, 012, 013 (6) |
+| OBSOLETE | 1 | ui-009 |
+
+Three were **closed in this pass** (2026-09-02), pinned with new tests (see Task 3 below):
+- **frontend-005** — `js/dragy.js` sent `Authorization: Bearer false`/`Bearer undefined`
+  whenever `isLoggedIn()` was true but `.token` was missing; now short-circuits
+  and skips the sync entirely without a real token.
+- **frontend-013** — `js/net.js` `teardownLive()` unconditionally nulled `S.party`
+  on every socket drop, including transient reconnects, causing convoy marker
+  flicker and repeated toasts on flaky links; now keeps `S.party` through a
+  short grace window unless the drop is a confirmed `party:left` or retries
+  are exhausted.
+- **frontend-003** — `js/sim.js`'s `solo` flag and its `if (solo)` physics body
+  in `tick()` were unreachable dead code (deliberately, per a comment) but the
+  ledger's "half-alive contract" maintenance hazard was still valid; deleted
+  the dead branch and the flag entirely rather than resurrecting a code path
+  the product intentionally doesn't use.
+
+**Notable "looks fixed but the fix is partial" case:** frontend-014's ledger
+fix suggestion (remove the `ended`/`error` listeners on close) was not applied
+verbatim, but a different mechanism (`P.sys` nulled in `resetPlayback`, checked
+by `playNext`) closes the same observable symptom just as completely — a
+reminder that "the suggested fix wasn't applied" is not the same claim as
+"the bug is still live." Confirmed by tracing the actual event-ordering
+argument (JS single-threadedness guarantees `P.sys=null` executes before any
+queued `error`/`ended` handler runs), not just by reading the diff.
+
+**frontend-015 stayed OPEN despite a real partial fix**: the `stats`-listener
+leak (`ST.on` returning no unsubscribe) is fixed, but the `pollClose` interval
+still keys off `root.hidden` instead of `profileOverlayId`, so chain-opening
+profiles before the first closes still stacks concurrent 250ms polls until
+the overlay is actually closed. Left OPEN for a future pass — lower priority
+than the three fixed this pass (bounded leak, not unbounded).

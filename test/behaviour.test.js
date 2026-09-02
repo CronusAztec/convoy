@@ -236,4 +236,18 @@ H.group('Settings integrity');
   H.ok('a meaningful number of settings were checked', used.length > 20, used.length + ' call sites');
 }
 
+/* ======================================================================== */
+H.group('sim.js — dead solo-physics branch removed (frontend-003)');
+{
+  // enableSolo() never set solo=true (solo simulation is deliberately disabled
+  // in production), so tick()'s `if (solo)` body and relocatePlayer()'s solo
+  // branch were unreachable dead code with a half-alive contract. Deleted the
+  // flag and both branches rather than resurrecting a code path the product
+  // intentionally doesn't use.
+  const s = src('js/sim.js');
+  H.ok('the solo flag is gone', !/var solo = false/.test(s));
+  H.ok('isSolo() is gone (always returned false, unused everywhere)', !/isSolo:/.test(s));
+  H.ok('tick() no longer branches on solo', !/function tick\s*\(\)\s*\{\s*if \(solo\)/.test(s));
+}
+
 process.exit(H.report());
