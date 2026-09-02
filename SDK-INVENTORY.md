@@ -45,6 +45,7 @@ much lighter declaration.
 | First-party Java plugins — `AuthPlugin`, `BackgroundLocationPlugin`, `LocationService`, `RadarDetectorPlugin`, `SabrePlugin`, `VoicePlugin` | this repo | Various | Ours, not third-party. Location, microphone and BLE, all surfaced through the app's own UI. | No |
 | `junit`, `androidx.test.*`, `espresso-core` | test-only | — | Not in the release APK. | — |
 | `@capacitor/cli`, `com.android.tools.build:gradle`, `com.google.gms:google-services` | build tooling | Build machine | Never linked into the app. `google-services` is a classpath entry only — see the note below. | — |
+| `playwright` | npm, test-only (`node scripts/smoke.js`) | Dev machine / CI | Drives a downloaded Chromium to smoke-test the web client against a local dev server. Never bundled into `www/`, never shipped in the APK, never runs on a rider's device. | — |
 
 **Not present, deliberately:** Firebase (any module), Crashlytics, Firebase
 Analytics / GA4, Google Mobile Ads, AppsFlyer, Adjust, Branch, Segment,
