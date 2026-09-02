@@ -17,13 +17,13 @@ Stack: vanilla-JS client (`index.html`, `js/*.js` 44 modules / 20,994 lines, `cs
 Evidence-driven audit → fix → verify loop, rotating areas: **M1 Realtime/server (ledger truthing + `server-024` WS frame budget + perf baseline) → M2 client resilience/panel states → M3 auth/session → M4 upstream failure isolation → M5 HUD a11y/copy → M6 voice → M7 Android (static only) → M8 performance → M9 docs/release branch.** Details and definitions of done in the plan §6.
 
 ## Metrics
-- M1 ledger accuracy: every `BUGS.md` entry status-tagged FIXED (code pointer + test) / OPEN (repro re-verified) / OBSOLETE (reason). Baseline: 4 of 89 marked FIXED; spot-check found ≥ 7 more already fixed in code (server-003/008/012/021, runtime-003/006, server-026 partial). Verified open: `server-024` (no per-connection WS frame budget at `server/server.js` `ws.on('message')`).
-- M2 tests: `node test/run.js` green every stage; check count strictly grows each implement stage. Baseline **184 checks / 21 suites, 19.7 s**.
-- M3 perf baseline (to be measured in M1): client bytes, script count (45), `/api/health` p95, WS connect→welcome p95 @50 sockets, RSS after 5 min churn.
-- M4 ship-readiness: each cycle ends with cache-buster bumped, `graphify update .`, `BUGS.md` + `STATE.md` updated, per-change commits, branch `forge/convoyv2` pushable (push to a branch only; merge is human).
+- M1 ledger accuracy: every `BUGS.md` Server+Runtime entry now status-tagged FIXED (code pointer, +test where testable) / OPEN (current repro re-verified) / OBSOLETE (reason) — **DONE for Server (27) + Runtime (6) = 33 entries**: 16 FIXED, 13 OPEN, 4 OBSOLETE. See `BUGS.md` → "Server + Runtime ledger truthing (2026-09-02)" for the full table and per-ID status lines. Frontend/Android/UI-UX/Runtime-extras sections are still untruthed — Frontend is next in the M2 plan.
+- M2 tests: `node test/run.js` green every stage; **check count strictly grows** each implement stage. IMPORTANT: the printed "All N checks passed" line at the very end of a full run is `admin.test.js`'s own count (184), not a sum — it happens to print last. The real cross-suite total (sum every suite's own count) is the metric that must grow: **1043 → 1049 this stage** (+6: 4 new checks pinning `server-024`'s fix, 2 pinning `runtime-005`'s fix). Compute it with: `node test/run.js 2>&1 | grep -oE 'All [0-9]+ checks passed' | grep -oE '[0-9]+' | awk '{s+=$1} END {print s}'`.
+- M3 perf baseline — **DONE, measured in M1** via the new `scripts/bench.js`: client bundle 1094.7KB raw / 343.8KB gzip (44 scripts + index.html + css), `/api/health` p50=0.5ms/p95=1.5ms/p99=4.1ms, WS connect→welcome p50=50.5ms/p95=71.1ms @50 sockets, RSS 80.0MB→105.0MB (+31.2%) over 5min/25-client churn. Full numbers and the new `server-028` (unconfirmed RSS-growth) finding in `BUGS.md`. Future stages should re-run `node scripts/bench.js --out <path>` and diff against these, not re-derive from scratch.
+- M4 ship-readiness: each cycle ends with cache-buster bumped **(only if a client asset changed — none did this stage, server-only)**, `graphify update .`, `BUGS.md` + `STATE.md` updated, per-change commits, branch `forge/convoyv2` pushable (push to a branch only; merge is human).
 
 ## Current milestone
-**M1 — Realtime/server: truth the Server+Runtime ledger, close `server-024`, record the perf baseline.** Not started. Start at plan §Handoff.
+**M1 — DONE.** Realtime/server: Server+Runtime ledger truthed (33/33 entries), `server-024` closed (global per-connection WS message budget), `runtime-005` closed as a bonus (found while truthing: looked fixed, wasn't — one-line real bug), perf baseline recorded, 3 test suites' stale `/tmp/convoy-*` leak fixed. **Next milestone: M2 — client resilience and panel states** (plan §M2). Start at the Handoff below.
 
 ## How to run
 ```
@@ -38,6 +38,8 @@ CONVOY_DEV_AUTH=1 BOTS=0 PORT=5173 node server/server.js  # guest-only local ser
 ```
 rm -rf www && node test/run.js        # 21 unit suites; harness fakes in test/harness.js; no network
 node scripts/smoke.js                 # Playwright two-client proximity smoke (dev-auth server on a scratch port) → "SMOKE OK"
+node scripts/bench.js                 # perf baseline: bundle size, /api/health + WS latency, 5min RSS churn (~6 min wall time)
+#   BENCH_CHURN_MS=30000 node scripts/bench.js   # shorter run for quick iteration
 # Live suites need a running server WITH Supabase — blocked on this box, say so in every report:
 #   npm run test:blocking · npm run test:race · npm run test:fuzz · npm run test:concurrent
 graphify query "<question>" --graph /opt/data/convoy/graphify-out/graph.json   # or `graphify update .` here (graphify-out/ is gitignored)
@@ -52,3 +54,4 @@ Never push to upstream `main`; never deploy/SSH/load-test odoreeci.tech; never e
 ## Log
 - 2026-09-02 stage 1 (plan): imported upstream history + 2 cherry-picks; `cd server && npm ci`; `node test/run.js` → All 184 checks passed / 21 suites (19.7 s); copied Playwright toolchain; wrote plan + this file.
 - 2026-09-02 stage 1 (plan): `node scripts/smoke.js` in this workspace → SMOKE OK rc=0 (log: /opt/data/forge/missions/20260902-214545-4532/.forge-tmp/smoke.log)
+- 2026-09-02 stage 2 (implement, M1): truthed all 33 Server+Runtime `BUGS.md` entries (16 FIXED / 13 OPEN / 4 OBSOLETE, each with a current file:line). Closed `server-024` (global per-connection WS message budget, `WS_MSG_BUDGET` env-tunable, default 60/s, drop-not-close) and `runtime-005` (tomtom.js wasn't passing a 400 status on bad coords, so server.js's 400-branch was dead code and every bad `/api/route` body still 502'd) — both pinned with new tests in `test/serverpolicy.test.js` (groups W1, R2) and `runtime-005`'s fix additionally verified by reverting it locally and confirming the pinning test fails with the exact pre-fix symptom. Fixed 3 test suites (`admin.test.js`, `hotspots.test.js`, `ota.test.js`) that never cleaned up their `mkdtempSync` temp dirs — 101 stale `/tmp/convoy-*` dirs → 0 after a full run. Wrote `scripts/bench.js` and recorded the M1 perf baseline (see Metrics above); found (did not fix — left as `server-028` for M8) a 31% RSS growth over a 5-min synthetic churn window, unconfirmed whether real leak or normal V8 behavior. `node test/run.js` → All 184 checks passed / 21 suites (19.66s); true cross-suite total 1043→1049. `graphify update .` run. No client asset changed → no cache-buster bump this stage.

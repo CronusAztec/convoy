@@ -72,6 +72,13 @@ const MAX_PARTY = 6;            // members per convoy, leader included (matches 
 const MAX_CLIENTS = parseInt(process.env.MAX_CLIENTS || '200', 10);
 const MAX_PER_IP = parseInt(process.env.MAX_PER_IP || '10', 10); // per-IP socket ceiling
 const RATE_WINDOW = 10 * 60 * 1000;
+// Global per-connection message budget (BUGS.md server-024): every per-type
+// handler below throttles ITS OWN message, but nothing capped the raw
+// JSON.parse + dispatch cost of a flood that mixes types or sends unknown
+// ones. 60/s is well above the busiest real stream (race:fix at ~10Hz);
+// stays a drop-and-log for one release rather than closing the socket, so a
+// buggy legit client degrades instead of getting kicked.
+const WS_MSG_BUDGET = parseInt(process.env.WS_MSG_BUDGET || '60', 10);
 const TICK_MS = 1000;            // full sync/broadcast cadence (everyone in scope)
 const FAST_MS = 350;            // fast-lane cadence for the closest riders
 const NEAR_FAST = parseInt(process.env.NEAR_FAST || '6', 10); // riders refreshed at fast-lane rate
@@ -3834,6 +3841,10 @@ wss.on('connection', (ws, req) => {
 
   ws.on('pong', () => { c.isAlive = true; });
   ws.on('message', (buf) => {
+    if (!rateOk('wsmsg:' + c.id, WS_MSG_BUDGET, 1000)) {
+      if (!c.wsBudgetWarned) { c.wsBudgetWarned = true; console.warn('[ws budget] ' + c.id + ' exceeded ' + WS_MSG_BUDGET + ' msg/s, dropping'); }
+      return;
+    }
     let m;
     try { m = JSON.parse(buf.toString()); } catch (e) { return; }
     if (!m || typeof m.t !== 'string') return;

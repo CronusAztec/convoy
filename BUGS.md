@@ -193,7 +193,8 @@ Each bug has:
 ## Server
 *Node backend (`server/*.js`) — 27 bugs*
 
-### BUG server-001
+### BUG server-001  ·  FIXED
+- **Status (2026-09-02):** `server/server.js:3066` — `ts = Number.isFinite(Number(m && m.ts)) ? Number(m.ts) : Date.now()`, matches the suggested fix exactly.
 - **Severity:** high
 - **File:** `server/server.js:1317-1336`
 - **Title:** `race:fix` forwards client-supplied `ts` verbatim with no `Number.isFinite` check
@@ -201,7 +202,8 @@ Each bug has:
 - **Impact:** Peer `RaceTimer` interpolation receives garbage `ts`.
 - **Fix:** `ts = Number(m && m.ts); if (!Number.isFinite(ts)) ts = Date.now();`
 
-### BUG server-002
+### BUG server-002  ·  OPEN
+- **Status (2026-09-02):** still open. `server.js:2618-2632` (party:invite bot reply), `2847-2863` (chat bot reply), `2874-2883` (wave bot reply) — deferred `setTimeout` bodies still have no try/catch; rely solely on the global `uncaughtException`/`unhandledRejection` handlers (`server.js:4075-4078`), which log-and-survive rather than isolate the failure per-callback.
 - **Severity:** high
 - **File:** `server/server.js:1731-1740, 1149-1161`
 - **Title:** Deferred `setTimeout` bot-chat callback is not wrapped in try/catch — a throw escapes to `uncaughtException`
@@ -209,7 +211,8 @@ Each bug has:
 - **Impact:** Process crash (only saved by the global handler).
 - **Fix:** Wrap every deferred `setTimeout` body in try/catch; or make the message handler `await h(c,m)` and route rejections.
 
-### BUG server-003
+### BUG server-003  ·  FIXED
+- **Status (2026-09-02):** `server/server.js:2482-2490` — `hello` looks up `online.get(u.id)`, closes the prior socket (`prev.ws.close()`) and notifies it before `online.set(u.id, c)`.
 - **Severity:** critical
 - **File:** `server/server.js:896, 1747-1751`
 - **Title:** `hello` with token sets `online.set(u.id, c)` but never terminates the prior socket — zombie connection leaks, double rider pin
@@ -217,7 +220,8 @@ Each bug has:
 - **Impact:** Resource leak, duplicate sessions, friend-presence flicker, single account can exceed connection budget by reconnecting.
 - **Fix:** Before `online.set`, look up prior `online.get(u.id)`; if present and different, `send(prev,{t:'auth:invalid'})` and `prev.ws.terminate()`.
 
-### BUG server-004
+### BUG server-004  ·  FIXED
+- **Status (2026-09-02):** `server/server.js:4086-4096` — `httpServer.close(async () => { await store.flush(); await hotspots.flush(); await store.close(); ... })` runs before `process.exit`.
 - **Severity:** high
 - **File:** `server/server.js:1794` (and `server/store.js:60-90`)
 - **Title:** `shutdown()` calls `store.flush()` without `await` → `process.exit(0)` cuts the in-flight write, losing recent data
@@ -225,7 +229,8 @@ Each bug has:
 - **Impact:** Data loss — recent account/race/profile writes lost on shutdown.
 - **Fix:** Make the `httpServer.close` callback `async` and `await store.flush(); await hotspots.flush();` before `process.exit(0)`.
 
-### BUG server-005
+### BUG server-005  ·  OBSOLETE
+- **Status (2026-09-02):** user persistence is no longer JSON-file-based (`flushSync`/`renameSync`/tmp-file races) — `server/store.js` now loads/writes through `server/db.js`, a Postgres-backed queue (`pg` Pool) with its own `flush()`/`close()`. The file-write race this bug describes no longer exists.
 - **Severity:** medium
 - **File:** `server/store.js:22-41, 110-125`
 - **Title:** `flushSync` on `process 'exit'` shares the same tmp filename as async `flush`; sets `dirty=false` before write; single-shot `renameSync` fails on Windows EPERM
@@ -233,7 +238,8 @@ Each bug has:
 - **Impact:** Data loss on shutdown, especially Windows.
 - **Fix:** Different tmp name (`.exit.tmp`); retry `renameSync`; only clear `dirty` after success; log loudly on failure.
 
-### BUG server-006
+### BUG server-006  ·  OBSOLETE
+- **Status (2026-09-02):** `server/auth.js` and its local `.secret` HMAC file are gone entirely. Auth now verifies Supabase GoTrue JWTs against a cached JWKS (`server/supabase.js`) — there is no locally-generated/regenerated secret for a transient read error to invalidate.
 - **Severity:** critical
 - **File:** `server/auth.js:14-26`
 - **Title:** ANY read error on `.secret` (not just `ENOENT`) silently regenerates the secret → invalidates every existing token
@@ -241,7 +247,8 @@ Each bug has:
 - **Impact:** Mass force-logout; loss of all refresh tokens from a transient permission issue.
 - **Fix:** Only regenerate on `ENOENT`; on other read errors throw and refuse to start. Verify file size > 0.
 
-### BUG server-007
+### BUG server-007  ·  OBSOLETE
+- **Status (2026-09-02):** same replacement as server-006. Current `exp` check in `server/supabase.js:576` is properly typed: `if (typeof claims.exp !== 'number' || claims.exp <= now) return null;`.
 - **Severity:** medium
 - **File:** `server/auth.js:41-55`
 - **Title:** `verifyToken` doesn't strictly check `exp` is a number; non-numeric future-string `exp` survives
@@ -249,7 +256,8 @@ Each bug has:
 - **Impact:** Low direct (HMAC protects); expiry validation brittle.
 - **Fix:** `if (typeof data.exp !== 'number' || data.exp < Date.now()) return null;`
 
-### BUG server-008
+### BUG server-008  ·  FIXED
+- **Status (2026-09-02):** `server/server.js:317-336` — `isTrustedProxy()`/`clientIp()` only honor `X-Forwarded-For` when `req.socket.remoteAddress` is in the `TRUST_PROXY` list (default loopback), and take the last hop. Spoofed XFF from an untrusted peer is ignored.
 - **Severity:** critical
 - **File:** `server/server.js:1703` (and all `rateOk('...:'+c.ip)` sites)
 - **Title:** `c.ip` is derived from `x-forwarded-for` unconditionally → spoofable → all per-IP rate limits and the per-IP connection ceiling are defeated
@@ -257,7 +265,8 @@ Each bug has:
 - **Impact:** Complete defeat of per-IP rate limits (auth/route/waze/hotspots/tts/race:fix) and per-IP connection ceiling; trivial DoS and brute-force amplification.
 - **Fix:** Only trust `x-forwarded-for` when `req.socket.remoteAddress` is in a configurable trusted-proxy list; else use `req.socket.remoteAddress`.
 
-### BUG server-009
+### BUG server-009  ·  OPEN
+- **Status (2026-09-02):** `server.js:2601-2632` — still only a per-inviter rate limit (`rateOk('invite:'+c.id,10,60000)`); no proximity/`c.known` check for non-friend rider-id targets, so a sybil of accounts can still each send 10/min to arbitrary rider ids.
 - **Severity:** medium
 - **File:** `server/server.js:980-1009`
 - **Title:** `party:invite` lets a member invite arbitrary rider ids with no proximity check; sybil of inviters can mass-DM
@@ -265,7 +274,8 @@ Each bug has:
 - **Impact:** Spam/unwanted invites regardless of distance.
 - **Fix:** Validate `c.id` is in `party.members`; for human targets require proximity (`c.known.has(target.id)` or haversine).
 
-### BUG server-010
+### BUG server-010  ·  OPEN (partial)
+- **Status (2026-09-02):** the specific `endRace` 8s teardown timer now has `.unref()` (`server.js:2351`). But the party-invite/chat-reply/wave bot-reply `setTimeout`s (1.2-3.6s, same sites as server-002) still lack `.unref()`, so up to ~3.6s of shutdown delay remains.
 - **Severity:** high
 - **File:** `server/server.js:805-813` (and 1307, 996, 1149, 1170)
 - **Title:** `endRace`'s 8 s teardown `setTimeout` (and others) lack `.unref()` → delays graceful shutdown by up to 8 s
@@ -273,7 +283,8 @@ Each bug has:
 - **Impact:** Slow shutdown; races dangled by the 5 s force-exit.
 - **Fix:** Add `.unref()` to all maintenance/teardown timers.
 
-### BUG server-011
+### BUG server-011  ·  OPEN
+- **Status (2026-09-02):** `scopeFor` (`server.js:2021-2053`) still does a full linear scan of all clients+bots per viewer per tick — no spatial grid/bucketing added (only a minor optimization: the rider pool is built once per tick instead of once per client). The main tick, fast-lane, ambient, global-feed, and heartbeat-ping `setInterval`s (`server.js:3191/3211/3272/3378/3878`) still lack `.unref()`.
 - **Severity:** critical
 - **File:** `server/server.js:1427-1442, 1447-1465, 1475-1499, 1552-1557, 1759-1765`
 - **Title:** `scopeFor` is O(H × (H+B)) haversine/sec on the main thread; at MAX_CLIENTS=200 that's ~42k trig ops/sec → event-loop starvation; also all maintenance timers lack `.unref()`
@@ -281,7 +292,8 @@ Each bug has:
 - **Impact:** Cascading false disconnects and stuck UIs as user count grows.
 - **Fix:** Spatial-index riders (lat/lng grid buckets) so `scopeFor` only checks nearby cells; `unref` maintenance timers.
 
-### BUG server-012
+### BUG server-012  ·  FIXED
+- **Status (2026-09-02):** `server.js:2894-2915` — `voice:signal` rate-limited via `rateOk('sig:'+c.id, 40, 5000)` plus a 16KB payload cap; `voice:relay` (`2918-2928`) rate-limited via `rateOk('voice:'+c.ip, VOICE_RELAY_BUDGET, 60000)`.
 - **Severity:** high
 - **File:** `server/server.js:1180-1198`
 - **Title:** `voice:signal` has no per-peer rate limit; a convoy member can flood SDP/ICE at line rate
@@ -289,7 +301,8 @@ Each bug has:
 - **Impact:** Per-member DoS, mobile data drain, peer client freezes.
 - **Fix:** Add per-client `signalTimes` limiter (e.g. 30/5 s); same for `voice:relay`.
 
-### BUG server-013
+### BUG server-013  ·  OPEN
+- **Status (2026-09-02):** `server.js:3144-3172` — `label` is only truncated (`str(m.label, 48, '')`), never HTML-escaped, before relay to peers. `kind === 'police'` still calls `hotspots.record()` with no auth requirement — only a new proximity gate (`REPORT_MAX_M`, 8km) and a 20/min per-IP rate limit were added; neither addresses escaping or auth.
 - **Severity:** medium
 - **File:** `server/server.js:1391-1408`
 - **Title:** `crowd:report` relays `label` without HTML-escaping (XSS into peers via popup); `police` kind writes the hotspot model with no auth requirement
@@ -297,7 +310,8 @@ Each bug has:
 - **Impact:** XSS into peers; persistent fake-police hotspots.
 - **Fix:** HTML-escape `label` server-side (mirror `agent.js cleanLabel`); require sign-in for `police` reports feeding the model.
 
-### BUG server-014
+### BUG server-014  ·  OPEN
+- **Status (2026-09-02):** `server/hotspots.js:107-126` — `flush()` still does a blocking `JSON.stringify(obs)` synchronously before the (async) file write; no NDJSON, no off-thread stringify, no downsampling of persisted observations.
 - **Severity:** medium
 - **File:** `server/hotspots.js:159-171, 222-234`
 - **Title:** At ~200 k observations, blocking `JSON.stringify(obs)` runs every 800 ms flush → periodic event-loop stalls
@@ -305,7 +319,8 @@ Each bug has:
 - **Impact:** Realtime stutter at scale.
 - **Fix:** Persist as NDJSON or move stringify off-thread; downsample persisted observations.
 
-### BUG server-015
+### BUG server-015  ·  OPEN
+- **Status (2026-09-02):** `MIN_COUNT=2` unchanged; per-cell dedup is now time-bucketed (`DEDUP_MS` windows, `hotspots.js:38,47,178-204`) but still purely per-cell, so 50m-spaced points still each count. `crowd:report` (`server.js:1808,3152,3157`) added only an 8km self-proximity gate and a 20/min-per-IP limit — no auth requirement for `police` reports, no per-source throttle on `hotspots.record`, no cap on features returned per bbox in `query()`.
 - **Severity:** medium
 - **File:** `server/hotspots.js:159-171`
 - **Title:** `recentCell` dedup is per-cell; an attacker reporting at 50 m-spaced points can saturate a region's cells to `prob=1.0`
@@ -313,7 +328,8 @@ Each bug has:
 - **Impact:** Model integrity — fake hotspots everywhere.
 - **Fix:** Rate-limit `hotspots.record` per-source; require auth for `police`; cap features-per-bbox in `query`.
 
-### BUG server-016
+### BUG server-016  ·  OPEN (mitigated)
+- **Status (2026-09-02):** `/api/register` still has no per-username limiter, only the shared `auth:`+ip bucket (now 24/10min, shared across more routes) — `server.js:739-747, 794-831`. However server-008 closed the XFF-spoofing vector this bug's "trivial" exploit relied on, so spoofed-header mass-registration no longer works; a real distributed attack would still be needed.
 - **Severity:** medium
 - **File:** `server/server.js:317-328`
 - **Title:** `/api/register` has no per-username rate limit; the shared 14/10-min auth cap is generous and XFF-spoofable
@@ -321,7 +337,8 @@ Each bug has:
 - **Impact:** Account enumeration / mass-registration abuse.
 - **Fix:** Lower the auth rate cap; lock per-username after N failures.
 
-### BUG server-017
+### BUG server-017  ·  OPEN
+- **Status (2026-09-02):** the shared `'auth:'+ip` bucket (`server.js:745`) still gates register/login/recover together and still counts the attempt before `readBody` finishes parsing. New per-account buckets (`login:`+ident, `recover:`+rname, `server.js:853-906`) were added as an extra layer but don't remove the shared-bucket cross-lockout (threshold only raised 14→24).
 - **Severity:** high
 - **File:** `server/server.js:308-311, 277`
 - **Title:** Single shared `'auth:'+ip` bucket gates register/login/recover — fat-fingering login 14× also locks out `/api/recover`; oversized body still burns an attempt
@@ -329,7 +346,8 @@ Each bug has:
 - **Impact:** Self-DoS of password recovery; legitimate lockout behind NAT.
 - **Fix:** Separate buckets for login vs recover; only count after body parses successfully.
 
-### BUG server-018
+### BUG server-018  ·  FIXED
+- **Status (2026-09-02):** `server.js:914` — `if (!rateOk('chpw:'+u.id, 10, RATE_WINDOW) || !rateOk('chpw:'+ip, 20, RATE_WINDOW)) return 429`, per-account and per-IP throttling both added.
 - **Severity:** medium
 - **File:** `server/server.js:344-353`
 - **Title:** `/api/change-password` has NO rate limit; attacker with stolen token can brute-force `oldPassword` unthrottled
@@ -337,7 +355,8 @@ Each bug has:
 - **Impact:** Password brute-force via the change endpoint.
 - **Fix:** Apply `rateOk('chpw:'+ip, ...)`; lock after N failed old-password attempts.
 
-### BUG server-019
+### BUG server-019  ·  OPEN (partial)
+- **Status (2026-09-02):** `race:ready` (`server.js:3023-3033`) is now throttled to 500ms between toggles exactly as suggested. `race:create` (`server.js:2974-2994`) still has no rate limit at all — a client can still spam race creation.
 - **Severity:** medium
 - **File:** `server/server.js:1247-1267, 1287-1292`
 - **Title:** `race:create` and `race:ready` have no rate limit; `race:ready` rebroadcasts to all members on every flip
@@ -345,7 +364,8 @@ Each bug has:
 - **Impact:** Bandwidth/battery drain; UI flicker.
 - **Fix:** Throttle `race:ready` (min 500 ms between toggles); cap races-created-per-client-per-minute.
 
-### BUG server-020
+### BUG server-020  ·  OPEN
+- **Status (2026-09-02):** `server.js:2254-2257` — leader reassignment is still `party.leader = humanMembers[0]`; no join-time tracking was added, still deterministic/mid-disconnect-prone as described.
 - **Severity:** high
 - **File:** `server/server.js:741-746`
 - **Title:** On leader leave, new leader is `humanMembers[0]` (deterministic, mid-disconnect-prone); churns reassignment
@@ -353,7 +373,8 @@ Each bug has:
 - **Impact:** Leadership churn.
 - **Fix:** Pick the longest-tenured member (earliest join time); track join order.
 
-### BUG server-021
+### BUG server-021  ·  FIXED
+- **Status (2026-09-02):** `server.js:3346-3354` — `buildGlobalFC` requires one `Date.now() - snapshots[i].t >= GLOBAL_DELAY_MS`; if none qualifies (fresh boot), the real-rider layer is empty rather than falling back to the freshest available snapshot.
 - **Severity:** high
 - **File:** `server/server.js:1465, 1497-1498, 1556`
 - **Title:** Global-feed "5-minute privacy delay" is NOT enforced for the first 5 minutes after server boot — fresh riders' positions are near-real-time
@@ -361,7 +382,8 @@ Each bug has:
 - **Impact:** Privacy regression during the post-boot window.
 - **Fix:** In `buildGlobalFC`, if no snapshot is ≥ `GLOBAL_DELAY_MS` old, return an empty real-rider layer (still serve ambient dots).
 
-### BUG server-022
+### BUG server-022  ·  OPEN
+- **Status (2026-09-02):** `server.js:3606-3611` — `ttsSynth` callback still calls `res.writeHead(200, ...)` / `res.end(buf)` unconditionally with no `res.writableEnded`/`res.destroyed` guard for an aborted client.
 - **Severity:** medium
 - **File:** `server/server.js:1620-1630`
 - **Title:** Client abort mid-TTS → synth callback calls `res.writeHead` on a destroyed response → uncaught error
@@ -369,7 +391,8 @@ Each bug has:
 - **Impact:** Uncaught exception per aborted TTS request (mitigated by global handler but spams logs).
 - **Fix:** `if (res.writableEnded || res.destroyed) return;` before writing headers; wrap in try/catch.
 
-### BUG server-023
+### BUG server-023  ·  FIXED
+- **Status (2026-09-02):** `server.js:3620-3631` — `z,x,y` bounds validated (`tz > 22 || tx >= (1<<tz) || ty >= (1<<tz)` → 400) before the upstream call; rate-limited via `clientIp(req)` (trusted-proxy-aware per server-008).
 - **Severity:** medium
 - **File:** `server/server.js:1645-1656`
 - **Title:** `/api/traffic/<z>/<x>/<y>.png` doesn't validate tile bounds; garbage requests burn billable TomTom quota (XFF-spoofable rate limit)
@@ -377,7 +400,8 @@ Each bug has:
 - **Impact:** Quota exhaustion → traffic layer dark for everyone.
 - **Fix:** Validate `z ∈ [0,22]` and `x,y < 2^z`; rate-limit by `req.socket.remoteAddress`.
 
-### BUG server-024
+### BUG server-024  ·  FIXED (2026-09-02, this pass)
+- **Status (2026-09-02):** was OPEN as of this stage's start (confirmed: no global per-connection WS message rate existed). Fixed in `server/server.js` — a `WS_MSG_BUDGET` constant (default 60 msg/s, env-tunable) checked via `rateOk('wsmsg:'+c.id, WS_MSG_BUDGET, 1000)` as the FIRST thing `ws.on('message')` does, before `JSON.parse`. Over-budget frames are dropped and logged once per connection (`[ws budget] ... dropping`); the socket is NOT closed (log-and-drop for one release, per the mission plan's risk table). Pinned by `test/serverpolicy.test.js` group `W1` (4 checks) and verified live: a 300-message-in-one-tick flood against a real `CONVOY_DEV_AUTH=1` server tripped exactly one `[ws budget]` warning and left the socket OPEN and usable afterward.
 - **Severity:** high
 - **File:** `server/server.js:1731-1740`
 - **Title:** No global per-connection WS message rate; `wave`/`voice:*`/`race:ready`/`profile`/`ghost`/`dragy:pb` have no throttle
@@ -385,7 +409,8 @@ Each bug has:
 - **Impact:** Per-connection CPU/IO exhaustion; flush never settles.
 - **Fix:** Add a global per-connection message rate (e.g. 50 msgs/sec; drop excess / disconnect).
 
-### BUG server-025
+### BUG server-025  ·  OBSOLETE
+- **Status (2026-09-02):** accounts/friends are no longer a hand-editable `users.json` — state loads from Postgres via `db.loadAll()` (`server/store.js:57-74`). `sendFriendRequest` (`server/store.js:877-901`) already checks `reqOut.indexOf(to.id) >= 0` before pushing, preventing the duplicate-entry scenario the bug describes.
 - **Severity:** high
 - **File:** `server/store.js:42-57, 286-304`
 - **Title:** `friends`/`reqIn`/`reqOut` not deduped/validated on load; duplicates render twice and `pull` only removes the first; orphan ids grow records
@@ -393,7 +418,8 @@ Each bug has:
 - **Impact:** UI duplication; persistent dangling state; slow record growth.
 - **Fix:** Dedupe `friends`/`reqIn`/`reqOut` on load; validate referenced ids exist; prune orphans periodically.
 
-### BUG server-026
+### BUG server-026  ·  FIXED
+- **Status (2026-09-02):** `server/waze.js:46,56,79-82` and `server/tomtom.js:46-49,76-78,100,143` — both modules now check `Content-Length` before fetching and cap the final buffered body at 5MB (`MAX_BODY_BYTES`), rejecting oversized upstream responses instead of buffering unbounded.
 - **Severity:** medium
 - **File:** `server/waze.js:53-86` (and `server/tomtom.js`)
 - **Title:** Upstream response body fully buffered (`await r.text()`) with no size cap → OOM on upstream contract drift
@@ -401,7 +427,8 @@ Each bug has:
 - **Impact:** Memory blowup / OOM.
 - **Fix:** Stream the response with a size cap (abort if `Content-Length` > N or accumulated bytes > N); same for tomtom.js.
 
-### BUG server-027
+### BUG server-027  ·  OPEN (mitigated)
+- **Status (2026-09-02):** `rateOk` (`server.js:531-547`) is still `O(arr.length)` per call and `authHits` has no hard size cap/LRU — only a periodic 5-min unref'd prune of stale entries was added. Since server-008 closed the XFF-spoofing vector, the specific single-machine-spoofs-millions-of-IPs exploit no longer works; a real distributed attack would still be needed to grow the map.
 - **Severity:** medium
 - **File:** `server/server.js:256-274`
 - **Title:** `rateOk` is O(arr.length) per call; under XFF spoofing the `authHits` map grows unbounded (one key per spoofed IP) within the 10-min window → memory exhaustion
@@ -688,7 +715,8 @@ Each bug has:
 ## Runtime
 *Bugs reproduced by actually running the server (port 5173, ws path `/ws`) — 6 bugs*
 
-### BUG runtime-001
+### BUG runtime-001  ·  FIXED
+- **Status (2026-09-02):** account creation now goes through Supabase Auth + a Postgres `insertProfile` with a real unique index (`server/store.js:171-213`, `server/db.js:179-233`); a `23505` unique_violation is caught and mapped to `{taken:true}`/`{error:'taken'}`. Atomic at the DB level — the old in-memory check-then-write race is gone.
 - **Severity:** high
 - **File:** `server/store.js:160-190`
 - **Title:** Concurrent `/api/register` for the same username creates duplicate accounts (create-create race across the `await hashPassword(recoveryCode)` yield)
@@ -696,7 +724,8 @@ Each bug has:
 - **Expected:** Exactly one account; all losers get `409 "That username is taken"`.
 - **Fix:** Hold a per-username in-flight promise (or `creating` Set) so the second await is atomic with the assignment; assign `users[lower]` synchronously in the same tick as the post-hash re-check.
 
-### BUG runtime-002
+### BUG runtime-002  ·  FIXED
+- **Status (2026-09-02):** `db.burnRecovery` (`server/db.js:296-299`) is `DELETE FROM recovery_codes WHERE user_id=$1 AND hash=$2`; `resetWithRecovery` (`server/store.js:358-370`) checks `r.rowCount === 1` before proceeding. A concurrent second request finds the row already gone and returns `bad-code` — single-use is enforced atomically in Postgres.
 - **Severity:** high
 - **File:** `server/store.js:214-222, 225-233` + `server/server.js:334-342`
 - **Title:** Concurrent `/api/recover` with one valid code succeeds 5×, resetting to 5 different passwords (code not atomically consumed)
@@ -704,7 +733,8 @@ Each bug has:
 - **Expected:** Recovery code is single-use — only the first call succeeds; the rest get `401`.
 - **Fix:** In `store.verifyRecovery`, mark the code consumed (bump `tokenVersion` / null the recovery hash) synchronously on successful verify, before returning the user. Currently the burn happens in `regenRecovery` (server.js:340) after `setPassword`, leaving the verify→regen window racy.
 
-### BUG runtime-003
+### BUG runtime-003  ·  FIXED
+- **Status (2026-09-02):** `server/server.js:482` — the `'data'` handler in `readBody` now calls `json(res, 413, { error: 'Request too large' })` directly when the cap is exceeded, then destroys the socket; it no longer waits on an `'end'` callback that never fires.
 - **Severity:** medium
 - **File:** `server/server.js:221-251` (specifically 228-231), referenced by 313-315
 - **Title:** Oversized request body (>48 KB) kills the socket with `req.destroy()` and NO HTTP response instead of returning 413
@@ -712,7 +742,8 @@ Each bug has:
 - **Expected:** `413 {"error":"Request too large"}` (the intent at server.js:315).
 - **Fix:** In `readBody`'s `'data'` handler, call `json(res, 413, {error:'Request too large'})` directly when the cap is exceeded (then `req.destroy()`); don't rely on the `'end'` cb that never fires after destroy.
 
-### BUG runtime-004
+### BUG runtime-004  ·  FIXED
+- **Status (2026-09-02):** `readBody` (`server/server.js:492`) now calls `cb(undefined)` only on a JSON parse error — a distinct sentinel from a legit `null` body, which parses fine and is passed through as `body === null`. The caller does `if (body == null) return json(res, 400, {error:'Bad request'})` (`server.js:750`), so both a parse error and a literal `null` body now correctly 400, not 413.
 - **Severity:** medium
 - **File:** `server/server.js:221-251` (specifically 231, 233, 250)
 - **Title:** A valid JSON body of `null` is misreported as `413 "Request too large"` (sentinel collision in `readBody`)
@@ -720,7 +751,8 @@ Each bug has:
 - **Expected:** `400 {"error":"Bad request"}`.
 - **Fix:** Use distinct sentinels for oversized vs socket-error vs the legitimate value `null`, or have `readBody` emit the 413/400 response itself.
 
-### BUG runtime-005
+### BUG runtime-005  ·  FIXED (2026-09-02, this pass)
+- **Status (2026-09-02):** was OPEN as of this stage's start — looked fixed at a glance (`server.js:1620-1631` had an explicit `status === 400 ? 400 : 502` branch with a comment explaining the intent) but was dead code: `server/tomtom.js:67`'s `cb(new Error('bad coords'))` never passed `status: 400`, so the branch that was meant to trigger never matched and every bad `/api/route` body still fell through to `502 "Routing service unavailable"`. Fixed by passing the status: `cb(new Error('bad coords'), 400)`. Pinned by `test/serverpolicy.test.js` group `R2` (2 checks, one of which calls `tomtom.route()` directly and would have failed against the pre-fix code — verified by reverting the one-line fix locally and confirming the check fails with the exact pre-fix symptom, then re-applying it).
 - **Severity:** medium
 - **File:** `server/server.js:399-408` (specifically 403-406)
 - **Title:** `/api/route` returns `502 "Routing service unavailable"` for client-side input errors (missing/invalid `from`/`to`) instead of 400
@@ -728,7 +760,8 @@ Each bug has:
 - **Expected:** `400 {"error":"bad coords"}` (sibling endpoints `/api/waze` and `/api/hotspots` validate correctly).
 - **Fix:** Add `if (!tomtom.isLngLat(body && body.from) || !tomtom.isLngLat(body && body.to)) return json(res, 400, { error: 'bad coords' });` before calling `tomtom.route`.
 
-### BUG runtime-006
+### BUG runtime-006  ·  FIXED
+- **Status (2026-09-02):** `httpServer.requestTimeout` and `httpServer.headersTimeout` are both set after `httpServer.listen(...)`. Pinned by `test/serverpolicy.test.js` group `M3`.
 - **Severity:** low
 - **File:** `server/server.js:1590-1687` (no `requestTimeout`/`headersTimeout` override)
 - **Title:** No HTTP request timeout override — a POST with `Content-Length` set but no body holds a socket for the 5-minute Node default (slowloris exposure)
@@ -813,3 +846,90 @@ Convoy server → http://localhost:5173  (ws: /ws, bots: 0, nearby: 30km)
 | UI/UX | 0 | 3 | 7 | 3 | 13 |
 | Runtime | 0 | 2 | 3 | 1 | 6 |
 | **Total** | **8** | **26** | **38** | **6** | **84** |
+
+## Server + Runtime ledger truthing (2026-09-02, mission convoyv2 M1)
+
+Every Server (27) and Runtime (6) entry above now carries a **Status** line
+(FIXED / OPEN / OBSOLETE, each with a current `file:line` and evidence) —
+the original 2026-07-05 sweep only marked 0 of these FIXED, and the code has
+moved on substantially since then (Supabase Auth replaced the local
+`server/auth.js` secret-file scheme entirely; `server/store.js` is now
+Postgres-backed via `server/db.js`, not JSON files).
+
+| Status | Count | IDs |
+|---|---:|---|
+| FIXED | 16 | server-001, 003, 004, 008, 012, 018, 021, 023, 024, 026 (10); runtime-001, 002, 003, 004, 005, 006 (6) |
+| OPEN | 13 | server-002, 009, 010 (partial), 011, 013, 014, 015, 016 (mitigated), 017, 019 (partial), 020, 022, 027 (mitigated) |
+| OBSOLETE | 4 | server-005, 006, 007, 025 |
+
+Two entries were **closed in this pass** (2026-09-02), not just re-verified:
+- **server-024** — added a global per-connection WS message budget (`WS_MSG_BUDGET`,
+  default 60/s, env-tunable) checked before `JSON.parse` in `ws.on('message')`.
+  Every per-type handler already throttled its own message; nothing capped a
+  flood that mixed types or sent unknown ones. Drop-and-log, not a socket
+  close, for this release (matches the plan's risk-mitigation note). Live-
+  verified against a running dev-auth server: a 300-message flood in one tick
+  tripped exactly one `[ws budget]` warning and the socket stayed open.
+- **runtime-005** — `tomtom.route()`'s bad-coords rejection carried no HTTP
+  status, so `server.js`'s `status === 400` branch was dead code and every
+  malformed `/api/route` body still 502'd. One-line fix: pass `400` to the
+  callback. Verified the pinning test fails against the pre-fix code and
+  passes against the fix.
+
+**Notable "looks fixed but isn't" case:** runtime-005 had visible-looking fix
+code in `server.js` (an explicit comment + branch) that never actually
+triggered, because the bug was one layer down in `tomtom.js`. A textual diff
+of `server.js` alone would have called this FIXED; only calling `tomtom.route()`
+directly proved it wasn't. Worth remembering when truthing future ledger
+entries — "there's now code that looks like the fix" is not the same claim as
+"the code path that used to fail now succeeds."
+
+**Two OPEN items share a false-fixed-looking pattern worth flagging together**
+(server-016 and server-027): both bugs' *stated* exploit mechanism (spoofed
+`X-Forwarded-For`) was closed by server-008's trusted-proxy `clientIp()`, but
+neither bug's own described gap (no per-username limiter; unbounded `authHits`
+map) was actually addressed. They're correctly OPEN, not OBSOLETE — a
+distributed (non-spoofed) attacker still exploits both.
+
+### BUG server-028  ·  NEW  ·  needs M8 investigation
+- **Severity:** medium (unconfirmed — could be normal V8/Node RSS behavior, not a leak)
+- **File:** whole server process (found via `scripts/bench.js`, new this pass)
+- **Title:** Server RSS grew ~25MB (31%) over a 5-minute synthetic churn window
+- **Repro:** `node scripts/bench.js` (dev-auth server, 25 concurrent simulated
+  riders each doing connect → hello → 5×`pos` → disconnect on a ~1.8s cycle for
+  300s). RSS: idle 69.7MB → 80.0MB before churn (welcome-latency test already
+  opened/closed 50 sockets) → 105.0MB after 300s of churn.
+- **Impact:** Unconfirmed whether this is a real per-connection leak (listener,
+  timer, or `known`/`clients` map entry not fully released on close) or just
+  V8 holding onto heap it hasn't returned to the OS yet under this synthetic
+  load shape. Worth a longer run + `--expose-gc` forced collection + comparing
+  `process.memoryUsage().heapUsed` (not just RSS) before concluding either way.
+- **Fix:** Not attempted this pass (M1 scope was the ledger + server-024 + the
+  baseline itself). Left as the concrete input for M8 (performance): re-run
+  `scripts/bench.js` with `BENCH_CHURN_MS` at 15-20 min and watch whether RSS
+  plateaus (GC catching up = not a leak) or keeps climbing linearly (real leak
+  — check `clients`/`ipCount`/`online` map sizes post-churn for orphaned entries).
+
+## Performance baseline (2026-09-02, mission convoyv2 M1)
+
+Measured by the new `scripts/bench.js` against a real `CONVOY_DEV_AUTH=1`
+dev-auth server on a scratch port (no Supabase, no third-party calls,
+`BOTS=0`). Full log: `.forge-tmp/bench-baseline.log` and
+`.forge-tmp/bench-baseline.json` in the mission dir. Future passes should
+re-run this and diff against these numbers rather than re-deriving a baseline.
+
+| Metric | Value |
+|---|---|
+| Client script tags (index.html) | 44 (+ index.html + css/styles.css = 46 files loaded cold) |
+| Client bundle, raw | 1094.7 KB |
+| Client bundle, gzip | 343.8 KB |
+| Server idle RSS | 69.7 MB |
+| `/api/health` p50 / p95 / p99 (300 sequential requests) | 0.5ms / 1.5ms / 4.1ms |
+| WS connect→welcome p50 / p95 (50 concurrent sockets) | 50.5ms / 71.1ms (50/50 succeeded) |
+| RSS after 5 min churn (25 concurrent connect/pos/disconnect loops) | 80.0MB → 105.0MB (+25.0MB, +31.2%) — see `server-028` above |
+
+`scripts/bench.js` needed one fix mid-development: it raises `MAX_PER_IP` for
+its own server process (all synthetic clients share 127.0.0.1, so the real
+default of 10 connections/IP throttled the benchmark itself before it could
+measure anything — not a bug in the production default, just a benchmark
+artifact of every client sharing one loopback address).

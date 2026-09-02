@@ -275,4 +275,5 @@ ok('native: ready() reaches notifyReady exactly once per call',
 calls.throwCheck = true;
 ok('a throwing plugin bridge never escapes init()', win.App.ota.init() === true);
 
+try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (e) { /* best effort */ }
 process.exit(report());

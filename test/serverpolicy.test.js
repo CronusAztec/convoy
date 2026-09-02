@@ -23,7 +23,17 @@
    Added with the second review round (name-sanitization regression):
      N1  rider-visible free text is character-allowlisted at the data layer —
          the door 400s (register/profile), the storage cleans, and the strip
-         is GLOBAL (first-match-only stripping was caught in review) */
+         is GLOBAL (first-match-only stripping was caught in review)
+
+   Added closing BUGS.md server-024 (2026-09-02):
+     W1  global per-connection WS message budget — every per-type handler
+         throttles its OWN message, but nothing capped the raw JSON.parse +
+         dispatch cost of a flood that mixes types or sends unknown ones
+
+   Added closing BUGS.md runtime-005 (2026-09-02):
+     R2  tomtom.route()'s bad-coords rejection carried no status, so
+         server.js's `status === 400` branch was dead code and every bad
+         /api/route body still 502'd as if TomTom itself had failed */
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -170,5 +180,34 @@ if (n1Lit) {
   ok('the pen-test payload comes out inert and stays inert',
     !bad.test(clean('"><svg onload=alert(1)>`x`^<img src=x onerror=alert(1)>')));
 }
+
+group('W1 — global per-connection WS message budget (server-024)');
+ok('WS_MSG_BUDGET default is well above the busiest legit stream (race:fix ~10Hz)',
+  (numDefault('WS_MSG_BUDGET') || 0) >= 30,
+  'got ' + numDefault('WS_MSG_BUDGET') + ' — a real 10Hz race:fix client would get dropped');
+ok("the budget is checked on EVERY connection ('wsmsg:' + c.id), inside ws.on('message')",
+  /ws\.on\('message', \(buf\) => \{\s*\n\s*if \(!rateOk\('wsmsg:' \+ c\.id, WS_MSG_BUDGET, 1000\)\)/.test(SRC),
+  'the global gate must be the first thing the message handler does');
+ok('the check runs BEFORE JSON.parse, so a garbage-frame flood is capped without ever parsing past budget',
+  SRC.indexOf("rateOk('wsmsg:' + c.id, WS_MSG_BUDGET, 1000)") < SRC.indexOf('m = JSON.parse(buf.toString())'));
+ok('over-budget frames are DROPPED, not used to close the socket (log-and-drop for one release)',
+  !/rateOk\('wsmsg:' \+ c\.id, WS_MSG_BUDGET, 1000\)\) \{[\s\S]{0,200}(ws\.close|ws\.terminate)/.test(SRC),
+  'server-024 fix must not disconnect a socket yet — see the risk note in the plan');
+
+group('R2 — /api/route bad coords is a 400, not a 502 (runtime-005)');
+// TOMTOM_KEY is read into a require-time const, and route() bails on "no key"
+// before ever validating coords — set it before requiring so the assertion
+// below actually exercises the isLngLat() branch, not the missing-key one.
+process.env.TOMTOM_KEY = process.env.TOMTOM_KEY || 'test-key-not-real';
+const tomtom = require('../server/tomtom');
+{
+  let got = null;
+  tomtom.route({ from: { lng: 'a' }, to: [1, 2] }, (err, status) => { got = { err: err && err.message, status }; });
+  ok('missing/malformed from|to calls back with status 400',
+    got && got.err && got.status === 400,
+    'got ' + JSON.stringify(got) + ' — server.js\'s status===400 branch would stay dead and this still 502s');
+}
+ok('server.js only trusts that 400 to answer the client (no second bad-coords check)',
+  /status === 400 \? 400 : 502/.test(SRC));
 
 process.exit(report());

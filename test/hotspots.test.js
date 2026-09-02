@@ -17,6 +17,12 @@ const { group, ok, report } = require('./harness');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'convoy-hotspots-'));
 process.env.DATA_DIR = TMP;
 const hotspots = require('../server/hotspots');
+// hotspots.js registers its OWN process.on('exit', flushSync), which
+// recreates DATA_DIR (ensureDir()) and writes obs to it if anything is
+// dirty — a plain rmSync before process.exit() would just have TMP rebuilt
+// out from under it. 'exit' listeners fire in registration order, so
+// registering this one AFTER the require runs it after that flush.
+process.on('exit', () => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (e) { /* best effort */ } });
 
 const CAP = 300000;   // must match RECENT_CELL_MAX in server/hotspots.js
 const HYS = CAP >> 4; // eviction hysteresis headroom
