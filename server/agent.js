@@ -22,6 +22,9 @@ const crypto = require('crypto');
 const hotspots = require('./hotspots');
 
 const AGENT_KEY = process.env.AGENT_KEY || '';
+// Live read for the gate (admin kill switches layer over enabled() via
+// flags.js); the const above stays the process's request-signing key.
+function currentKey() { return process.env.AGENT_KEY || ''; }
 const MAX_ITEMS = 500;              // per store; oldest evicted beyond this
 const DEFAULT_TTL_S = 30 * 60;      // items live 30 min unless the caller says otherwise
 const MAX_TTL_S = 24 * 3600;
@@ -42,7 +45,7 @@ const TYPE_DEFAULTS = {
 const police = [];  // { lng, lat, label, when, until }
 const hazards = []; // { lng, lat, kind, label, color, until }
 
-function enabled() { return !!AGENT_KEY; }
+function enabled() { return !!currentKey(); }
 
 // Timing-safe key check. Accepts X-Agent-Key or Authorization: Bearer.
 function authed(req) {

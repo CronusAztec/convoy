@@ -223,6 +223,18 @@ async function setProvider(id, provider) {
   await query('update public.profiles set auth_provider = $2, updated_at = now() where id = $1', [id, provider]);
 }
 
+// Control-panel rename. Unique-constraint violation (another account already
+// holds the name) surfaces as the '23505' error code — the caller maps it.
+async function updateUsername(id, username) {
+  try {
+    await query('update public.profiles set username = $2, updated_at = now() where id = $1', [id, username]);
+    return { ok: true };
+  } catch (e) {
+    if (e && e.code === '23505') return { error: 'taken' };
+    return { error: (e && e.message) || 'database error' };
+  }
+}
+
 /* ---------------- one-time email tokens ----------------
    Only the SHA-256 of the token is stored, so a database dump yields no working
    links. See migrations/002_email_oauth.sql for why that hash and not scrypt. */
@@ -500,7 +512,7 @@ async function close() {
 module.exports = {
   configured, init, loadAll, query, flush, close, pending,
   insertProfile, deleteProfile, setRecovery, getRecovery, burnRecovery,
-  setEmail, markEmailVerified, setProvider,
+  setEmail, markEmailVerified, setProvider, updateUsername,
   putEmailToken, takeEmailToken, purgeExpiredTokens,
   queueProfile, queuePB, queueRunIncrement, queueWinIncrement,
   queueFriendRequest, queueClearRequests, queueFriendship, queueUnfriend,

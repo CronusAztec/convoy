@@ -30,6 +30,7 @@ const crypto = require('crypto');
 
 const db = require('./db');
 const sb = require('./supabase');
+const residue = require('./authresidue');
 
 // Still exported: hotspots.js keeps its own JSON cache alongside the accounts
 // that used to live here, and honours the VPS DATA_DIR override through it.
@@ -190,18 +191,24 @@ async function createUser(username, password, profile, ip, email) {
   try {
     inserted = await db.insertProfile(id, username, profile, { email: email, emailVerified: false });
   } catch (e) {
-    await sb.deleteUser(id);
+    await residue.dropAuthUser(id, 'register-rollback', username);
     throw e;
   }
   if (inserted.emailTaken) {
     // GoTrue accepted the address but our own index already has it — the two
     // stores disagree, which means a half-deleted account somewhere. Unwind.
-    await sb.deleteUser(id);
+    //
+    // Every rollback here goes through dropAuthUser rather than sb.deleteUser
+    // directly. A failed rollback leaves a GoTrue user with no profile, which
+    // holds the email address against its unique index — so the person retrying
+    // is told the address is taken by an account that does not exist. Recording
+    // it means the retry loop eventually frees it instead of it being permanent.
+    await residue.dropAuthUser(id, 'register-rollback', username);
     return { error: 'email-taken' };
   }
   if (inserted.taken) {
     // The unique index rejected the name even though GoTrue accepted the email.
-    await sb.deleteUser(id);
+    await residue.dropAuthUser(id, 'register-rollback', username);
     return { error: 'taken' };
   }
 
@@ -211,7 +218,7 @@ async function createUser(username, password, profile, ip, email) {
     await db.setRecovery(id, rec.salt, rec.hash);
   } catch (e) {
     await db.deleteProfile(id);
-    await sb.deleteUser(id);
+    await residue.dropAuthUser(id, 'register-rollback', username);
     throw e;
   }
 
@@ -225,7 +232,7 @@ async function createUser(username, password, profile, ip, email) {
     // for. Unwind like every other failure here does, so the retry can succeed.
     try { await db.deleteProfile(id); }
     catch (e) { console.error('[store] rollback: profile ' + id + ': ' + e.message); }
-    await sb.deleteUser(id);
+    await residue.dropAuthUser(id, 'register-rollback', username);
     return { error: authErrorKind(signed) === 'rate-limited' ? 'rate-limited' : signed.error };
   }
 
@@ -656,14 +663,16 @@ async function deleteAccount(id) {
     return { error: 'db-failed' };
   }
 
-  let authResidue = false;
-  try {
-    await sb.deleteUser(id);
-  } catch (e) {
-    authResidue = true;
-    console.error('[delete] ORPHANED AUTH USER ' + id + ' (' + u.username +
-      ') — profile is gone, GoTrue user is not: ' + (e && e.message));
-  }
+  // sb.deleteUser returns a BOOLEAN and only throws when GoTrue is unreachable.
+  // This used to be wrapped in a bare try/catch, so every HTTP-level failure —
+  // a 500, a 429, an expired admin key, by far the likeliest kinds — set no
+  // flag, logged nothing, and the rider was told { ok: true } while their email
+  // address, password hash and linked social identities were still in
+  // auth.users. Check the return value, and hand a failure to the retry loop:
+  // the profile and everything cascading from it is already gone, so there is
+  // nothing useful the rider could do with the error, but the job still has to
+  // finish. See server/authresidue.js.
+  const authResidue = !(await residue.dropAuthUser(id, 'delete', u.username));
 
   // Before the record leaves the read model, so there is no instant in which the
   // account is unfindable AND not yet tombstoned.
@@ -701,7 +710,7 @@ async function deleteAccount(id) {
   });
 
   console.log('[delete] account ' + u.username + ' deleted' +
-    (authResidue ? ' (auth user orphaned — needs manual cleanup)' : ''));
+    (authResidue ? ' (GoTrue user not yet gone — queued for retry)' : ''));
   return { ok: true, username: u.username, email: u.email || null, authResidue: authResidue };
 }
 
@@ -869,12 +878,17 @@ function sendFriendRequest(fromId, toUsername) {
   const from = byId[fromId];
   const to = getByUsername(toUsername);
   if (!from) return { error: 'unauthorized' };
-  if (!to) return { error: 'No rider with that username' };
+  // Not-found and blocked BOTH come back as 'no-such-rider', and the server
+  // answers that outcome with the same frame a real send gets (see the
+  // friend:add handler): "does this username exist" and "did they block me" are
+  // questions only someone enumerating the user base or probing a block needs
+  // answered, so no observable difference is allowed to survive — not a
+  // different message, not an error instead of an ok, not a missing follow-up
+  // frame. The store's job is only to keep the two cases one code; the handler
+  // makes them indistinguishable from success.
+  if (!to) return { error: 'no-such-rider' };
   if (to.id === from.id) return { error: "You can't friend yourself" };
-  // Deliberately the same message a wrong username gets. A distinct "they
-  // blocked you" would turn this endpoint into a block-detector, and letting
-  // someone confirm they were blocked is the first step to working around it.
-  if (blockedBetween(from.id, to.id)) return { error: 'No rider with that username' };
+  if (blockedBetween(from.id, to.id)) return { error: 'no-such-rider' };
   if (from.friends.indexOf(to.id) >= 0) return { error: 'Already friends' };
   if (from.reqOut.indexOf(to.id) >= 0) return { error: 'Request already sent' };
 
@@ -933,6 +947,155 @@ function areFriends(aId, bId) {
   return !!(a && a.friends.indexOf(bId) >= 0);
 }
 
+/* ---------------- control panel (admin) ----------------
+   Powers behind /admin. Everything here mutates BOTH layers — the in-memory
+   record first (realtime reads are synchronous) and the database — because a
+   write that skips memory is invisible until restart and one that skips SQL
+   is lost on restart. Format validation (username shape, PB bounds) lives in
+   the panel layer, which has server.js's validators; this layer enforces the
+   invariants only it can see (uniqueness, row consistency). */
+
+// Prefix match on username, substring on email, exact on id. The whole account
+// set is in memory, so this is a linear scan over a few thousand records —
+// fine for a panel, and it never touches the DB.
+function adminSearch(q, limit) {
+  const needle = String(q || '').trim().toLowerCase();
+  const out = [];
+  if (!needle) return out;
+  for (const id in byId) {
+    const u = byId[id];
+    if (u.username.toLowerCase().indexOf(needle) === 0 ||
+        (u.email && u.email.toLowerCase().indexOf(needle) >= 0) ||
+        u.id === needle) {
+      out.push({ id: u.id, username: u.username, email: u.email || '',
+                 emailVerified: !!u.emailVerified, provider: u.provider,
+                 createdAt: u.createdAt,
+                 stats: { runs: (u.stats && u.stats.runs) || 0, wins: (u.stats && u.stats.wins) || 0 } });
+      if (out.length >= (limit || 50)) break;
+    }
+  }
+  out.sort((a, b) => a.username.toLowerCase() < b.username.toLowerCase() ? -1 : 1);
+  return out;
+}
+
+/* Every account, for the panel's presence map. The live-socket snapshot can
+   only ever answer "who is connected"; "who is registered but offline" is
+   exactly the half it cannot produce, and that is the half an operator is
+   usually looking for.
+
+   Capped and deliberately thin (no email, no stats): this is a presence view,
+   not an export. The panel's account search is where you go for one person's
+   details. */
+function adminRoster(limit) {
+  const cap = limit || 500;
+  const out = [];
+  for (const id in byId) {
+    const u = byId[id];
+    out.push({ id: u.id, username: u.username, provider: u.provider, createdAt: u.createdAt });
+    if (out.length >= cap) break;
+  }
+  out.sort((a, b) => (a.username.toLowerCase() < b.username.toLowerCase() ? -1 : 1));
+  return out;
+}
+
+// Set absolute race counters (the app only ever increments; corrections and
+// resets are an admin power). Clamped sane — this writes a number riders see.
+async function setStats(id, patch) {
+  const u = byId[id];
+  if (!u) return { error: 'no such account' };
+  const s = statsOf(id);
+  const clamp = (v) => Math.max(0, Math.min(10000000, Math.floor(Number(v) || 0)));
+  s.runs = clamp(patch.runs != null ? patch.runs : s.runs);
+  s.wins = clamp(patch.wins != null ? patch.wins : s.wins);
+  await db.query('update public.user_stats set runs = $2, wins = $3, updated_at = now() where user_id = $1',
+    [id, s.runs, s.wins]);
+  return { ok: true, stats: s };
+}
+
+// Set or clear ONE dragy PB. The app's recordPB only accepts improvements by
+// design (replaying a log can't worsen a PB); corrections are an admin power,
+// so this upserts unconditionally — or deletes the row for rec === null.
+async function setPB(id, modeId, rec) {
+  const u = byId[id];
+  if (!u) return { error: 'no such account' };
+  const s = statsOf(id);
+  if (rec === null) {
+    delete s.pb[modeId];
+    await db.query('delete from public.dragy_pbs where user_id = $1 and mode_id = $2', [id, modeId]);
+    return { ok: true, stats: s };
+  }
+  const when = Date.now();
+  s.pb[modeId] = { time: rec.time, trap: rec.trap != null ? rec.trap : null, when: when };
+  await db.query(
+    'insert into public.dragy_pbs (user_id, mode_id, time_s, trap, achieved_at) values ($1, $2, $3, $4, to_timestamp($5 / 1000.0)) ' +
+    'on conflict (user_id, mode_id) do update set time_s = $3, trap = $4, achieved_at = to_timestamp($5 / 1000.0)',
+    [id, modeId, rec.time, rec.trap != null ? rec.trap : null, when]);
+  return { ok: true, stats: s };
+}
+
+// Rename. The riskiest panel action because the username keys THREE layers:
+// our memory indexes, the profiles row, and GoTrue (app_metadata.username,
+// plus the synthetic login address for accounts without a real email). Order
+// is chosen so a partial failure leaves the app self-consistent under the NEW
+// name and the GoTrue sync retryable: local layers first, GoTrue second, and
+// a rename onto the account's own current name is a no-op so a retry after a
+// GoTrue failure simply succeeds the second time.
+async function renameUser(id, next) {
+  const u = byId[id];
+  if (!u) return { error: 'no such account' };
+  const nextLower = String(next || '').toLowerCase();
+  const existing = users[nextLower];
+  if (existing && existing.id !== id) return { error: 'taken' };
+
+  const prev = u.username;
+  delete users[prev.toLowerCase()];
+  u.username = next;
+  u.profile = u.profile || {};
+  u.profile.handle = nextLower;   // handle always mirrors the username
+  index(u);
+  const dbR = await db.updateUsername(id, next);
+  if (dbR.error === 'taken') {
+    // Race with a registration — roll the memory layer back.
+    delete users[nextLower];
+    u.username = prev;
+    u.profile.handle = prev.toLowerCase();
+    index(u);
+    return { error: 'taken' };
+  }
+  if (dbR.error) return { ok: true, warn: 'renamed locally, database write failed: ' + dbR.error + ' — restart the server before renaming anyone else' };
+  db.queueProfile(id, u.profile);
+
+  const warns = [];
+  const meta = await sb.updateUsernameMeta(id, next);
+  if (meta.error) warns.push('GoTrue username metadata not synced: ' + meta.error);
+  if (!u.email) {
+    // Legacy account: GoTrue authenticates <username>@AUTH_EMAIL_DOMAIN, so
+    // the synthetic address must follow the name or the next sign-in fails.
+    const em = await sb.updateEmail(id, sb.emailFor(next));
+    if (em.error) warns.push('GoTrue login email not synced: ' + em.error + ' — the rider cannot sign in until a retry succeeds');
+  }
+  return warns.length ? { ok: true, warn: warns.join('; ') } : { ok: true };
+}
+
+// Moderation queue reads/writes. The reports table has existed since
+// 003_blocks_reports.sql with no consumer — this panel is its first one.
+async function listReports(status, limit) {
+  const cap = Math.min(200, Math.max(1, Number(limit) || 100));
+  const r = status && status !== 'all'
+    ? await db.query('select id, reporter_id, reporter_username, subject_id, subject_username, subject_label, reason, detail, context, status, created_at ' +
+        'from public.reports where status = $1 order by created_at desc limit $2', [status, cap])
+    : await db.query('select id, reporter_id, reporter_username, subject_id, subject_username, subject_label, reason, detail, context, status, created_at ' +
+        'from public.reports order by created_at desc limit $1', [cap]);
+  return r.rows || [];
+}
+
+async function setReportStatus(id, status) {
+  const okStatus = ['open', 'reviewing', 'actioned', 'dismissed'];
+  if (!okStatus.includes(status)) return { error: 'bad status' };
+  await db.query('update public.reports set status = $2 where id = $1', [id, status]);
+  return { ok: true };
+}
+
 /* ---------------- shutdown ---------------- */
 function flush(timeoutMs) { return db.flush(timeoutMs); }
 function close() { return db.close(); }
@@ -944,8 +1107,12 @@ module.exports = {
   issueEmailToken, consumeEmailToken, purgeExpiredTokens: db.purgeExpiredTokens,
   setEmailFor, markEmailVerified, resetPasswordFor, magicSignIn,
   updateProfile, deleteAccount, isDeleted, flush, close,
+  // Deletions whose GoTrue half has not landed yet, still being retried.
+  pendingAuthDeletions: residue.count, retryAuthDeletions: residue.sweep,
   friendLite, sendFriendRequest, acceptFriend, declineFriend, removeFriend, areFriends,
   blockUser, unblockUser, blockedBetween, blockList,
   fileReport, recentReportCount,
-  getStats, recordPB, recordRun, recordWin
+  getStats, recordPB, recordRun, recordWin,
+  // control panel
+  adminSearch, adminRoster, setStats, setPB, renameUser, listReports, setReportStatus
 };

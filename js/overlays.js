@@ -277,7 +277,12 @@
     var m = map(); if (!m || !m.getLayer('weather')) return;
     if (on) {
       // Only reveal once a real frame path exists, so tiles never 404 mid-fetch.
-      refreshRadar().then(function () { if (rvPath) setVisible('weather', true); });
+      // Re-read the SETTING inside the .then: toggling weather off while the frame
+      // was mid-fetch must win — the interval is already dead by then, but this
+      // reveal used to run anyway and resurrected the layer the rider just killed.
+      refreshRadar().then(function () {
+        if (rvPath && S.settings.showWeather) setVisible('weather', true);
+      });
       if (!rvTimer) rvTimer = setInterval(refreshRadar, 5 * 60 * 1000);
     } else {
       setVisible('weather', false);

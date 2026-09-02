@@ -75,6 +75,11 @@ otherwise it falls back to solo. One dependency (`ws`), no database, no API keys
 - **Settings** — dark/light/auto theme, 6 accent colors + custom, map style, miles/km,
   global-drivers toggle, animation toggle, follow-cam toggle, voice-nav toggle + custom
   navigator voice, ghost target filters, sonar tuning, overlay layers, reset.
+- **Crash reporting & core-loop analytics** — global error + rejection handlers that post
+  stacks, breadcrumbs and a fixed funnel (boot → map → GPS → live → route → trip) to our own
+  server, so crash-free session % and the screen riders quit on are readable on day one with
+  no third-party account. Optionally mirrors errors to Sentry via a DSN in `js/config.js`.
+  No location, no messages, no username; per-rider opt-out in Settings. See DEPLOY.md.
 
 ## How live mode works
 
@@ -109,6 +114,10 @@ otherwise it falls back to solo. One dependency (`ws`), no database, no API keys
 - The Android native plugins (BLE radar detector, SABRE crowd alerts) are present and
   gracefully no-op on the web; the BLE/SABRE frame parsers still want validation against
   real hardware before shipping.
+- **Diagnostics are on by default.** Crashes and a fixed funnel go to your own server
+  (`TELEMETRY=0` turns it off; riders get their own switch in Settings). Reports carry a
+  random per-launch session id and never a position, a destination, a message or an account.
+  The dashboard at `/api/telemetry/stats` stays 404 until you set `TELEMETRY_TOKEN`.
 
 ## Tests
 
@@ -213,6 +222,7 @@ js/dragy.js             0–60 / drag-timer performance meter
 js/ui.js                panels, dock, forms, settings, onboarding, consent gate, legality notices
 js/auth.js              register/login/guest/social, email links, session + refresh, boot gating
 js/native.js            Android native bridge (bg GPS, BLE radar, SABRE); no-op on web
+js/telemetry.js         crash reporter + core-loop funnel (loads 2nd, before what it watches)
 js/app.js               boot
 server/server.js        realtime server: static hosting + ws + REST auth + TomTom/TTS proxies
 server/supabase.js      Supabase Auth (GoTrue) client + ES256 access-token verification
@@ -220,8 +230,11 @@ server/db.js            Postgres data layer: profiles, friends, stats, queued wr
 server/store.js         account store — in-memory read cache over Supabase, recovery codes
 server/mailer.js        outbound email over Resend: transport + link/notice templates
 server/oauth.js         social sign-in: provider registry + server-held PKCE state
+server/telemetry.js     crash/funnel sink: 30-day rollup + rotated error log + stats endpoint
+server/authresidue.js   unfinished GoTrue deletions, retried across restarts until they land
 server/migrations/      SQL applied to the Supabase project, in order
 legal/                  Terms, Privacy Policy, deletion page, third-party notices (served at /terms, /privacy, …)
+SDK-INVENTORY.md        every SDK in the app, what it collects, and the store privacy-label answers
 server/tomtom.js        TomTom routing + traffic proxy (key from TOMTOM_KEY env, never client-side)
 server/overpass.js      OpenStreetMap (Overpass) proxy + cache — the endpoint sends no CORS header
 server/bots.js          server-side bots + shared geo helpers

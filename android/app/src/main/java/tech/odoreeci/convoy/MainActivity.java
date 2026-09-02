@@ -21,6 +21,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(SabrePlugin.class);
         registerPlugin(VoicePlugin.class);
         registerPlugin(AuthPlugin.class);
+        registerPlugin(LiveUpdatePlugin.class);
         super.onCreate(savedInstanceState);
 
         // POST_NOTIFICATIONS (Android 13+). The location foreground service's

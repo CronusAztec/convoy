@@ -19,7 +19,18 @@
     base: BASE,
     // Absolute ws/wss URL when native; null tells net.js to derive same-origin.
     wsUrl: BASE ? BASE.replace(/^http/, 'ws') + '/ws' : null,
-    plugins: isNative && cap && cap.Plugins ? cap.Plugins : null
+    plugins: isNative && cap && cap.Plugins ? cap.Plugins : null,
+
+    // Sentry DSN for crash reports (js/telemetry.js). A DSN is a PUBLIC
+    // credential by design — it can only write events into one project — so it
+    // ships in client JS the way Sentry's own SDK does. Leave it blank and
+    // nothing changes: crashes still go to our own /api/telemetry, which is
+    // where the crash-free-sessions number comes from either way. Set it and
+    // Sentry additionally gets grouped stack traces, alerting and releases.
+    //   https://<publicKey>@<host>/<projectId>
+    sentryDsn: '',
+    // Flip true in a dev console to echo every captured error locally.
+    debugTelemetry: false
     // TomTom routing + traffic is now server-proxied (/api/route, /api/traffic/*)
     // so the key never ships in client JS. The client probes /api/route on boot
     // (net.js does this once the socket is live) and only opts in to TomTom when

@@ -189,6 +189,10 @@
   function fallbackSolo(hadConnection) {
     teardownLive();
     A.sim.enableSolo(); // no-op for fake riders; just keeps netMode honest
+    // Solo means the rider is looking at an empty map. How often that happens,
+    // and whether it happens after a working connection or instead of one, is
+    // the difference between "our server is down" and "their tunnel is long".
+    if (A.telemetry) A.telemetry.track('link_solo', { hadConnection: !!hadConnection, attempt: attempt });
     // Retrying really does continue now — scheduleRetry() always arms.
     if (hadConnection) A.ui.toast('Server unreachable. Retrying… (no other riders shown)', 'warn');
     else A.ui.toast('Offline. Retrying in the background', 'info');
@@ -198,6 +202,7 @@
     live = true;
     myId = m.id;
     S.netMode = 'live';
+    if (A.telemetry) { A.telemetry.step('live'); A.telemetry.track('link_live', { reconnect: everConnected }); }
     A.sim.disableSolo();
     (m.riders || []).forEach(function (r) { A.sim.remoteAdd(r); });
     if (m.global) A.mapview.setGlobalData(m.global);

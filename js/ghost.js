@@ -1,33 +1,48 @@
 /* Convoy — Ghost Mode data sources.
-   Client-side fetchers for live aircraft (OpenSky Network, anonymous) and
-   nearby police stations (OpenStreetMap via Overpass). Runs only while Ghost
-   Mode is on. All fetches degrade gracefully: a network error or empty result
-   simply yields an empty layer (no crash, no stale data).
+   Fetchers for live aircraft and nearby police stations (OpenStreetMap via
+   Overpass). Runs only while Ghost Mode is on. All fetches degrade gracefully:
+   a network error or empty result simply yields an empty layer (no crash, no
+   stale data).
 
-   OpenSky:   https://openskynetwork.github.io/opensky-api/rest.html  (anonymous, live states)
+   Aircraft go through OUR server (/api/aircraft), not upstream directly. They
+   used to be fetched here from two hosts and the layer was dead in every
+   deployment, for two separate reasons:
+
+     OpenSky        sends `Access-Control-Allow-Origin: https://opensky-network.org`,
+                    so a browser read is refused by CORS every single time. The
+                    request never completed, which is why nothing appeared and
+                    nothing errored visibly.
+     airplanes.live now returns 403 to everyone, server included.
+
+   server/aircraft.js does the fetching, caching and ownership classification,
+   so the sky arrives here already sorted into military / police / ems /
+   civilian / unknown.
+
    Overpass:  https://wiki.openstreetmap.org/wiki/Overpass_API          (amenity=police POIs) */
 (function () {
   'use strict';
   var A = (window.App = window.App || {});
   var S = A.state, U = A.util;
 
-  var OPENSKY = 'https://opensky-network.org/api/states/all';
-  var ADSBX = 'https://api.airplanes.live/v2/point'; // /{lat}/{lon}/{radiusNm} — keyless ADS-B Exchange-format feed
+  // Aircraft via our own server — see the header. The proxy caches per area, so
+  // every rider near each other shares one upstream poll. See server/aircraft.js.
+  var AIRCRAFT_PROXY = (A.config ? A.config.base : '') + '/api/aircraft';
   // Through our own server, not overpass-api.de directly: that endpoint sends
   // no Access-Control-Allow-Origin header, so the browser blocks the response
   // before this code can read it. The proxy also caches, so every rider in an
   // area shares one upstream query. See server/overpass.js.
   var OVERPASS_PROXY = (A.config ? A.config.base : '') + '/api/overpass';
 
-  var ADSBX_MS = 3000;       // ADS-B Exchange (airplanes.live) — fast/live, well within its ~1/s budget
-  var OPENSKY_MS = 12000;    // OpenSky anonymous — slower, rate-limit friendly; supplements ADSBx
+  // Matches the server's own 8s cache: asking faster only burns our own rate
+  // limit for an answer that cannot have changed. Between polls the predictor
+  // below dead-reckons the dots so they glide rather than teleport.
+  var AIRCRAFT_MS = 8000;
   var POLICE_MS = 90000;     // 90s — POIs are static; refetch when bounds move
   var WAZE_MS = 60000;       // 60s — live Waze police sightings (transient; faster than static POIs)
   var HOT_MS = 5 * 60 * 1000; // 5 min — probability stats change hourly, so slow is fine
   var MAX_BBOX_DEG = 4;      // never query more than a ~4° box (avoid hammering the API)
 
-  var adTimer = null;
-  var osTimer = null;
+  var acTimer = null;
   var poTimer = null;
   var wzTimer = null;
   var hotTimer = null;
@@ -37,10 +52,9 @@
   var running = false;       // ghost mode (aircraft layer) — police + hotspots run independently
   var policeRunning = false; // police layer runs ALWAYS-ON (like hotspots), not just in ghost mode
 
-  // Per-source aircraft caches (raw normalized objects). Each source refreshes on its
-  // own cadence and republishes the merged set; a failed poll keeps that source's
-  // last-good list so dots don't flicker.
-  var acAdsbx = [], acOpenSky = [];
+  // Last good aircraft list from the proxy. A failed poll keeps it, so a single
+  // upstream hiccup doesn't blink every dot off the map.
+  var acLive = [];
   // Merged + dead-reckoned aircraft snapshot, republished at PREDICT_MS. The two
   // upstream polls only fire every 3–12s; between them the dots would teleport in
   // jumps. Each carries speed+heading, so we extrapolate forward (cap PREDICT_MAX_S)
@@ -56,15 +70,18 @@
   // segments more transparent) so the dot leaves a comet tail that dissolves.
   var TRAIL_MAX = 14;       // points per aircraft (~2.8s of history at 5Hz) — short, ephemeral
   var TRAIL_MIN_DIST_M = 25; // skip a point if the aircraft moved less than this since the last (no stacking)
-  var trails = {};          // key -> [{lon,lat,at}]  (most-recent last)
-  // Owner → trail color. Mirrors the dot colors in mapview.js so a trail reads
-  // as belonging to its dot.
-  function trailColor(owner) {
-    return owner === 'military' ? '#ff3b3b'
-      : owner === 'police' ? '#3b82f6'
-      : owner === 'ems' ? '#22c55e'
-      : '#e8edf6'; // civilian silver
-  }
+  // key -> [{lon,lat,owner}] (most-recent last). A Map, not a plain object:
+  // predictTick prunes departed aircraft every tick, and `delete` on an object
+  // forces V8 into dictionary mode for the whole shape — on the exact structure
+  // being rewritten 5 times a second.
+  var trails = new Map();
+  // Reused across ticks: which trail keys were touched this pass. A fresh object
+  // per tick was one more allocation on a 5 Hz path, and clear() is cheaper than
+  // building a new one.
+  var seenKeys = new Set();
+  // NB: trail colour is no longer decided here. It is a line-gradient per owner
+  // layer in mapview.js, reading the same AIRCRAFT_COLORS table the dots use —
+  // one source of truth instead of a duplicate palette that could drift.
   // Police layer = static OSM POIs (stations/cameras/ALPR) MERGED with live Waze
   // police sightings. Each source caches independently; publishPolice() merges them
   // so a stale Waze poll never blanks the static POIs (and vice-versa).
@@ -92,129 +109,58 @@
     return { minLat: minLat, maxLat: maxLat, minLng: minLng, maxLng: maxLng };
   }
 
-  /* ---------------- aircraft (OpenSky + ADS-B Exchange, merged) ----------------
-     Two live sources deduped by ICAO hex. ADS-B Exchange (via the keyless
-     airplanes.live mirror, same v2 schema) wins on a hex collision — it carries
-     aircraft type / registration / military flag; OpenSky fills any hexes ADS-B
-     Exchange didn't return. Either source failing degrades to the other; both
-     failing keeps the previous dots (transient-error friendly).
-     OpenSky state row: [icao24, callsign, origin_country, lastContact, lon, lat,
-       baro_altitude(m), on_ground, velocity(m/s), true_track(deg), ...]
-     ADSBx ac entry: { hex, flight, r(reg), t(type), lat, lon, alt_baro(ft|'ground'),
-       gs(knots), track(deg), category(A1..A7), dbFlags(&1=military, &2=interesting) } */
-  var KNOTS_MS = 0.514444, FT_M = 0.3048;
+  /* ---------------- aircraft (via our own /api/aircraft proxy) ----------------
+     The server does the fetching and the ownership classification, so a row
+     arrives here already carrying `owner`: military | police | ems | civilian |
+     unknown. Nothing is re-classified on this side — one place decides, and the
+     map, the radar board and the popup all read the same answer.
 
-  /* ---------------- ownership classification ----------------
-     Classify each aircraft into one of: civilian | military | police | ems.
-     Sources of truth, in priority order:
-       - ADS-B Exchange dbFlags bit 0 (1)  → military (authoritative database flag)
-       - dbFlags bit 1 (2) "interesting"   → LADD/special-interest; combined with a
-         government/police callsign prefix it's law-enforcement
-       - callsign heuristics               → EMS/medevac (LIFEFLIGHT, Lifeguard,
-         Med-, air-ambulance) and police rotor callsigns (ROTO, PD, STATE, BELL)
-       - rotorcraft + low-and-slow         → likely police/EMS (not civilian traffic)
-     Returns { owner, name } where owner is the stable key the filters + styling
-     switch on, and name is the human label for popups. Civilian is the default. */
-  var POLICE_CS = /^(ROTO|PD|STATE|STATETROOPER|CAPOLICE|CHP|DPS|STATEPOLICE|SHERIFF|CBP|BP|BPA|FBI|USMS|USMARSHAL|DEA|HSI|ATF|HSI|USCG|COASTGUARD|GUARD)\b/i;
-  var EMS_CS = /^(LIFE|LIFEGUARD|MED|MEDEVAC|AIRAMB|AIRAMBULANCE|AMB|HOSP|GUARD| Rescue|RESCUE|EMSA|AMR)\b/i;
-  function classifyOwner(a) {
-    var cs = a.callsign || '';
-    // dbFlags only flows from ADSBx; OpenSky has no equivalent (mil stays false).
-    var flags = a.dbFlags || 0;
-    if (a.mil || (flags & 1)) return { owner: 'military', name: 'Military' };
-    // "Interesting" LADD flag + a police-style callsign → law-enforcement.
-    if ((flags & 2) && POLICE_CS.test(cs)) return { owner: 'police', name: 'Law enforcement' };
-    // Callsign-based EMS detection (medevac/air-ambulance).
-    if (EMS_CS.test(cs)) return { owner: 'ems', name: 'EMS / medevac' };
-    // Police rotor callsign without the LADD flag — still suspicious.
-    if (POLICE_CS.test(cs)) return { owner: 'police', name: 'Law enforcement' };
-    // Rotorcraft low-and-slow with no other signal is ambiguous; tag it police-tinted
-    // only if it carries a tactical-looking callsign, otherwise civilian. (A news
-    // or traffic heli would read as civilian here, which is the safer default.)
-    return { owner: 'civilian', name: 'Civilian' };
-  }
+     Row shape (server/aircraft.js rowToAircraft):
+       { hex, callsign, country, lat, lon, alt(m), ground, speed(m/s),
+         heading(deg), vertRate(m/s), squawk, owner, at(ms), src } */
 
-  function fetchOpenSky(bb) {
-    var url = OPENSKY + '?lamin=' + bb.minLat.toFixed(3) + '&lomin=' + bb.minLng.toFixed(3) +
-      '&lamax=' + bb.maxLat.toFixed(3) + '&lomax=' + bb.maxLng.toFixed(3);
-    return fetch(url).then(function (r) {
-      if (!r.ok) throw new Error('opensky ' + r.status);
+  // Display names for the five buckets. `unknown` is a real answer, not a
+  // fallback for a bug: a contact with no callsign, or one flying a tactical
+  // callsign the server will not guess at, genuinely is unidentified.
+  var OWNER_NAMES = {
+    military: 'Military',
+    police: 'Law enforcement',
+    ems: 'EMS / medevac',
+    civilian: 'Civilian',
+    unknown: 'Unidentified'
+  };
+  function ownerName(o) { return OWNER_NAMES[o] || OWNER_NAMES.unknown; }
+  function ownerOf(a) { return OWNER_NAMES[a && a.owner] ? a.owner : 'unknown'; }
+
+  function fetchAircraft(bb) {
+    return fetch(AIRCRAFT_PROXY, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        bbox: { minLat: bb.minLat, minLng: bb.minLng, maxLat: bb.maxLat, maxLng: bb.maxLng }
+      })
+    }).then(function (r) {
+      if (!r.ok) throw new Error('aircraft ' + r.status);
       return r.json();
     }).then(function (j) {
-      var out = [], states = j && j.states ? j.states : [];
-      for (var i = 0; i < states.length; i++) {
-        var s = states[i], lon = s[5], lat = s[6];
-        if (lat == null || lon == null) continue;
-        out.push({
-          hex: (s[0] || '').toLowerCase(), callsign: (s[1] || '').trim(), country: s[2] || '',
-          lat: lat, lon: lon, alt: s[7] != null ? s[7] : null, ground: !!s[8],
-          speed: s[9] != null ? s[9] : null, heading: s[10] != null ? s[10] : null,
-          reg: '', acType: '', category: '', mil: false, src: 'opensky',
-          // lastContact is seconds-since-epoch (server fix time). Predictions age
-          // from this, so an OpenSky row that's already a few seconds stale still
-          // extrapolates from when it was actually true.
-          at: s[3] ? s[3] * 1000 : Date.now()
-        });
-      }
-      return out;
-    }).catch(function () { return null; }); // null = errored (vs [] = genuinely empty)
-  }
-
-  function fetchAdsbx(bb) {
-    var cLat = (bb.minLat + bb.maxLat) / 2, cLng = (bb.minLng + bb.maxLng) / 2;
-    var cornerM = U.haversine([cLng, cLat], [bb.maxLng, bb.maxLat]);
-    var radNm = Math.min(250, Math.max(5, Math.ceil(cornerM / 1852)));
-    var url = ADSBX + '/' + cLat.toFixed(4) + '/' + cLng.toFixed(4) + '/' + radNm;
-    return fetch(url).then(function (r) {
-      if (!r.ok) throw new Error('adsbx ' + r.status);
-      return r.json();
-    }).then(function (j) {
-      var out = [], ac = j && j.ac ? j.ac : [];
-      for (var i = 0; i < ac.length; i++) {
-        var a = ac[i];
-        if (a.lat == null || a.lon == null) continue;
-        var ground = a.alt_baro === 'ground';
-        var altFt = typeof a.alt_baro === 'number' ? a.alt_baro
-          : (typeof a.alt_geom === 'number' ? a.alt_geom : null);
-        out.push({
-          hex: (a.hex || '').toLowerCase(), callsign: (a.flight || '').trim(), country: '',
-          lat: a.lat, lon: a.lon,
-          alt: altFt != null ? altFt * FT_M : (ground ? 0 : null), ground: ground,
-          speed: typeof a.gs === 'number' ? a.gs * KNOTS_MS : null,
-          heading: typeof a.track === 'number' ? a.track
-            : (typeof a.true_heading === 'number' ? a.true_heading : null),
-          reg: a.r || '', acType: a.t || '', category: a.category || '',
-          // dbFlags: bit0=military, bit1=LADD/interesting (LE/gov). Keep the raw
-          // bits so classifyOwner can branch on either; `mil` stays as a boolean
-          // for back-compat with existing consumers (radar.js, popups).
-          dbFlags: typeof a.dbFlags === 'number' ? a.dbFlags : 0,
-          mil: !!(a.dbFlags & 1), src: 'adsbx',
-          at: Date.now() // ADSBx point has no server timestamp; treat arrival as fix time
-        });
-      }
-      return out;
-    }).catch(function () { return null; });
+      return (j && j.aircraft) || [];
+    }).catch(function () { return null; }); // null = errored (vs [] = empty sky)
   }
 
   function publishAircraft() {
-    // Merge the two sources by ICAO hex (ADSBx first ⇒ it keeps the slot on a
-    // collision: it carries type/reg/military). Store the merged set so the
-    // predictor can re-extrapolate it on its own cadence without re-merging.
-    var lists = [acAdsbx, acOpenSky];
-    var byKey = {}, order = [];
-    for (var L = 0; L < lists.length; L++) {
-      for (var i = 0; i < lists[L].length; i++) {
-        var a = lists[L][i];
-        var k = a.hex || ('_' + a.lat.toFixed(4) + ',' + a.lon.toFixed(4));
-        if (k in byKey) continue;
-        byKey[k] = a; order.push(k);
-      }
+    // One source now, so there is nothing to merge — just key each contact so
+    // the predictor and the radar board can track it across repaints. ICAO hex
+    // is the identity; a contact without one falls back to its position.
+    var seen = {};
+    acMerged = [];
+    for (var i = 0; i < acLive.length; i++) {
+      var a = acLive[i];
+      var k = a.hex || ('_' + a.lat.toFixed(4) + ',' + a.lon.toFixed(4));
+      if (seen[k]) continue;
+      seen[k] = 1;
+      acMerged.push({ key: k, a: a });
     }
-    acMerged = order.map(function (k) {
-      var a = byKey[k];
-      return { key: k, a: a };
-    });
-    predictTick(); // push the freshly-merged set immediately (no 200ms wait)
+    predictTick(); // push the fresh set immediately (no 200ms wait)
     if (running && !predTimer) predTimer = setInterval(predictTick, PREDICT_MS);
   }
 
@@ -225,8 +171,8 @@
   function predictTick() {
     if (!A.mapview || !A.mapview.setAircraftData) return;
     var now = Date.now();
-    var feats = [];
-    var seen = {};
+    var feats = new Array(acMerged.length);
+    seenKeys.clear();
     for (var i = 0; i < acMerged.length; i++) {
       var entry = acMerged[i], a = entry.a;
       var dt = Math.min((now - (a.at || now)) / 1000, PREDICT_MAX_S);
@@ -237,87 +183,91 @@
         var p = U.destPoint([a.lon, a.lat], a.heading, a.speed * dt);
         lon = p[0]; lat = p[1];
       }
-      feats.push(toAircraftFeatureAt(a, lon, lat, entry.key));
+      feats[i] = toAircraftFeatureAt(a, lon, lat, entry.key);
       // Extend the flight path only for airborne, moving aircraft (a parked/hovering
       // dot shouldn't grow a tail). Ground/stationary keys get pruned below.
-      if (moving) { seen[entry.key] = true; pushTrailPoint(entry.key, lon, lat, classifyOwner(a).owner); }
+      if (moving) { seenKeys.add(entry.key); pushTrailPoint(entry.key, lon, lat, ownerOf(a)); }
     }
     A.mapview.setAircraftData({ type: 'FeatureCollection', features: feats });
     // Drop trails for aircraft that left the set or stopped moving, then repaint.
-    for (var k in trails) { if (!seen[k]) delete trails[k]; }
+    // Map.delete during its own iteration is well-defined (unlike splicing an
+    // array you are walking), so this needs no copy of the key list.
+    trails.forEach(function (_, k) { if (!seenKeys.has(k)) trails.delete(k); });
     if (A.mapview.setAircraftTrailData) A.mapview.setAircraftTrailData(buildTrailFC());
   }
 
   // Append a position to an aircraft's trail ring buffer. Near-duplicate points
   // (< TRAIL_MIN_DIST_M) just update the head so the tail never stacks up in place.
+  //
+  // The distance test is inlined rather than calling U.haversine, which takes
+  // two [lon,lat] ARRAYS — building them here allocated two throwaway arrays per
+  // aircraft per tick, 5 times a second, purely to ask "did this move 25 m?".
+  // At trail scale (tens of metres) a flat equirectangular approximation is
+  // exact enough to answer that, and comparing squared metres skips the sqrt as
+  // well. Nothing downstream sees the distance; only the threshold matters.
+  var M_PER_DEG_LAT = 111320;
+  var TRAIL_MIN_DIST_SQ = TRAIL_MIN_DIST_M * TRAIL_MIN_DIST_M;
   function pushTrailPoint(key, lon, lat, owner) {
-    var buf = trails[key] || (trails[key] = []);
-    var last = buf[buf.length - 1];
-    if (last && U.haversine([last.lon, last.lat], [lon, lat]) < TRAIL_MIN_DIST_M) {
-      last.lon = lon; last.lat = lat; return;
+    var buf = trails.get(key);
+    if (!buf) { buf = []; trails.set(key, buf); }
+    var last = buf.length ? buf[buf.length - 1] : null;
+    if (last) {
+      var dy = (lat - last.lat) * M_PER_DEG_LAT;
+      var dx = (lon - last.lon) * M_PER_DEG_LAT * Math.cos(lat * Math.PI / 180);
+      if (dx * dx + dy * dy < TRAIL_MIN_DIST_SQ) { last.lon = lon; last.lat = lat; return; }
     }
     buf.push({ lon: lon, lat: lat, owner: owner });
     if (buf.length > TRAIL_MAX) buf.shift();
   }
 
-  // Render each trail as a chain of short segments whose opacity + width ramp from
-  // faint/thin at the tail to bright/thick at the head — a comet tail behind the dot.
+  // One LineString per aircraft. The fade is a line-gradient in mapview.js
+  // (paint, evaluated on ['line-progress']), not something baked into the
+  // geometry here — which is why this no longer emits a feature per segment
+  // with a hand-stepped opacity on each. Same trail, continuous fade, and about
+  // a thirteenth of the features for MapLibre to re-parse every tick.
   function buildTrailFC() {
     var features = [];
-    for (var key in trails) {
-      var buf = trails[key];
-      if (!buf || buf.length < 2) continue;
-      var color = trailColor(buf[buf.length - 1].owner);
-      for (var j = 1; j < buf.length; j++) {
-        var t = j / (buf.length - 1); // 0 = tail … 1 = head
-        features.push({
-          type: 'Feature',
-          geometry: { type: 'LineString', coordinates: [[buf[j - 1].lon, buf[j - 1].lat], [buf[j].lon, buf[j].lat]] },
-          properties: { color: color, opacity: 0.12 + 0.6 * t, width: 1.5 + 1.8 * t }
-        });
-      }
-    }
+    trails.forEach(function (buf, key) {
+      if (!buf || buf.length < 2) return;
+      var coords = new Array(buf.length);
+      for (var j = 0; j < buf.length; j++) coords[j] = [buf[j].lon, buf[j].lat];
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: coords },
+        // `owner` is what selects the coloured layer; `key` keeps a trail
+        // identifiable across repaints for anything that wants to track one.
+        properties: { owner: buf[buf.length - 1].owner || 'unknown', key: key }
+      });
+    });
     return { type: 'FeatureCollection', features: features };
   }
 
   // Writes the ALREADY-predicted coordinates (so the predictor and a one-shot
   // publish share one geometry path) and stamps a stable `key` the radar board
-  // can track across repaints. Ownership is classified from
-  // the source record `a` and stamped on the feature so map/radar/popup all read
-  // the same owner without re-classifying in three places.
+  // can track across repaints. Ownership arrives already decided by the server
+  // and is stamped on the feature, so map/radar/popup all read one answer.
   function toAircraftFeatureAt(a, lon, lat, key) {
-    var own = classifyOwner(a);
+    var own = ownerOf(a);
     return {
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [lon, lat] },
       properties: {
-        callsign: a.callsign || a.reg || '—', icao: (a.hex || ''), country: a.country || '',
+        callsign: a.callsign || '—', icao: (a.hex || ''), country: a.country || '',
         alt: a.alt, ground: !!a.ground, speed: a.speed, heading: a.heading,
-        reg: a.reg || '', acType: a.acType || '', category: a.category || '',
-        mil: !!a.mil, src: a.src, key: key,
-        owner: own.owner, ownerName: own.name
+        vertRate: a.vertRate != null ? a.vertRate : null, squawk: a.squawk || '',
+        src: a.src, key: key,
+        owner: own, ownerName: ownerName(own)
       }
     };
   }
 
-  function pollAdsbx() {
+  function pollAircraft() {
     if (!running) return;
     var bb = viewBBox();
     if (!bb) return;
-    fetchAdsbx(bb).then(function (list) {
-      if (!running || list == null) return; // error → keep previous ADSBx dots
-      acAdsbx = list;
-      publishAircraft();
-    });
-  }
-
-  function pollOpenSky() {
-    if (!running) return;
-    var bb = viewBBox();
-    if (!bb) return;
-    fetchOpenSky(bb).then(function (list) {
-      if (!running || list == null) return; // error → keep previous OpenSky dots
-      acOpenSky = list;
+    fetchAircraft(bb).then(function (list) {
+      if (!running || list == null) return; // error → keep the dots we have
+      acLive = list;
       publishAircraft();
     });
   }
@@ -636,30 +586,26 @@
     if (running) return;
     if (!S || !S.settings || !S.settings.ghost) return;
     running = true;
-    acAdsbx = []; acOpenSky = [];
+    acLive = [];
     lastHotBbox = null;
-    // immediate first fetch, then per-source intervals (ADSBx fast, OpenSky slow)
-    pollAdsbx();
-    pollOpenSky();
+    // immediate first fetch, then one interval matched to the proxy's cache
+    pollAircraft();
     // Police + hotspots run independently (always-on); ghost mode just adds the
     // aircraft layer and reveals the hotspot legend. Ensure both are live here too.
     startPolice();
     if (hotspotsOn()) { startHotspots(); showLegend(true); }
-    adTimer = setInterval(pollAdsbx, ADSBX_MS);
-    osTimer = setInterval(pollOpenSky, OPENSKY_MS);
+    acTimer = setInterval(pollAircraft, AIRCRAFT_MS);
   }
 
   function stop() {
     running = false;
-    if (adTimer) { clearInterval(adTimer); adTimer = null; }
-    if (osTimer) { clearInterval(osTimer); osTimer = null; }
+    if (acTimer) { clearInterval(acTimer); acTimer = null; }
     if (predTimer) { clearInterval(predTimer); predTimer = null; }
     showLegend(false);   // hide the legend, but the hotspot layer stays (always-on)
     // Drop any scrubbed preview hour so the always-on layer tracks "now" again —
     // otherwise the heatmap freezes at the previewed hour with no legend to fix it.
     if (hotPreviewHour != null) { hotPreviewHour = null; refreshHotspots(); }
-    acAdsbx = [];
-    acOpenSky = [];
+    acLive = [];
     acMerged = [];
     trails = {};
     // Clear ONLY the ghost-scoped aircraft layer (dots + flight paths). Police +

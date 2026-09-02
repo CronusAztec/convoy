@@ -144,6 +144,10 @@
     timers = {};
     var mode = modeById(race.modeId);
     if (!mode) return;
+    if (A.telemetry) {
+      A.telemetry.step('race');
+      A.telemetry.track('race_start', { mode: race.modeId, racers: race.members.length });
+    }
     // One RaceTimer per racer (self included). Self's timer is fed by the local
     // gpsfix stream; remotes are fed by race:fix. onFinish reports to the server.
     race.members.forEach(function (mem) {
@@ -153,6 +157,7 @@
           if (id === A.net.myId()) {
             A.net.sendRace({ t: 'race:finish', time: res.time, trap: res.trap });
             if (A.ui) A.ui.toast('You finished in ' + res.time.toFixed(2) + 's', 'success');
+            if (A.telemetry) A.telemetry.track('race_finish', { mode: race.modeId, time: res.time });
           }
         }
       });
@@ -166,16 +171,29 @@
     };
     ST.on('gpsfix', fixListener);
     if (fixSendTimer) clearInterval(fixSendTimer);
+    // Relay at ~10Hz ONLY while something is changing. A staged racer used to
+    // ship 10 identical frames a second for the whole red light — pure bandwidth
+    // and peer-side churn. A frame is suppressed when position/speed/heading are
+    // unchanged, but never for longer than 2s: a peer's RaceTimer brackets its
+    // next segment against the last frame it saw, so an unbounded gap would
+    // back-date a late launcher's t0 across the whole pause.
+    var lastSig = null, lastSentAt = 0;
     fixSendTimer = setInterval(function () {
       if (!race || race.status !== 'running') return;
       var p = A.sim.playerPos();
       if (!p) return;
+      var sp = liveSpeedForRelay();
+      var hd = A.sim.playerHeading();
+      var sig = p[0].toFixed(6) + '|' + p[1].toFixed(6) + '|' +
+        (sp == null ? '' : sp.toFixed(2)) + '|' + (hd == null ? '' : Math.round(hd));
+      if (sig === lastSig && Date.now() - lastSentAt < 2000) return;
+      lastSig = sig; lastSentAt = Date.now();
       // The local gpsfix already drives our timer; this relays to OTHER racers.
       A.net.sendRace({
         t: 'race:fix',
         lng: p[0], lat: p[1],
-        speed: liveSpeedForRelay(),
-        heading: A.sim.playerHeading(),
+        speed: sp,
+        heading: hd,
         acc: A.sim.lastAccuracy ? A.sim.lastAccuracy() : null,
         ts: Date.now()
       });

@@ -25,6 +25,33 @@
   var needRefilter = false; // a camera move happened — reclassify global drivers on next idle
   var RESIDENTIAL_RE = /residential|suburb|neighbou?rhood/i;
 
+  /* The five aircraft ownership categories and their paint. One table, read by
+     the layer paint, the popup and the legend, so a colour can never disagree
+     with itself across three files. Order is the legend order: most notable
+     first, routine traffic last. */
+  var AIRCRAFT_OWNERS = ['military', 'police', 'ems', 'unknown', 'civilian'];
+  var AIRCRAFT_COLORS = {
+    military: '#ff3b3b',
+    police: '#3b82f6',
+    ems: '#22c55e',
+    unknown: '#f59e0b',
+    civilian: '#e8edf6'
+  };
+  // '#rrggbb' + alpha -> 'rgba(r,g,b,a)'. line-gradient stops need real colour
+  // values; there is no opacity channel to lean on the way line-opacity gave us.
+  function rgba(hex, a) {
+    var n = parseInt(hex.slice(1), 16);
+    return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+  }
+
+  var AIRCRAFT_LABELS = {
+    military: 'Military',
+    police: 'Law enforcement',
+    ems: 'EMS / medevac',
+    unknown: 'Unidentified',
+    civilian: 'Civilian'
+  };
+
   // Layer data survives style switches via this cache (setStyle wipes sources)
   var cache = {
     route: emptyFC(),
@@ -240,9 +267,15 @@
     });
     setRingsVisible(!!(S.settings && S.settings.ghost));
 
-    // ----- GHOST MODE: aircraft (silver) + police stations (blue) -----
-    // Aircraft color = ownership: military=red, police=blue, ems=green, civilian=silver.
-    // Each carries its own ring stroke so the categories read apart at a glance.
+    // ----- GHOST MODE: aircraft + police stations (blue) -----
+    // Aircraft colour is ownership, five ways:
+    //   military=red · police=blue · ems=green · civilian=silver · unknown=amber
+    // Unknown gets its own colour rather than falling in with civilian, because
+    // it means something different: the server could not identify the contact,
+    // and on a layer whose job is telling a rider what is overhead, "we don't
+    // know" is information. Size and opacity carry it too — the classified
+    // categories are drawn larger and more solid than routine civilian traffic,
+    // so a red or amber dot pulls the eye across a screen full of airliners.
     addLayer({
       id: 'aircraft-points', type: 'circle', source: 'aircraft',
       paint: {
@@ -250,30 +283,73 @@
           'military', '#ff3b3b',
           'police', '#3b82f6',
           'ems', '#22c55e',
+          'unknown', '#f59e0b',
           '#e8edf6'], /* civilian default = silver */
-        'circle-stroke-color': '#ffffff',
-        'circle-stroke-width': 1,
-        'circle-radius': 6,
-        'circle-opacity': 0.9,
-        'circle-blur': 0.3
+        'circle-stroke-color': ['match', ['get', 'owner'],
+          'civilian', 'rgba(255,255,255,.65)',
+          '#ffffff'],
+        'circle-stroke-width': ['match', ['get', 'owner'],
+          'civilian', 1,
+          1.6],
+        'circle-radius': ['match', ['get', 'owner'],
+          'civilian', 5,
+          'unknown', 6.5,
+          7],
+        'circle-opacity': ['match', ['get', 'owner'],
+          'civilian', 0.72,
+          0.95],
+        'circle-blur': 0.25
       }
     });
     // Aircraft motion trails: a line source fed by ghost.js's predictor. Each
     // feature is a LineString of recent predicted positions with a per-segment
-    // opacity so the tail fades into the dot's current position. Sits beneath the
-    // aircraft-points layer (added first → lower z) so the dot draws on top.
-    addSrc('aircraft-trail', cache.aircraftTrail);
-    addLayer({
-      id: 'aircraft-trail', type: 'line', source: 'aircraft-trail',
-      layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: {
-        // color + opacity come from the feature properties so each owner-class
-        // trail keeps its identity and the fade is per-segment.
-        'line-color': ['get', 'color'],
-        'line-width': ['coalesce', ['get', 'width'], 2],
-        'line-opacity': ['coalesce', ['get', 'opacity'], 0.5]
-      }
+    // opacity so the tail fades into the dot's current position.
+    //
+    // It belongs UNDER the dot, and the old comment said so — but the layer was
+    // added after aircraft-points, and MapLibre draws in insertion order, so the
+    // comet tail was actually painting over the aircraft it trails. The explicit
+    // `before` is what the comment always meant.
+    // `lineMetrics` is what makes ['line-progress'] available, and that is what
+    // turns the fade into a real gradient instead of a staircase.
+    addSrc('aircraft-trail', cache.aircraftTrail, { lineMetrics: true });
+    /* Each trail is ONE LineString faded with line-gradient.
+
+       It used to be thirteen separate segment features per aircraft, each with
+       its own flat opacity and width stepped up toward the head. That is a
+       staircase, not a fade: every step was visible, and the round line-caps
+       left a bead at each joint — the blocky, chopped look. It also meant
+       ~1,300 features re-parsed by MapLibre five times a second.
+
+       line-gradient interpolates continuously along the line, so the tail
+       dissolves. Its one limitation is that it cannot read a feature property,
+       so ownership colour comes from one thin layer per category instead of
+       ['get','color'] — five layers, each drawing a handful of lines, bought
+       with a fade that has no seams in it. */
+    AIRCRAFT_OWNERS.forEach(function (owner) {
+      var c = AIRCRAFT_COLORS[owner];
+      addLayer({
+        id: 'aircraft-trail-' + owner,
+        type: 'line',
+        source: 'aircraft-trail',
+        filter: ['==', ['get', 'owner'], owner],
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+          'line-width': ['interpolate', ['linear'], ['zoom'], 6, 1.6, 12, 2.6, 16, 3.4],
+          'line-blur': 0.6,
+          // 0 = oldest point, 1 = the aircraft itself. Eased rather than linear
+          // so the tail fades into the background instead of ending on an edge.
+          'line-gradient': ['interpolate', ['linear'], ['line-progress'],
+            0, rgba(c, 0),
+            0.35, rgba(c, 0.16),
+            0.7, rgba(c, 0.45),
+            1, rgba(c, 0.85)]
+        }
+      }, 'aircraft-points');   // under the dots
     });
+    // Apply the saved category filter the moment the layer exists — otherwise a
+    // rider who turned a category off last session sees it back on every launch
+    // until they touch the switch again.
+    setAircraftFilter();
     addLayer({
       id: 'police-points', type: 'circle', source: 'police',
       paint: {
@@ -304,11 +380,14 @@
           0, '#22c55e', 0.5, '#f59e0b', 1, '#ef4444'],
         // Clearly visible ambient footprint (was near-invisible at 0.2 / soft stroke).
         'circle-opacity': ['interpolate', ['linear'], ['get', 'prob'], 0, 0.28, 1, 0.42],
-        'circle-blur': 0.65,
-        'circle-stroke-color': ['interpolate', ['linear'], ['get', 'prob'],
-          0, '#16a34a', 0.5, '#d97706', 1, '#dc2626'],
-        'circle-stroke-width': 2,
-        'circle-stroke-opacity': 0.85
+        // No stroke. A 2px hard-edged ring drawn at the nominal radius of a
+        // circle whose FILL is blurred by 0.65 puts a crisp outline in the
+        // middle of a soft glow — the halo fades out, then a sharp ring appears
+        // floating in it. That contradiction is most of why the hotspot layer
+        // read as blocky. The exact coordinate is already marked by the crisp
+        // core dot in the layer below, so the ring was carrying no information
+        // the map did not already show.
+        'circle-blur': 0.9
       }
     });
     addLayer({
@@ -343,9 +422,13 @@
     if (extra) Object.assign(def, extra);
     map.addSource(id, def);
   }
-  function addLayer(def) {
+  // `before` puts the layer UNDER an existing one. MapLibre draws in insertion
+  // order, so without it a layer added later is always on top no matter what a
+  // comment claims about intent.
+  function addLayer(def, before) {
     if (map.getLayer(def.id)) return;
-    map.addLayer(def);
+    if (before && map.getLayer(before)) map.addLayer(def, before);
+    else map.addLayer(def);
   }
   function setData(id, fc) {
     var src = map && map.getSource(id);
@@ -482,6 +565,40 @@
     });
   }
 
+  /* The map's aircraft category filter, read from the SAME settings the radar
+     board uses (ghostAirMil / -Police / -Ems / -Civ / -Unknown).
+
+     Those keys used to gate the threat board only, while every category was
+     drawn on the map regardless — so turning "Civilian" off quietened the board
+     and changed nothing you could see. One switch, one meaning: it now governs
+     both. */
+  var OWNER_SETTING = {
+    military: 'ghostAirMil',
+    police: 'ghostAirPolice',
+    ems: 'ghostAirEms',
+    civilian: 'ghostAirCiv',
+    unknown: 'ghostAirUnknown'
+  };
+  function enabledOwners() {
+    return AIRCRAFT_OWNERS.filter(function (o) { return S.settings[OWNER_SETTING[o]] !== false; });
+  }
+  function setAircraftFilter() {
+    if (!map || !map.getLayer || !map.getLayer('aircraft-points')) return;
+    var list = enabledOwners();
+    var all = list.length === AIRCRAFT_OWNERS.length;
+    map.setFilter('aircraft-points', all ? null : ['in', ['get', 'owner'], ['literal', list]]);
+    // Trails now carry `owner` and live in one layer per category, so a hidden
+    // category takes its own tail with it. Turning one category off used to hide
+    // EVERY trail, because the old segment features had no owner to filter on.
+    var ghostOn = !!(S.settings && S.settings.ghost);
+    AIRCRAFT_OWNERS.forEach(function (o) {
+      var id = 'aircraft-trail-' + o;
+      if (!map.getLayer(id)) return;
+      var show = ghostOn && list.indexOf(o) >= 0;
+      map.setLayoutProperty(id, 'visibility', show ? 'visible' : 'none');
+    });
+  }
+
   function setAircraftData(fc) { cache.aircraft = fc || emptyFC(); setData('aircraft', cache.aircraft); }
   function setAircraftTrailData(fc) { cache.aircraftTrail = fc || emptyFC(); setData('aircraft-trail', cache.aircraftTrail); }
   function setPoliceData(fc) { cache.police = fc || emptyFC(); setData('police', cache.police); }
@@ -491,9 +608,14 @@
     // both are always-on layers, independent of ghost mode. Police pins show
     // everywhere (gated by the "Police stations" setting); ghost mode only adds the
     // aircraft layer (points + trails) and the hotspot legend/scrubber over them.
-    ['aircraft-points', 'aircraft-trail'].forEach(function (id) {
+    var ids = ['aircraft-points'];
+    AIRCRAFT_OWNERS.forEach(function (o) { ids.push('aircraft-trail-' + o); });
+    ids.forEach(function (id) {
       if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
     });
+    // Re-apply the per-category filter so an owner the rider switched off does
+    // not come back visible just because ghost mode was toggled.
+    if (on) setAircraftFilter();
   }
   // Radar HUD reads the current ghost layers to build its alert list.
   function getGhostData() { return { aircraft: cache.aircraft, police: cache.police }; }
@@ -845,31 +967,32 @@
       ? (S.settings.units === 'km' ? Math.round(props.speed * 3.6) + ' km/h' : Math.round(props.speed * 2.23694) + ' mph')
       : '—';
     // Ownership drives the avatar color + a headline tag so it's the first thing
-    // you read. Military/police/EMS each get a distinct paint; civilian stays silver.
-    var ownColor = props.owner === 'military' ? '#ff3b3b'
-      : props.owner === 'police' ? '#3b82f6'
-      : props.owner === 'ems' ? '#22c55e'
-      : '#e8edf6';
-    var ownName = props.ownerName || (props.owner === 'military' ? 'Military'
-      : props.owner === 'police' ? 'Law enforcement'
-      : props.owner === 'ems' ? 'EMS / medevac'
-      : 'Civilian');
+    // you read. Each of the five categories gets a distinct paint.
+    var ownColor = AIRCRAFT_COLORS[props.owner] || AIRCRAFT_COLORS.civilian;
+    var ownName = props.ownerName || 'Unidentified';
+    var climb = props.vertRate != null && Math.abs(props.vertRate) > 0.5
+      ? (props.vertRate > 0 ? 'Climbing' : 'Descending') : '';
+    // An unidentified contact is exactly the case where the rider wants the raw
+    // data, so show what we DO have — hex, squawk — instead of a blank card.
+    var sub = props.country
+      || (props.icao ? 'ICAO ' + String(props.icao).toUpperCase() : '')
+      || 'Unknown origin';
     card.innerHTML =
       '<div class="pop-head">' +
       '  <div class="u-ava" style="--paint:' + ownColor + '">' + U.riderIcon(0, { size: 20 }) + '</div>' +
-      '  <div class="pop-id"><div class="u-name">' + U.esc(props.callsign) + '</div>' +
-      '  <div class="u-handle">' + U.esc(props.country || props.acType || props.reg || 'Unknown origin') + '</div></div>' +
+      '  <div class="pop-id"><div class="u-name">' + U.esc(props.callsign || '—') + '</div>' +
+      '  <div class="u-handle">' + U.esc(sub) + '</div></div>' +
       '</div>' +
       '<div class="pop-tags">' +
       '<span class="tag tag-live"><span class="dot dot-live" style="background:' + ownColor + '"></span>' + U.esc(ownName) + '</span>' +
       (props.ground ? '<span class="tag">On ground</span>' : '<span class="tag">Airborne</span>') +
-      (props.acType ? '<span class="tag">Type ' + U.esc(props.acType) + '</span>' : '') +
-      (props.reg ? '<span class="tag">Reg ' + U.esc(props.reg) + '</span>' : '') +
+      (climb ? '<span class="tag">' + climb + '</span>' : '') +
       '<span class="tag">Altitude ' + altStr + '</span>' +
       '<span class="tag">Speed ' + spdStr + '</span>' +
       (props.heading != null ? '<span class="tag">HDG ' + Math.round(props.heading) + '°</span>' : '') +
-      '<span class="tag tag-delayed"><span class="dot dot-global"></span>Live · ' +
-        (props.src === 'adsbx' ? 'ADS-B Exchange' : 'OpenSky') + '</span>' +
+      (props.squawk ? '<span class="tag">Squawk ' + U.esc(props.squawk) + '</span>' : '') +
+      (props.icao ? '<span class="tag">ICAO ' + U.esc(String(props.icao).toUpperCase()) + '</span>' : '') +
+      '<span class="tag tag-delayed"><span class="dot dot-global"></span>Live · OpenSky</span>' +
       '</div>';
     openPopup(lngLat, card);
   }
@@ -1050,19 +1173,31 @@
   }
 
   /* =================== controls =================== */
+  // Every control is null-guarded the way ctl-global always was: one missing or
+  // mis-typed id in a page variant used to throw here and left the WHOLE control
+  // bar (plus the map.on('load') cursor wiring below) unwired.
   function wireControls() {
-    document.getElementById('ctl-zoom-in').addEventListener('click', function () {
+    var zIn = document.getElementById('ctl-zoom-in');
+    if (zIn) zIn.addEventListener('click', function () {
       map.zoomTo(map.getZoom() + 1, { duration: ST.dur(280) });
     });
-    document.getElementById('ctl-zoom-out').addEventListener('click', function () {
+    var zOut = document.getElementById('ctl-zoom-out');
+    if (zOut) zOut.addEventListener('click', function () {
       map.zoomTo(map.getZoom() - 1, { duration: ST.dur(280) });
     });
-    document.getElementById('ctl-compass').addEventListener('click', function () {
+    var cmp = document.getElementById('ctl-compass');
+    if (cmp) cmp.addEventListener('click', function () {
       if (A.sim) A.sim.breakFollow();
       map.easeTo({ bearing: 0, pitch: 0, duration: ST.dur(620) });
     });
-    document.getElementById('ctl-locate').addEventListener('click', locate);
-    document.getElementById('ctl-recenter').addEventListener('click', function () {
+    // A drag, a wheel zoom or a pinch is the rider taking over — drop any
+    // programmatic claim so the follow camera and their input stop fighting.
+    map.on('dragstart', releaseCamera);
+    map.on('zoomstart', function (e) { if (e && e.originalEvent) releaseCamera(); });
+    var loc = document.getElementById('ctl-locate');
+    if (loc) loc.addEventListener('click', locate);
+    var rec = document.getElementById('ctl-recenter');
+    if (rec) rec.addEventListener('click', function () {
       A.sim.resumeFollow();
     });
     // The globe control mirrors the Global chip — it's in the map controls but
@@ -1160,6 +1295,11 @@
     });
   }
 
+  // Decelerating ease. MapLibre's default easeTo curve starts and ends abruptly
+  // at short durations, which is what makes repeated follow steps read as ticks
+  // rather than as motion.
+  function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+
   function jumpCam(opts) { map.jumpTo(opts); }
   function easeCam(opts) { map.easeTo(opts); }
 
@@ -1168,6 +1308,46 @@
   // zoom never drops below minZoom and never below the current zoom, so a rider
   // already at street level is never yanked back out by pressing ⌖ again.
   var LOCATE_ZOOM = 16.5; // street level, same landing zoom as Google Maps' My Location
+
+  /* A deliberate camera move is in flight until this time.
+
+     Locating yourself was not reliably finishing, and this is why: swoopTo runs
+     a flyTo that can take several seconds, while every incoming GPS fix calls
+     followPlayer -> map.easeTo({center}). easeTo with no zoom cancels the flight
+     and keeps whatever zoom the arc happened to be passing through, so pressing
+     ⌖ mid-drive would slide you sideways and stop short of street level. The
+     closer the fix cadence, the more often it got cut off — which is exactly the
+     "not 100% of the time" shape of it.
+
+     So a user-initiated move takes the camera for its duration, and the
+     automatic follow yields. moveend clears the claim early, including when the
+     rider grabs the map themselves — their pan should win, a background fix
+     should not. */
+  var camClaimUntil = 0;
+  var camClaimToken = 0;
+  function claimCamera(ms) {
+    camClaimUntil = Date.now() + (ms || 0);
+    if (!map) return;
+    var token = ++camClaimToken;
+    /* Bind the release on the NEXT frame, not now.
+
+       MapLibre dispatches moveend through its render loop, so whatever the
+       camera was doing a moment ago (the jumpTo that positioned us, a follow
+       step that just landed) can still have a moveend in flight. Registering
+       synchronously let that stale event fire immediately and release a claim
+       the new flight had only just staked — which is precisely how the locate
+       swoop kept getting cut off. One frame is enough for the queue to drain. */
+    requestAnimationFrame(function () {
+      if (token !== camClaimToken) return;   // superseded by a newer claim
+      map.once('moveend', function () {
+        if (token === camClaimToken) camClaimUntil = 0;
+      });
+    });
+  }
+  function cameraClaimed() { return Date.now() < camClaimUntil; }
+  // The rider grabbing the map outranks any claim: their hands beat our arc.
+  function releaseCamera() { camClaimUntil = 0; camClaimToken++; }
+
   function swoopTo(pos, minZoom) {
     var z = Math.max(map.getZoom(), minZoom || LOCATE_ZOOM);
     if (!S.settings.anim) { map.jumpTo({ center: pos, zoom: z, pitch: 0 }); return; }
@@ -1178,15 +1358,69 @@
       maxDuration: 5000,  // cross-country jumps stay snappy instead of a 20s cruise
       essential: true
     });
+    claimCamera(5000);    // maxDuration; moveend releases it sooner in practice
+    introMode = false;    // this flight is the landing; don't let the intro re-fly it
   }
   function flyToUser(pos) { swoopTo(pos, 14.6); }
+
+  /* Focus one rider — the ▸ buttons in the Nearby and Convoy lists, and the
+     rider popup.
+
+     This used to call flyToUser, which floors the landing zoom at 14.6. From a
+     normal map view (roughly 14–15) that is not a zoom at all: the camera slid
+     a little and stopped, so it only LOOKED like it worked when you were zoomed
+     out far enough for 14.6 to be an actual change — which is to say, when the
+     rider was off screen. Focusing a rider is a "take me to them" gesture, so it
+     lands at street level like the locate button does.
+
+     It still never zooms OUT: someone already at 18 asking to focus a rider
+     wants the camera moved, not their detail thrown away. */
+  var RIDER_ZOOM = 16.5;
+  function focusRider(pos) {
+    if (!pos) return false;
+    swoopTo(pos, RIDER_ZOOM);
+    return true;
+  }
+
+  /* Fit every rider in the convoy (plus you) into one view.
+
+     Returns a result the caller can speak to, because "fit everyone" is not
+     always possible: riders scattered across a continent would need a zoom so
+     far out that nobody is distinguishable, which is worse than not moving. In
+     that case this refuses, reports `spread`, and the edge arrows (js/riderarrows.js)
+     take over as the way to know where everyone is. */
+  var FIT_MIN_ZOOM = 8.5;   // below this, dots are meaningless — use arrows instead
+  function fitRiders(points) {
+    if (!map || !points || !points.length) return { ok: false, reason: 'none' };
+    if (points.length === 1) { focusRider(points[0]); return { ok: true, single: true }; }
+    var b = points.reduce(function (acc, c) { return acc.extend(c); },
+      new maplibregl.LngLatBounds(points[0], points[0]));
+    var pad = { top: 120, bottom: 200, left: 70, right: 70 };
+    var cam = map.cameraForBounds(b, { padding: pad, maxZoom: RIDER_ZOOM });
+    if (!cam) return { ok: false, reason: 'nofit' };
+    if (cam.zoom < FIT_MIN_ZOOM) return { ok: false, reason: 'spread', zoom: cam.zoom };
+    if (!S.settings.anim) { map.jumpTo({ center: cam.center, zoom: cam.zoom }); return { ok: true }; }
+    map.fitBounds(b, { padding: pad, maxZoom: RIDER_ZOOM, duration: ST.dur(900), pitch: 0, essential: true });
+    claimCamera(ST.dur(900));
+    return { ok: true, zoom: cam.zoom };
+  }
   // Continuous nav follow — keep the player centered as real GPS fixes arrive.
   // Eases center only (keeps the user's zoom/bearing); short duration so successive
   // fixes blend smoothly. Programmatic ⇒ won't trip the user-pan follow-break.
   function followPlayer(pos) {
     if (!map) return;
+    /* The claim check has to come BEFORE landIntro, and landIntro has to be
+       consumed rather than merely skipped.
+
+       On a fresh session the globe-boot intro is still armed, so the first GPS
+       fix would fly to zoom 15 at the rider's position — overriding a locate or
+       a rider-focus the rider had just asked for, and landing two zoom levels
+       short of street level. A claimed flight is already taking the camera off
+       the globe to a real position, which is the entire job of the intro, so
+       the intro is finished either way: mark it done and stay out of the way. */
+    if (cameraClaimed()) { introMode = false; return; }
     if (landIntro(pos, 15)) return; // first live GPS fix after a globe boot
-    map.easeTo({ center: pos, duration: ST.dur(650) });
+    map.easeTo({ center: pos, duration: ST.dur(650), easing: easeOutCubic });
   }
 
   A.mapview = {
@@ -1214,6 +1448,12 @@
     jumpCam: jumpCam,
     easeCam: easeCam,
     flyToUser: flyToUser,
+    focusRider: focusRider,
+    fitRiders: fitRiders,
+    setAircraftFilter: setAircraftFilter,
+    AIRCRAFT_OWNERS: AIRCRAFT_OWNERS,
+    AIRCRAFT_COLORS: AIRCRAFT_COLORS,
+    AIRCRAFT_LABELS: AIRCRAFT_LABELS,
     followPlayer: followPlayer,
     createPlayerMarker: createPlayerMarker,
     refreshPlayer: refreshPlayer,

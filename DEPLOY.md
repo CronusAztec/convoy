@@ -341,6 +341,128 @@ What has to be true:
    You want `verified` next to the domain. A user can also turn it on manually
    under Settings → Apps → Convoy → Open by default.
 
+### Crash reporting and analytics
+
+Shipping a beta without a crash reporter means the review section *is* the crash
+reporter: you hear about launch-day crashes days late, from angry strangers, with
+no stack traces. Convoy wires its own, and it is **on by default with nothing to
+configure** — there is no account to create and no SDK bundle to load.
+
+**What it does.** `js/telemetry.js` installs global `error` and
+`unhandledrejection` handlers before any other module runs, and posts to
+`POST /api/telemetry`. Alongside crashes it records a fixed core-loop funnel —
+app opened, map loaded, GPS fix, went live, route set, trip started, trip
+arrived, convoy, race — plus the screen each session ended on. The server keeps a
+30-day rollup in `DATA_DIR/telemetry.json` and the raw stacks in
+`DATA_DIR/telemetry-errors.jsonl` (append-only, rotated at 8MB). The server's own
+`uncaughtException` / `unhandledRejection` handlers feed the same rollup.
+
+**Reading it.** Set a token and query the dashboard:
+
+```bash
+# systemd: Environment=TELEMETRY_TOKEN=...   (openssl rand -hex 32)
+curl -s -H "Authorization: Bearer $TELEMETRY_TOKEN" \
+  https://odoreeci.tech/api/telemetry/stats?days=7 | jq
+```
+
+```jsonc
+{
+  "sessions": 412,
+  "crashedSessions": 3,
+  "crashFreePct": 99.27,      // the number to hold yourself to
+  "meetsBar": true,           // crashFreePct >= 99
+  "funnel": [ { "step": "map_ready", "sessions": 401, "pct": 97.3 }, ... ],
+  "quitScreens": [ { "name": "profile", "count": 88 }, ... ],
+  "topErrors": [ { "count": 14, "type": "TypeError", "msg": "...", "release": "cy108" } ]
+}
+```
+
+`crashFreePct` is `null`, not 100, when no sessions have been recorded — an empty
+window is unknown, not healthy. Without `TELEMETRY_TOKEN` the endpoint 404s;
+leave it unset until you have somewhere to put the secret.
+
+**Hold the line at 99%.** Check it every morning of the beta and after every
+release. `byDay` and the `release` on each error group are what tell you a bad
+build apart from a bad week — a release whose crash-free rate drops below 99 is a
+release to roll back, not to explain away.
+
+**Adding Sentry (optional).** For grouping, alerting and release tracking, put
+the DSN in `js/config.js`:
+
+```js
+sentryDsn: 'https://<publicKey>@<host>/<projectId>',
+```
+
+Errors then go to Sentry *as well as* to `/api/telemetry`, posted as a plain
+envelope request with no third-party script on the page — so `script-src` stays
+as tight as it is. A DSN is a public, write-only credential; it is meant to ship
+in client JS. Crash-free % is always computed from our own ingest, so Sentry can
+be added or dropped later without losing the metric. **If you enable it, delete
+the marked Sentry row from the processor table in `legal/privacy.html` only if
+you are NOT using it** — the row is there because a processor that receives
+diagnostics has to be named.
+
+**Turning it off.** `TELEMETRY=0` on the server refuses every report. Riders have
+their own per-device switch at Profile → Settings → Legal & data → Crash reports,
+which stops all sending immediately and drops anything already queued.
+
+**Privacy.** No location, no destination, no chat, no voice, no username, no
+email — ever, in any field. Reports carry a random session id created at launch
+and thrown away when the app closes, so nothing links two sessions to one person.
+Messages, stack traces and URLs are scrubbed for tokens, emails and data URLs
+before they leave the device. All of this is disclosed in §2.4 of the privacy
+policy and retained for 30 days.
+
+### Account deletion, and the half of it that can fail
+
+Both stores reject an app that has sign-up but no in-app delete — Apple guideline
+5.1.1(v), and Google's account-deletion policy, which additionally wants a public
+web link that works *without* installing the app. Convoy has all three:
+
+| Surface | Where |
+|---|---|
+| In-app | Profile → Settings → **Legal & data** → Delete account |
+| Deep link | `/?cv=delete` — opens the app straight onto that screen; if you are signed out it signs you in first, then opens it |
+| Public web | `/delete-account` (and `/account-deletion`), plain HTML, **no JavaScript**, no install |
+
+The in-app flow asks three times over: it lists exactly what goes, it
+re-authenticates (password, or for a social account the username typed out), and
+it wants the word `DELETE`. All three are re-checked server-side — the screen is
+the explanation, not the enforcement.
+
+**The cascade.** `delete from public.profiles` cascades to `user_stats`,
+`dragy_pbs`, `friendships`, `friend_requests`, `blocks`, `recovery_codes` and
+`email_tokens`. `reports` is deliberately `ON DELETE SET NULL` with the usernames
+denormalised beside it — otherwise deleting your account would erase every abuse
+report ever filed against you, and the reports that matter most would be exactly
+the ones that vanish. Then the GoTrue user goes, which revokes every session and
+takes the email address, password hash and linked social identities with it.
+
+**The half that can fail.** Those are two systems, and the second can fail alone.
+When it does the profile and everything cascading from it is already gone, but
+`auth.users` still holds the address — which is both an incomplete erasure and a
+unique-index collision that tells the same person their email is "already taken"
+by an account that no longer exists.
+
+`server/authresidue.js` records every failed auth deletion to
+`DATA_DIR/auth-residue.json` and retries it on a backoff (5s → 30s → 2m → 10m →
+hourly), across restarts, until GoTrue confirms. A 404 counts as done. Only ids
+this server actually tried to delete are ever retried — "delete every auth user
+with no profile row" would be a one-liner and it would delete real people in the
+middle of an OAuth sign-up, which has exactly that shape.
+
+Watch it on the same dashboard as the crash numbers:
+
+```bash
+curl -s -H "Authorization: Bearer $TELEMETRY_TOKEN" \
+  https://odoreeci.tech/api/telemetry/stats | jq .pendingAuthDeletions
+```
+
+Anything but `0` means someone has been told their account is gone while part of
+it is not. It is being retried, but it is worth knowing why — check the log for
+`[authresidue] AUTH USER NOT DELETED`, and confirm your `SUPABASE_SECRET_KEY` has
+not expired.
+
 ## 7. Updating the app later
 
 ```powershell
@@ -350,6 +472,277 @@ scp -r "C:\Users\Cronu\OneDrive\Desktop\New folder\js" "C:\Users\Cronu\OneDrive\
 sudo cp -r /tmp/convoy-update/* /opt/convoy/ && sudo chown -R convoy:convoy /opt/convoy
 sudo systemctl restart convoy
 ```
+
+## 8. OTA hotfix path (updates without the store)
+
+The web app updates on reload — the server serves `index.html` `no-cache` and
+every asset URL carries a `?v=` stamp. The APK was the frozen half: its web
+layer was zipped in at build time, so any JS fix meant a new APK, a Play
+upload, and days of review. The OTA channel closes that gap.
+
+**What can ship OTA:** HTML, CSS, JS — the entire `www/` tree.  **What
+cannot:** anything under `android/` (native code, plugins, permissions,
+versionCode). Native changes still take the full `release.js` path above.
+
+### How it works
+
+- The APK carries a house Capacitor plugin (`LiveUpdatePlugin.java`) and a
+  client half (`js/ota.js`, no-op on the web).
+- Once per app open, the plugin POSTs `{platform, version_build, version_code,
+  version_name}` — **no device identifier**, so the Data Safety answer
+  "Device or other IDs: No" stays true — to `POST /api/ota`. The server alone
+  decides whether an update is offered (`server/ota.js decide()`).
+- An offered bundle is downloaded, sha256-checked against the manifest, and
+  unzipped with a strict no-escape guard. It is **staged, not swapped**: the
+  current ride keeps running, and the new bundle is served on the *next* app
+  launch.
+- **Rollback is automatic.** A staged bundle only becomes permanent after the
+  app built from it calls `notifyReady()` at the end of a clean boot. If it
+  crashes, white-screens, or never checks in within 15 s — including across
+  process death — the plugin reverts to the previous bundle (or the APK's
+  builtin assets) and blocks that version from ever staging again.
+- Versions derive from the cache-buster stamp: `?v=cy109` → OTA `1.0.109` →
+  Android `versionName "1.0.109"` (release.js syncs the latter from the stamp
+  at every APK build). A fresh APK therefore never re-downloads assets it
+  already contains.
+
+### The commands
+
+```bash
+# Hotfix a JS/CSS/HTML bug — no APK, no store review, no service restart:
+#   bumps ?v= in index.html first (see "shipping a fix" below), then:
+node release.js --ota          # pack www/ → zip+sha256, deploy the site (web
+                               # riders get the same fix on reload), upload the
+                               # bundle + manifest to /var/lib/convoy/ota.
+                               # Devices pick it up on their next app open.
+
+# Emergency stop — a pushed bundle turned out bad:
+node release.js --rollback     # repoint the channel at the previous bundle
+                               # (force-flagged, so devices that already took
+                               # the bad one are moved back DOWN). The bad
+                               # bundle drops out of history and its zip stops
+                               # being served.
+
+# Local drill without touching the live channel:
+node scripts/pack-ota.js --reuse-www --offline   # add --out DIR to pack elsewhere
+```
+
+The manifest (`/var/lib/convoy/ota/manifest.json`) is re-read on mtime change
+per request, which is why an OTA push needs no `systemctl restart`. Inspect
+the live channel any time: `curl https://odoreeci.tech/api/ota`.
+
+### Shipping a fix through it
+
+1. Fix the bug, then bump the stamp in `index.html`: every `?v=cyNNN` becomes
+   `?v=cyNNN+1` (all of them — `pack-ota` refuses a mixed page). This is the
+   same bump the web client already needs to bust caches, and it is now also
+   the OTA version.
+2. `node release.js --ota`. It refuses to push a version that is not newer
+   than the channel's current one unless you pass `--force`.
+3. Watch uptake in the telemetry dashboard — the release stamp
+   (`convoy@cyNNN`) on every batch is the OTA uptake number.
+
+### Before launch: prove the channel once, on purpose
+
+The drill takes ten minutes and is the difference between "we have an update
+channel" and "we have an update channel that works". Run it once, before you
+need it:
+
+1. Build and install the plugin-carrying APK (`node release.js`, versionCode 4+).
+2. Bump the stamp (`cy108` → `cy109`) plus one visible marker (e.g. a settings
+   row that says the build number). Push: `node release.js --ota`.
+3. Reopen the app on the device: you should see the marker, and
+   `App.ota.info()` in remote debugging (`chrome://inspect`) reports
+   `active: "1.0.109"`, `builtin: false`.
+4. **Prove the rollback**: stage a poison bundle (add `throw new Error('x')`
+   as the first line of `js/app.js`, bump to `cy110`, push with `--force`
+   after a normal `--ota` complains it isn't newer). Reopen: within ~15 s the
+   app recovers to the previous good bundle by itself, and the device
+   telemetry reports `ota_reverted`.
+5. `node release.js --rollback` and confirm the channel is back at the good
+   version; push the clean `cy110` (remove the throw) to end green.
+
+If a revert storm ever correlates with a CDN outage (the map library loads
+from jsDelivr, and a bundle whose map never initialises fails its handshake
+by design), push the next stamp with `--force` once the CDN is back — the
+affected devices have blocked the stamp they blamed, and a new stamp is the
+clean slate.
+
+**Play policy note:** downloading interpreted code into a WebView is
+explicitly permitted (the prohibition targets native/executable code). The
+channel only ever ships the same HTML/CSS/JS the APK already contains — never
+native code, never a new permission.
+
+## 9. The control panel (`/admin`)
+
+Everything an operator can do to a running Convoy without SSH: change any
+parameter of any account, work the moderation queue, flip every kill switch,
+move the OTA channel, and publish to Google Play.
+
+It is server-rendered with **zero client-side JavaScript** — every page is a
+plain HTML form that POSTs and redirects. Nothing in it ships in the web bundle
+or the APK.
+
+### Turning it on
+
+Secrets go in **`/var/lib/convoy/convoy.env`** — the file the unit already loads
+via `EnvironmentFile=-/var/lib/convoy/convoy.env`. Never in the unit itself:
+`/etc/systemd/system/convoy.service` is mode 0644, so an `Environment=SOMEKEY=…`
+line there is readable by every user and every process on the box, and
+`systemctl show convoy` prints it for anyone who asks.
+
+```bash
+ssh root@<vps> 'echo "ADMIN_TOKEN=$(openssl rand -hex 32)" >> /var/lib/convoy/convoy.env && chown root:convoy /var/lib/convoy/convoy.env && chmod 640 /var/lib/convoy/convoy.env && systemctl restart convoy'
+```
+
+`chmod 640` with group `convoy` is the point: root writes it, the service reads
+it, nobody else can. Read the value back with
+`grep ^ADMIN_TOKEN= /var/lib/convoy/convoy.env`.
+
+That is the whole requirement. **Unset means the entire `/admin` tree 404s and
+does not exist** — the correct default for a public server.
+
+Optionally, `ADMIN_UIDS=<uuid>,<uuid>` lets named rider accounts sign in with
+their own password instead of the shared secret, so the audit log records a
+person rather than "admin". Deputy sign-in deliberately bypasses the `login`
+kill switch — the panel is how you get back in while sign-in is frozen.
+
+Sessions are stateless HMAC-signed cookies scoped to `/admin` (HttpOnly,
+SameSite=Strict, 8h, Secure on https). Rotating `ADMIN_TOKEN` invalidates every
+outstanding session — that is the only revocation a stateless cookie has.
+
+### The live map (`/admin/map`)
+
+Everyone connected, plotted on a basemap, colour-coded by what they are doing,
+plus a roster of who is registered but *not* connected.
+
+| Colour | State |
+| --- | --- |
+| green | cruising |
+| blue | parked |
+| red | racing |
+| amber | connected, no GPS fix yet |
+| grey | stale — no position update in 60s |
+| violet dashed ring | **ghost mode** |
+| hollow dot | simulated rider (`BOTS=N`) |
+
+Ghost is drawn as a *ring around* the status dot, not as its own colour, because
+a ghosted rider is still cruising or parked or racing and you need both facts at
+once.
+
+The map is a **server-rendered SVG** — no MapLibre, no JavaScript at all. The
+panel's CSP forbids inline script, and the page with the most sensitive data on
+it is the last place to make an exception. Web Mercator is thirty lines of
+arithmetic and a raster tile is an `<image>`. It live-updates with
+`<meta http-equiv="refresh">` (5s / 15s / 60s / off), which needs no socket and
+no client code.
+
+Basemap tiles come from CARTO — the same vendor the app's own map already uses,
+so no new third party and no new privacy disclosure. **Tiles are fetched by
+coordinate: no rider position is ever sent to the tile host.** Positions are
+drawn by the server, over the tiles, from data that never leaves the process.
+CARTO/OSM attribution is rendered under the map because their licences require
+it.
+
+Pan and zoom are plain links that rewrite the query string (`?z=&lat=&lng=`) —
+the no-script equivalent of a gesture. "Fit everyone" re-frames on the whole
+fleet; "centre" next to any rider's coordinates jumps to them at street zoom.
+
+**On ghosted riders:** the map shows them. Ghost mode hides a rider from other
+*riders* — it was never a promise that the operator of the service cannot see
+them, and a report about a ghosted rider would be unactionable otherwise. The
+page says this out loud rather than burying it. These are precise live positions
+of real people; open the page when you have a reason to.
+
+### The three kill switches are different tools
+
+Reaching for the wrong one during an incident costs hours:
+
+| Switch | Where | What it actually stops |
+| --- | --- | --- |
+| `app` | Flags → Master switch | **This server.** Every `/api/*` answers 503, new WebSockets are refused. Instant, total, reversible. |
+| `ota` | Flags → ota | Handing out web-layer hotfixes. |
+| Halt rollout | Play → Halt | Google handing the APK to anyone **new**. Does nothing to existing installs. |
+
+Nothing stops an app that is already installed and running except the flags and
+the OTA channel. Plan around that.
+
+### Killing the app
+
+Flags → Master switch → type `KILL`. One atomic write forces `app` and every
+feature flag off; riders' next call gets a 503 with `Retry-After: 120`.
+
+Two things stay up **on purpose**:
+
+- **`/api/health`** — answers `{ok:true, maintenance:true}` so a monitor can
+  tell "off deliberately" from "the box is dead".
+- **`/api/ota`** — the OTA channel is the recovery path. Cutting it during a
+  kill would switch off the one way to ship the fix that ends the outage.
+
+`/admin` is never gated. Locking the operator out of the switch they just
+flipped is not an option.
+
+**Restore:** Flags → Restore service. This *clears* every override rather than
+forcing everything on — a feature that is off because its API key is missing
+stays off, since forcing it on just produces a rider-visible feature that 500s.
+
+**If the panel itself is unreachable while the app is killed**, the state is one
+file:
+
+```bash
+rm /var/lib/convoy/flags.json && systemctl restart convoy
+```
+
+Deleting the file clears every override at once. No restart is needed for a
+panel-driven change (the file is re-read on mtime change), only for this manual
+path if you want to be certain.
+
+### Publishing to Google Play
+
+The panel can ship a build, promote it between tracks, turn the staged-rollout
+knob, and halt a rollout — without opening the Play Console.
+
+Setup (the third step is the one people miss):
+
+1. Google Cloud, in the project behind your Play account: create a **service
+   account** and download its JSON key.
+2. Grant it the **Android Publisher** role.
+3. Play Console → Users and permissions → **invite that service account's email
+   address**, with "Release apps to testing tracks" and "Release to production".
+
+A key that is valid in Cloud but never invited to the Console fails with a flat
+`unauthorized_client`. The panel says so when it happens.
+
+```
+PLAY_SERVICE_ACCOUNT_JSON=/etc/convoy/play-service-account.json
+PLAY_PACKAGE=tech.odoreeci.convoy          # default
+PLAY_ARTIFACT_DIR=/var/lib/convoy/releases # default: DATA_DIR/releases
+```
+
+**The panel does not accept file uploads through the browser.** Build with
+`node release.js`, put the `.aab` in `PLAY_ARTIFACT_DIR` (it lands on this disk
+exactly like the OTA bundle), and the panel's picker offers it newest-first.
+The panel's job is deciding *which build goes live and to how many people*, not
+being a file transfer.
+
+Publishing (upload, promote) requires typing `SHIP`. Halting does not — halting
+is the safe direction, and every second spent typing during a bad rollout is
+another cohort taking the bad build.
+
+Play assigns the version code from the artifact itself, so you never type one.
+It refuses a code it has already seen: bump `versionCode` in
+`android/app/build.gradle` and rebuild if that happens.
+
+A rollout that has reached 100% (*live*) has nothing left to halt — Play's own
+answer there is to roll forward with a fixed build, and the panel says so rather
+than pretending a button exists.
+
+### The audit log
+
+Every panel action is appended to `DATA_DIR/admin-audit.jsonl` with actor, IP,
+action, target and detail, capped at 2000 entries. The dashboard renders the
+tail. Panics and rollout halts also print to the service log, so
+`journalctl -u convoy` shows them next to whatever caused them.
 
 ## Pre-launch legal checklist
 
@@ -379,10 +772,30 @@ Then check off:
       **Play Console → App content → Privacy policy** and **Data deletion**.
       Play requires the deletion URL to work *without* installing the app — it
       does, but confirm it after your TLS is up.
-- [ ] **Data safety form** filled to match the Privacy Policy: precise location,
+- [ ] **Data safety form** filled from [SDK-INVENTORY.md](SDK-INVENTORY.md) §7,
+      which lists every SDK in the app and the answer each one implies. Both
+      stores make you declare what your SDKs collect, not just what reaches your
+      servers, and Google scans the upload for undeclared device identifiers.
+      `npm test` fails if a dependency or a remotely-loaded script appears that
+      is not on that page — when it does, update the page **and** re-check the
+      form. The answers, in short: precise location,
       background location, email, user IDs, in-app messages, audio (transmitted
-      not recorded). Declare "data is not sold" and "data is not shared with
-      third parties for advertising".
+      not recorded), **crashes and app diagnostics** (see §2.4). Declare "data is
+      not sold" and "data is not shared with third parties for advertising".
+      Diagnostics are collected and the form has categories for exactly this —
+      *Crash logs* and *Diagnostics*, under **App info and performance** — with
+      "optional" ticked, because riders can turn them off in Settings.
+- [ ] **Sentry row in `legal/privacy.html` §4** — the processor table lists Sentry
+      behind a red placeholder. **Delete that row if you have not set a
+      `sentryDsn`**, and remove the placeholder if you have. A named processor
+      you do not use is as wrong as an unnamed one you do.
+- [ ] **Account deletion**: in-app path, `/delete-account` URL, and the deletion
+      URL pasted into Play Console → App content → **Data deletion**. All three
+      exist (see §6) — this is a check that the public URL resolves on your real
+      domain, because Play tests it without the app installed. If you ever ship
+      an iOS build, the same in-app path satisfies **Apple 5.1.1(v)**, which has
+      been enforced since 2022 and is still a top rejection reason; there is no
+      iOS target in this repo today.
 - [ ] Bump `LEGAL_VERSION` in `js/state.js` whenever you change either document
       materially. That single constant re-opens the consent gate for every rider
       and invalidates the feature legality acknowledgements. Keep it in step with
@@ -420,7 +833,9 @@ Then check off:
   Share the URL accordingly.
 - **Back up Supabase, not `DATA_DIR`** — every account, password, friendship and
   personal best now lives in the Supabase project. Enable Point-in-Time Recovery (or
-  take regular `pg_dump`s) there. `DATA_DIR` is just a hotspot cache and is disposable.
+  take regular `pg_dump`s) there. `DATA_DIR` holds the hotspot cache, the telemetry
+  rollup, and the OTA bundles (§8) — all reproducible or operational, none of it
+  account data: losing it means re-pushing the last OTA bundle, nothing more.
 - Chat/invites/auth are rate-limited and inputs sanitized server-side, but this is a
   friends-scale server, not hardened SaaS.
 

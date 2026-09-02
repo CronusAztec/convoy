@@ -975,8 +975,7 @@
     A.mapview.setRouteData(null);
     A.mapview.removeDest();
     var card = document.getElementById('eta-card');
-    card.classList.remove('show');
-    card.hidden = true;
+    if (card) { card.classList.remove('show'); card.hidden = true; }
     ST.emit('route', null);
   }
 
@@ -1062,6 +1061,14 @@
 
   function endTrip(arrived) {
     var label = S.route ? S.route.label : '';
+    // Arrived vs cancelled is the whole point of measuring the core loop: a trip
+    // that starts and never arrives is the funnel step that needs fixing. The
+    // destination is deliberately NOT reported — §3 of the privacy policy says
+    // we do not keep location history, and the funnel does not need it to work.
+    if (A.telemetry) {
+      if (arrived) A.telemetry.step('trip_arrive');
+      A.telemetry.track('trip_end', { arrived: !!arrived });
+    }
     if (arrived) speak('You have arrived at ' + (label || 'your destination') + '.');
     else stopSpeaking();
     S.trip = null;
@@ -1114,6 +1121,7 @@
   /* ---------------- ETA card ---------------- */
   function renderEtaCard() {
     var card = document.getElementById('eta-card');
+    if (!card) return; // a page variant without the card must not abort the route commit
     var r = S.route;
     if (!r) { card.hidden = true; card.classList.remove('show'); return; }
     var trip = S.trip;

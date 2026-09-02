@@ -115,6 +115,7 @@ public class RadarDetectorPlugin extends Plugin {
     // HashMap threw ConcurrentModificationException under exactly that overlap.
     private final Map<String, JSObject> found = new ConcurrentHashMap<>();
     private PluginCall pendingConnect = null; // connect target held across a permission prompt
+    private int listGen = 0;                 // generation token for listDevices' 6s resolve
 
     /* ============================ device listing ============================ */
     @PluginMethod
@@ -141,7 +142,13 @@ public class RadarDetectorPlugin extends Plugin {
         } catch (Exception e) { call.reject("Scan failed: " + e.getMessage()); return; }
 
         // Collect for 6s, then resolve with everything seen (detectors first).
+        // listGen makes the resolve single-shot per CALL: a rapid re-entry used to
+        // leave the first 6s runnable armed alongside the second, and whichever
+        // fired first resolved ITS call with a scan the other call had already
+        // stopped/restarted — mixed device lists, and both runnables firing.
+        final int gen = ++listGen;
         main.postDelayed(() -> {
+            if (gen != listGen) return; // superseded by a newer listDevices()
             stopLeScan();
             JSArray arr = new JSArray();
             for (JSObject o : found.values()) arr.put(o);
@@ -260,17 +267,24 @@ public class RadarDetectorPlugin extends Plugin {
     }
 
     // Auto-connect: grab the first device that looks like a supported detector.
+    // connectLock makes check-then-connectGatt atomic: two detectors (or two scan
+    // callbacks) arriving near-simultaneously both passed the `gatt != null` check
+    // and each called connectGatt — one handle leaked and alerts were attributed
+    // to whichever family the loser had stamped into connectFamily.
+    private final Object connectLock = new Object();
     private final ScanCallback autoCb = new ScanCallback() {
         @Override public void onScanResult(int type, ScanResult result) {
-            if (gatt != null) return;
             BluetoothDevice dev = result.getDevice();
             if (dev == null) return;
             Sig sig = sigFor(safeName(dev, result));
             if (sig == null && !advertisesDetectorService(result)) return; // not a detector
             if (!hasConnect()) return;
-            connectFamily = sig != null ? sig.family : null;
-            stopLeScan();
-            gatt = dev.connectGatt(getContext(), false, gattCb, BluetoothDevice.TRANSPORT_LE);
+            synchronized (connectLock) {
+                if (gatt != null) return;
+                connectFamily = sig != null ? sig.family : null;
+                stopLeScan();
+                gatt = dev.connectGatt(getContext(), false, gattCb, BluetoothDevice.TRANSPORT_LE);
+            }
         }
     };
 
@@ -323,7 +337,13 @@ public class RadarDetectorPlugin extends Plugin {
         @Override public void onCharacteristicChanged(BluetoothGatt g, BluetoothGattCharacteristic c) {
             byte[] v = c.getValue();
             if (v == null || v.length < 2) return;
-            JSObject o = "v1".equals(parseProto) ? parseV1(v) : parseNus(v);
+            // "generic" means a vendor GATT we have no framing spec for, so those
+            // bytes are NOT esclib frames — parseNus on them read every random byte
+            // as a band and invented false Ka alerts. Strict mode demands the full
+            // documented esclib shape (band 1..5 AND strength 0..9) before a frame
+            // may become an alert.
+            boolean strict = "generic".equals(parseProto);
+            JSObject o = "v1".equals(parseProto) ? parseV1(v) : parseNus(v, strict);
             if (o != null) {
                 if (connectFamily != null) o.put("family", connectFamily);
                 notifyListeners("alert", o);
@@ -344,10 +364,14 @@ public class RadarDetectorPlugin extends Plugin {
 
     // Escort/Beltronics/Cobra Nordic-UART alert frame (esclib subset):
     //   byte0 band (1=X,2=K,3=Ka,4=Laser,5=Ku), byte1 strength 0..9, byte2/3 freq (MHz, LE).
-    private JSObject parseNus(byte[] v) {
+    // `strict` = caller has no framing spec for these bytes (generic vendor GATT),
+    // so anything outside the documented band/strength ranges is dropped rather
+    // than clamped into a fake alert.
+    private JSObject parseNus(byte[] v, boolean strict) {
         String band = bandName(v[0] & 0xFF);
         if (band == null) return null;
         int strength = v.length > 1 ? (v[1] & 0xFF) : 0;
+        if (strict && strength > 9) return null;
         JSObject o = new JSObject();
         o.put("band", band);
         o.put("strength", Math.max(0, Math.min(9, strength)));

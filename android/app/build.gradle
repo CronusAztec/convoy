@@ -16,8 +16,12 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         // Every Play upload needs a higher versionCode than the last.
-        versionCode 3
-        versionName "1.0"
+        versionCode 4
+        // Tracks the bundled web stamp (?v=cyNNN → 1.0.NNN). The OTA server
+        // compares a fresh APK's versionName against the published bundle so a
+        // new APK never re-downloads assets it already contains — release.js
+        // re-syncs this from www/index.html on every APK build.
+        versionName "1.0.115"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

@@ -198,9 +198,17 @@ async function createUser(username, password, ip, email) {
   return { error: errText(r.body), status: r.status };
 }
 
+// TRUE means the user is gone from GoTrue — which includes 404, because "there
+// is no such user" is the end state this call exists to reach, and treating it
+// as a failure would leave authresidue.js retrying an id forever.
+//
+// Every other non-2xx is a real failure and must be reported as one: this
+// returns a boolean and only THROWS when GoTrue is unreachable, so a caller that
+// watches for an exception (as store.deleteAccount used to) sees a 500 as
+// success and tells the rider their account is gone while it is not.
 async function deleteUser(id) {
   const r = await call('/admin/users/' + encodeURIComponent(id), { method: 'DELETE' });
-  return r.status >= 200 && r.status < 300;
+  return (r.status >= 200 && r.status < 300) || r.status === 404;
 }
 
 // Set a new password as admin (used by the recovery-code reset, which has already
@@ -254,6 +262,35 @@ async function updateEmail(id, email, ip) {
   if (r.status === 200) return { user: r.body };
   const code = errCode(r.body);
   if (code === 'email_exists' || r.status === 409) return { error: 'taken', status: r.status };
+  return { error: errText(r.body), status: r.status };
+}
+
+/* ---------------- control panel (admin) ----------------
+   The admin panel's account powers that GoTrue itself enforces. */
+
+// Ban / unban. Banning revokes the user's ability to authenticate: token
+// verification fails for banned users, so API bearer calls 401 and the WS
+// hello is rejected — the account's DATA stays intact (a ban is containment,
+// not deletion). '876000h' is GoTrue's idiom for "a very long time"; 'none'
+// lifts it. Convoy keeps an advisory mirror in the panel for display, but
+// GoTrue is the enforcer.
+async function setBanned(id, banned, ip) {
+  const r = await call('/admin/users/' + encodeURIComponent(id), {
+    method: 'PUT', ip: ip,
+    body: { ban_duration: banned ? '876000h' : 'none' }
+  });
+  if (r.status === 200) return { ok: true };
+  return { error: errText(r.body), status: r.status };
+}
+
+// Sync the username GoTrue carries in app_metadata (used to recognise convoy
+// accounts server-side) after a panel rename. PUT merges app_metadata keys,
+// so sending {username} leaves every other metadata key alone.
+async function updateUsernameMeta(id, username, ip) {
+  const r = await call('/admin/users/' + encodeURIComponent(id), {
+    method: 'PUT', ip: ip, body: { app_metadata: { username: username } }
+  });
+  if (r.status === 200) return { ok: true };
   return { error: errText(r.body), status: r.status };
 }
 
@@ -551,7 +588,7 @@ function verify(token) {
 module.exports = {
   configured, forwardsIp, emailFor, loadJwks, verify,
   loadSettings, providerEnabled,
-  createUser, deleteUser, setPassword, updateEmail,
+  createUser, deleteUser, setPassword, updateEmail, setBanned, updateUsernameMeta,
   signIn, signInEmail, refresh, signOut,
   generateLink, verifyOtp,
   authorizeUrl, exchangePkce, getUser, unlinkIdentity,

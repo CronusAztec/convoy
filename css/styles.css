@@ -6,6 +6,11 @@
 :root {
   --accent: #9aa3b0;            /* neutral slate — desaturated from the old neon cyan */
   --accent-rgb: 154, 163, 176;
+  /* Ink for text/icons sitting ON the accent. Recomputed by state.applyAccent
+     via util.bestInk, which measures the WCAG contrast of BOTH candidate inks
+     against the accent and keeps the better one — a luma cutoff got 5 of the 9
+     pickable swatches wrong. Hardcoded #02101a here is only the pre-JS fallback. */
+  --accent-ink: #02101a;
 
   /* Map rider-dot colors. Defaults match the originals; each is overridable from
      Settings → Map dots (state.applyDotColors writes these inline on :root).
@@ -72,6 +77,20 @@
 [data-anim="off"] *::after {
   transition-duration: 0ms !important;
   animation-duration: 0ms !important;
+}
+
+/* Until state.js resolves settings.anim, <html> carries no data-anim at all —
+   honour the OS preference for that window so a reduced-motion user never sees
+   the boot flourish, scanlines or radar sweep start up before JS catches it.
+   Once the attribute lands, the explicit choice above takes over in both
+   directions, so a user who deliberately turned animation back on keeps it. */
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-anim]) *,
+  :root:not([data-anim]) *::before,
+  :root:not([data-anim]) *::after {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+  }
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -147,19 +166,48 @@ button svg, .ctl svg, .search-icon svg {
     linear-gradient(rgba(255, 255, 255, .018) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, .018) 1px, transparent 1px);
   background-size: 44px 44px;
-  mask-image: radial-gradient(ellipse at center, #000 30%, transparent 78%);
-  -webkit-mask-image: radial-gradient(ellipse at center, #000 30%, transparent 78%);
+  /* Masks band as readily as backgrounds do — this one fades the grid out over
+     nearly half the screen, so it gets the same treatment. */
+  mask-image: radial-gradient(ellipse at center, #000 30%, rgba(0,0,0,.72) 48%,
+    rgba(0,0,0,.42) 60%, rgba(0,0,0,.18) 70%, transparent 78%);
+  -webkit-mask-image: radial-gradient(ellipse at center, #000 30%, rgba(0,0,0,.72) 48%,
+    rgba(0,0,0,.42) 60%, rgba(0,0,0,.18) 70%, transparent 78%);
 }
-/* edge vignette + subtle chromatic fringe to sell the "looking through glass" feel */
+/* Edge vignette + subtle chromatic fringe to sell the "looking through glass" feel.
+
+   The stop lists are long on purpose. A two-stop gradient stretched across the
+   whole viewport has to represent a slow alpha ramp in 8-bit steps, and the
+   eye reads those steps as concentric bands — the "blocky" look. Naming
+   intermediate stops along an ease curve shortens the distance the renderer has
+   to interpolate between any two values, which is what actually kills the
+   banding. Same trick, same reason, everywhere a gradient covers a large area. */
 #hud-vignette {
   background:
-    radial-gradient(ellipse at center, transparent 58%, rgba(0, 0, 0, .5) 100%),
-    radial-gradient(ellipse 120% 70% at 50% -10%, rgba(var(--accent-rgb), .06), transparent 50%);
+    radial-gradient(ellipse at center,
+      transparent 58%,
+      rgba(0, 0, 0, .04) 68%,
+      rgba(0, 0, 0, .11) 76%,
+      rgba(0, 0, 0, .20) 83%,
+      rgba(0, 0, 0, .31) 89%,
+      rgba(0, 0, 0, .42) 95%,
+      rgba(0, 0, 0, .5) 100%),
+    radial-gradient(ellipse 120% 70% at 50% -10%,
+      rgba(var(--accent-rgb), .06),
+      rgba(var(--accent-rgb), .045) 20%,
+      rgba(var(--accent-rgb), .028) 34%,
+      rgba(var(--accent-rgb), .012) 43%,
+      transparent 50%);
 }
 [data-theme="light"] #hud-scan { opacity: .35; }
 [data-theme="light"] #hud-vignette {
   background:
-    radial-gradient(ellipse at center, transparent 60%, rgba(20, 35, 60, .18) 100%);
+    radial-gradient(ellipse at center,
+      transparent 60%,
+      rgba(20, 35, 60, .015) 70%,
+      rgba(20, 35, 60, .04) 78%,
+      rgba(20, 35, 60, .075) 85%,
+      rgba(20, 35, 60, .12) 92%,
+      rgba(20, 35, 60, .18) 100%);
 }
 
 /* one-time boot glitch flash */
@@ -193,7 +241,10 @@ button svg, .ctl svg, .search-icon svg {
 /* ============================== top bar ============================== */
 #topbar {
   position: fixed;
-  top: 14px; left: 16px; right: 16px;
+  /* targetSdk 36 forces edge-to-edge on Android, so the status bar draws over
+     the WebView. Without the inset the brand/search/avatar row sits under the
+     system clock. Resolves to +0 in a browser, so desktop is unchanged. */
+  top: calc(14px + env(safe-area-inset-top, 0px)); left: 16px; right: 16px;
   display: flex; align-items: center; gap: 12px;
   z-index: 8;
   pointer-events: none;
@@ -270,7 +321,12 @@ button svg, .ctl svg, .search-icon svg {
   position: absolute;
   top: calc(100% + 8px); left: 0; right: 0;
   border-radius: var(--radius-sm);
-  overflow: hidden;
+  /* The geocoder returns up to 10 rows and starred places are unbounded; with
+     no max-height and overflow:hidden the tail was silently unclickable (row 10
+     lands under the dock on a 360x640 phone). Cap it and let it scroll. */
+  max-height: min(420px, calc(100vh - 160px - env(safe-area-inset-bottom, 0px)));
+  overflow-x: hidden; overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--surface-solid);
   backdrop-filter: blur(22px) saturate(150%);
   -webkit-backdrop-filter: blur(22px) saturate(150%);
@@ -326,7 +382,7 @@ button svg, .ctl svg, .search-icon svg {
 /* ============================== status chips ============================== */
 .chips {
   position: fixed;
-  top: 72px; left: 16px;
+  top: calc(72px + env(safe-area-inset-top, 0px)); left: 16px;
   display: flex; flex-direction: column; gap: 8px;
   z-index: 5;
 }
@@ -395,7 +451,7 @@ button svg, .ctl svg, .search-icon svg {
   box-shadow: var(--glow-sm), var(--shadow-sm);
 }
 .ctl:active { transform: scale(.93); }
-.ctl-accent { color: #02101a; background: var(--accent); border-color: transparent; box-shadow: var(--glow-sm); }
+.ctl-accent { color: var(--accent-ink, #02101a); background: var(--accent); border-color: transparent; box-shadow: var(--glow-sm); }
 
 /* left-side control — ghost / radar toggle (mirrors .map-controls on the right) */
 .map-controls-left {
@@ -471,7 +527,7 @@ body.radar-on .map-controls-left { display: none; }
   padding: 0 4px;
   border-radius: 3px;
   background: var(--accent);
-  color: #02101a;
+  color: var(--accent-ink, #02101a);
   font: 700 10px/16px var(--font-mono);
   font-style: normal;
   text-align: center;
@@ -493,7 +549,14 @@ body.radar-on .map-controls-left { display: none; }
   -webkit-backdrop-filter: blur(26px) saturate(160%);
   border: 1px solid var(--line-strong);
   box-shadow: var(--shadow), inset 0 0 30px rgba(var(--accent-rgb), .04);
-  z-index: 7;
+  /* The side panels sit ABOVE the ambient radar HUD (#radar-alerts and
+     #radar-side are z-index 10). At 7 they sat under it, and because the alert
+     stack is centred with a 600px max-width it reaches ~68px into an open
+     panel on a wide screen — covering the panel's title and back arrow, and
+     stealing the clicks there, whenever Ghost mode had alerts up.
+     The ladder, deliberately: map < HUD chrome (10) < rider arrows (11)
+     < panels (12) < radar flourish (13) < toasts (14) < modals (15). */
+  z-index: 12;
   transform: translateX(calc(100% + 32px));
   opacity: 0;
   pointer-events: none;
@@ -554,6 +617,10 @@ body.radar-on .map-controls-left { display: none; }
   display: flex; flex-direction: column; gap: 14px;
 }
 .panel-body-flush { padding: 0; gap: 0; }
+/* A scrolling flex column must not shrink its children: without this a .btn
+   (height:40px) collapses to its 18px line box instead of scrolling at full
+   size. #gearbox carried a local flex-shrink:0 for exactly this reason. */
+.panel-body > * { flex-shrink: 0; }
 
 .panel-body::-webkit-scrollbar, .chat-log::-webkit-scrollbar { width: 8px; }
 .panel-body::-webkit-scrollbar-thumb, .chat-log::-webkit-scrollbar-thumb {
@@ -573,16 +640,24 @@ body.radar-on .map-controls-left { display: none; }
   color: var(--text-dim);
   transition: background 150ms var(--ease), color 150ms var(--ease), transform 150ms var(--ease);
 }
+/* Drawn at 34px, tapped at 44px — panel close and settings are hit constantly
+   and on a phone the drawn size is under the minimum. Hit area only. */
+.icon-btn { position: relative; }
+.icon-btn::after {
+  content: ""; position: absolute;
+  top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 44px; height: 44px;
+}
 .icon-btn:hover { background: var(--surface-2); color: var(--accent); }
 .icon-btn:active { transform: scale(.92); }
 .icon-btn svg { width: 16px; height: 16px; }
 .icon-btn-sm { width: 28px; height: 28px; }
 .icon-btn-sm svg { width: 13px; height: 13px; }
 .icon-btn-accent {
-  color: #02101a; background: var(--accent); border-radius: var(--radius-sm);
+  color: var(--accent-ink, #02101a); background: var(--accent); border-radius: var(--radius-sm);
   box-shadow: var(--glow-sm);
 }
-.icon-btn-accent:hover { background: var(--accent); filter: brightness(1.12); color: #02101a; }
+.icon-btn-accent:hover { background: var(--accent); filter: brightness(1.12); color: var(--accent-ink, #02101a); }
 
 /* ============================== buttons ============================== */
 .btn {
@@ -603,7 +678,7 @@ body.radar-on .map-controls-left { display: none; }
 .btn:active { transform: scale(.97); }
 .btn:disabled { opacity: .5; cursor: default; transform: none; box-shadow: none; }
 .btn-primary {
-  color: #02101a;
+  color: var(--accent-ink, #02101a);
   border-color: transparent;
   background: linear-gradient(180deg, rgba(255, 255, 255, .25), rgba(255, 255, 255, 0)), var(--accent);
   box-shadow: var(--glow);
@@ -767,7 +842,7 @@ body.radar-on .map-controls-left { display: none; }
   width: 28px; height: 28px;
   display: grid; place-items: center;
   border-radius: 50%;
-  background: var(--accent); color: #0a0f16;
+  background: var(--accent); color: var(--accent-ink, #02101a);
   border: 2px solid var(--bg-2);
   cursor: pointer;
   transition: transform 140ms var(--ease);
@@ -880,7 +955,7 @@ body.radar-on .map-controls-left { display: none; }
 }
 .msg-me {
   align-self: flex-end;
-  color: #02101a;
+  color: var(--accent-ink, #02101a);
   background: var(--accent);
   font-weight: 500;
   box-shadow: var(--glow-sm);
@@ -1001,7 +1076,7 @@ body.radar-on .map-controls-left { display: none; }
 }
 .seg-btn:active { transform: scale(.96); }
 .seg-btn.active {
-  color: #02101a;
+  color: var(--accent-ink, #02101a);
   background: var(--accent);
   box-shadow: var(--glow-sm);
 }
@@ -1203,15 +1278,18 @@ body.radar-on .map-controls-left { display: none; }
   font-variant-numeric: tabular-nums;
   transition: background 160ms var(--ease), color 160ms var(--ease), box-shadow 160ms var(--ease);
 }
-.speed-chip.active { background: var(--accent); color: #02101a; box-shadow: var(--glow-sm); }
+.speed-chip.active { background: var(--accent); color: var(--accent-ink, #02101a); box-shadow: var(--glow-sm); }
 
 /* ============================== toasts — notification flashes ============================== */
 #toasts {
   position: fixed;
-  top: 76px; left: 50%;
+  /* Below the chips, not on them: on phones .chips becomes a wrapping row that
+     runs to ~126px, so the old top:76px put every toast straight over the live
+     rider count. 172px also clears the overspeed banner at 132px. */
+  top: calc(172px + env(safe-area-inset-top, 0px)); left: 50%;
   transform: translateX(-50%);
   display: flex; flex-direction: column; align-items: center; gap: 8px;
-  z-index: 11;
+  z-index: 14;   /* above the side panels (12) — a toast must never be buried */
   pointer-events: none;
 }
 .toast {
@@ -1244,7 +1322,7 @@ body.radar-on .map-controls-left { display: none; }
 /* ============================== onboarding modal ============================== */
 .modal-backdrop {
   position: fixed; inset: 0;
-  z-index: 12;
+  z-index: 15;   /* top of the ladder: a modal covers everything */
   display: grid; place-items: center;
   padding: 20px;
   background: rgba(2, 5, 12, .7);
@@ -1651,10 +1729,10 @@ body.radar-on .verify-banner { display: none; }
   color: var(--text-dim);
   transition: background 180ms var(--ease), color 180ms var(--ease), box-shadow 180ms var(--ease);
 }
-.panel-tab.active { color: #02101a; background: var(--accent); box-shadow: var(--glow-sm); }
+.panel-tab.active { color: var(--accent-ink, #02101a); background: var(--accent); box-shadow: var(--glow-sm); }
 .tab-badge {
   min-width: 17px; height: 17px; padding: 0 5px;
-  border-radius: 2px; background: var(--accent); color: #02101a;
+  border-radius: 2px; background: var(--accent); color: var(--accent-ink, #02101a);
   font: 700 10px/17px var(--font-mono); font-style: normal; text-align: center;
 }
 .tab-content { display: flex; flex-direction: column; gap: 10px; }
@@ -1733,7 +1811,6 @@ body.radar-on .verify-banner { display: none; }
   box-shadow:
     0 0 0 2.5px var(--accent),
     0 0 12px rgba(var(--accent-rgb), .7),
-    0 2px 6px rgba(0, 0, 0, .5);
     0 2px 6px rgba(0, 0, 0, .5);
 }
 .m-ring {
@@ -1936,7 +2013,9 @@ body.radar-on .verify-banner { display: none; }
 /* ============================== walkie-talkie — comms burst ============================== */
 #wt-overlay {
   position: fixed;
-  right: 18px;
+  /* 16px column offset + 44px column + 12px gap: at right:18px the PTT button
+     covered #ctl-loop on the desktop layout. */
+  right: 72px;
   bottom: 110px;
   z-index: 6;
   display: flex;
@@ -1998,6 +2077,102 @@ body.radar-on .verify-banner { display: none; }
   color: var(--text-dim);
 }
 .wt-cycle svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+/* Drawn at 18px but tapped at 44px: this is the mic-mode switch, used one-handed
+   while moving, and 18x18 is well under the 44px minimum. The pseudo-element
+   grows only the hit area, so the walkie layout is unchanged. */
+.wt-cycle { position: relative; }
+.wt-cycle::after {
+  content: ""; position: absolute;
+  top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: 44px; height: 44px;
+}
+
+/* Edge arrows pointing at convoy riders who are off screen (js/riderarrows.js).
+   The host is a full-viewport, pointer-transparent layer; each arrow re-enables
+   pointer events for itself so the map stays draggable everywhere else. */
+.rider-arrows {
+  position: fixed; inset: 0;
+  pointer-events: none;
+  /* Above the ambient radar HUD (10). At 6 an arrow pinned to the left edge
+     sat underneath the SCAN/RISK/STATUS cluster and one pinned top-centre sat
+     under the alert stack — buried by the very chrome it has to be read
+     against. js/riderarrows.js also pads each edge past that chrome. */
+  z-index: 11;
+}
+.rider-arrow {
+  position: absolute; top: 0; left: 0;
+  pointer-events: auto;
+  display: grid; place-items: center;
+  gap: 1px;
+  padding: 6px 8px;
+  border-radius: 3px;
+  background: var(--surface);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .35);
+  min-width: 44px; min-height: 44px;   /* a real tap target, used while moving */
+}
+.rider-arrow .ra-icon {
+  display: block; width: 16px; height: 16px;
+  transform-origin: 50% 50%;
+}
+.rider-arrow .ra-icon svg {
+  width: 16px; height: 16px;
+  fill: var(--paint, var(--accent));
+  stroke: none;
+  display: block;
+}
+.rider-arrow .ra-name {
+  font-size: 9px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text);
+  max-width: 68px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rider-arrow .ra-dist {
+  font-size: 9px;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+
+/* Aircraft category legend + filter rows (Ghost mode settings). */
+.air-cat { display: flex; align-items: center; gap: 8px; }
+.air-dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  flex: none;
+  box-shadow: 0 0 6px currentColor;
+  background: currentColor;
+}
+
+/* Live input level in the voice settings. Reads as a meter, not a slider —
+   it is the answer to "is this microphone even picking me up", which is the
+   first question a rider asks when nobody can hear them. */
+.vc-meter {
+  height: 6px; width: 100%;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+}
+.vc-meter-fill {
+  height: 100%; width: 0%;
+  border-radius: 2px;
+  background: var(--text-dim);
+  transition: width .06s linear, background-color .15s var(--ease);
+}
+.vc-meter-fill.hot { background: rgb(var(--accent-rgb)); }
+.vc-devices { display: contents; }
+
+/* Mic mute, beside the mode chip.
+   The 26px offset is not decoration. .wt-cycle grows an invisible 44px tap zone
+   from its centre, so two 18px controls sitting 4px apart would put both hit
+   areas over the same 22px of screen. A mis-tap here either broadcasts a rider
+   who meant to be silent or silences one who did not, so the two zones are
+   pushed far enough apart to stop touching. */
+.wt-mute { margin-left: 26px; }
+.wt-mute .wt-slash { opacity: 0; transition: opacity .12s var(--ease); }
+.wt-mute.wt-muted { color: #ff5a5a; }
+.wt-mute.wt-muted .wt-slash { opacity: 1; }
 
 /* A convoy member who is currently speaking */
 .member-chip.wt-speaking .u-ava {
@@ -2013,7 +2188,7 @@ body.radar-on .verify-banner { display: none; }
   .brand-name { display: none; }
   .brand { padding: 8px 9px; }
   #topbar { top: 10px; left: 10px; right: 10px; gap: 8px; }
-  .chips { top: 66px; left: 10px; right: 10px; flex-direction: row; flex-wrap: wrap; }
+  .chips { top: calc(66px + env(safe-area-inset-top, 0px)); left: 10px; right: 10px; flex-direction: row; flex-wrap: wrap; }
   .chip span:last-child { font-size: 9.5px; }
 
   /* Same band as the ghost button on the left: above the eta card / walkie-talkie
@@ -2032,7 +2207,7 @@ body.radar-on .verify-banner { display: none; }
     left: 10px; right: 10px;
     bottom: calc(78px + env(safe-area-inset-bottom));
     width: auto;
-    max-height: min(560px, calc(100vh - 190px - env(safe-area-inset-bottom)));
+    max-height: min(560px, calc(100vh - 212px - env(safe-area-inset-bottom)));
     height: auto;
     min-height: 320px;
     transform: translateY(calc(100% + 130px));
@@ -2056,15 +2231,73 @@ body.radar-on .verify-banner { display: none; }
 
   .eta-card { bottom: calc(82px + env(safe-area-inset-bottom)); flex-wrap: wrap; }
   .grid3 { grid-template-columns: 76px 1fr 1fr; }
-  /* Walkie-talkie moves to the LEFT column, above the ghost button (which tops
-     out at ~282px) — clear of the eta card (~230px), the right control column,
-     and the bottom dock, so convoy voice never covers another control. */
+  /* Walkie-talkie moves to the LEFT column, above the ghost button — clear of
+     the eta card, the right control column, and the bottom dock, so convoy
+     voice never covers another control.
+     .map-controls-left is bottom:240px + 94px tall, so its top edge is at
+     334px. The old 310px put the PTT meta squarely over the Ghost button and
+     killed its centre tap; 344px clears it with an 10px gap. */
   #wt-overlay {
     left: 12px; right: auto;
-    bottom: calc(310px + env(safe-area-inset-bottom, 0px));
+    bottom: calc(344px + env(safe-area-inset-bottom, 0px));
   }
+
   .wt-btn { width: 56px; height: 56px; }
   .wt-btn svg { width: 24px; height: 24px; }
+}
+
+/* Short viewports (a phone in landscape stays on the desktop layout, since the
+   breakpoint is width-only) cannot seat the 345px control column between the
+   topbar and the dock: the zoom group overflowed up under #btn-avatar, so a tap
+   on zoom opened the profile instead. Pinch-zoom still covers the gesture. */
+@media (max-height: 560px) {
+  .map-controls .ctl-group { display: none; }
+  /* Anchor the column to the bottom instead of centring it: at 375px of height a
+     vertically-centred column overflows upward into the topbar. */
+  .map-controls { top: auto; bottom: 12px; transform: none; }
+  /* The chips stack vertically in the desktop layout and ran down into
+     .map-controls-left (ghost/park sat on the Scanners and 0-60 chips). A short
+     viewport is always wide, so a single wrapping row fits and frees the band. */
+  .chips { flex-direction: row; flex-wrap: wrap; right: 16px; }
+  /* The side sheet started at top:72px, directly over the new chips row, and its
+     header swallowed the Scanners and 0-60 taps. min-height:320px cannot be
+     honoured in a 375px viewport either — it forced the panel off-screen. */
+  .panel { top: calc(108px + env(safe-area-inset-top, 0px)); min-height: 0; }
+  /* Shifting the controls out from under the sheet (the wide-desktop rule below)
+     only pushes them into the floating dock here — hide them instead. */
+  body:has(.panel.open) .map-controls,
+  body:has(.panel.open) .map-controls-left { display: none; }
+  /* Same stacking the phone layout needs: the race card and the eta card both
+     claim the bottom band, and the ambient chrome yields to a live race. At 375px
+     of height the chips row has to go too, and the card needs a hard cap — chips
+     (101) + an uncapped card (140) + eta (70) + dock (68) is 380px of content in
+     a 375px viewport. */
+  /* bottom:78px put the card under the floating desktop dock (which ends 86px up),
+     so clear that first, then step above the eta card when navigating. */
+  #race-hud { bottom: calc(100px + env(safe-area-inset-bottom, 0px)); max-height: 120px; }
+  #race-hud .race-hud-rows { overflow-y: auto; }
+  body:has(#eta-card.show) #race-hud { bottom: calc(172px + env(safe-area-inset-bottom, 0px)); }
+  body:has(#race-hud.show) .speedo,
+  body:has(#race-hud.show) .chips,
+  body:has(#race-hud.show) #hud-rail { display: none; }
+}
+
+/* The desktop panel is a 392px side sheet at right:16px, sitting exactly on the
+   right control column and the walkie: every map control went unreachable while
+   a panel was open. Slide them clear (392 + 16 + 12). Phones are excluded — the
+   panel is a bottom sheet there and covering the map is the expected pattern. */
+@media (min-width: 761px) {
+  /* Desktop eta card sits at bottom:96px and is ~70px tall, so the race card has
+     to start above 166px or it covers it — the same stack the phone layout does
+     at 170px and the landscape one at 172px, just against a different anchor. */
+  body:has(#eta-card.show) #race-hud { bottom: 174px; }
+  /* Full-bleed minus 32px ran the centred card into the bottom-left speedo (and
+     the right-hand walkie) on narrower desktops; it only needs the gap between. */
+  .eta-card { width: min(480px, calc(100vw - 340px)); }
+  body:has(.panel.open) .map-controls { right: 420px; }
+  /* The walkie keeps its own 44px+12px offset from the column — shifting both by
+     the same amount would just move the #ctl-loop collision along with them. */
+  body:has(.panel.open) #wt-overlay { right: 476px; }
 }
 
 /* ============================== GHOST RADAR HUD ============================== */
@@ -2072,7 +2305,10 @@ body.radar-on .verify-banner { display: none; }
    It hides the normal Convoy chrome but keeps the map + zoom controls. */
 body.radar-on #topbar,
 body.radar-on #chips,
+body.radar-on .speedo,
+body.radar-on #hud-rail,
 body.radar-on #dock { display: none !important; }
+
 body.radar-on .eta-card { bottom: calc(116px + env(safe-area-inset-bottom)); }
 
 #radar-alerts, #radar-side, #radar-dock { display: none; }
@@ -2245,7 +2481,7 @@ body.radar-on #radar-dock { display: flex; }
 
 /* ---- activation flourish: one-shot radar power-on overlay (plays when ghost engages) ---- */
 #radar-fx {
-  position: fixed; inset: 0; z-index: 11;
+  position: fixed; inset: 0; z-index: 13;
   pointer-events: none; display: none; overflow: hidden;
 }
 #radar-fx.fire { display: block; }
@@ -2259,7 +2495,19 @@ body.radar-on #radar-dock { display: flex; }
   position: absolute; left: 50%; top: 50%;
   width: 150vmax; height: 150vmax; border-radius: 50%;
   transform: translate(-50%, -50%) rotate(0deg);
-  background: conic-gradient(from 0deg, rgba(155, 77, 255, .38), rgba(155, 77, 255, 0) 32%, transparent 100%);
+  /* 150vmax across, so this is the worst banding offender in the app: three
+     stops asked the renderer to ramp alpha across a couple of thousand pixels
+     of arc. The extra stops cost nothing and remove the wedges. */
+  background: conic-gradient(from 0deg,
+    rgba(155, 77, 255, .38),
+    rgba(155, 77, 255, .33) 5%,
+    rgba(155, 77, 255, .27) 10%,
+    rgba(155, 77, 255, .21) 15%,
+    rgba(155, 77, 255, .15) 20%,
+    rgba(155, 77, 255, .09) 25%,
+    rgba(155, 77, 255, .04) 29%,
+    rgba(155, 77, 255, 0) 32%,
+    transparent 100%);
   opacity: 0;
 }
 #radar-fx.fire .rfx-sweep { animation: rfxSweep 1.25s linear forwards; }
@@ -2422,7 +2670,7 @@ body.radar-on #radar-sweep {
   border-radius: 50%; background: var(--surface-2); border: 1px solid var(--line-strong);
   color: var(--text); cursor: pointer; transition: background 140ms var(--ease), box-shadow 140ms var(--ease);
 }
-.sp-toggle { background: var(--accent); color: #0a1120; border-color: transparent; box-shadow: var(--glow-sm); }
+.sp-toggle { background: var(--accent); color: var(--accent-ink, #02101a); border-color: transparent; box-shadow: var(--glow-sm); }
 .sp-toggle:hover { filter: brightness(1.08); }
 .sp-stop { width: 34px; height: 34px; }
 .sp-stop:hover { background: rgba(255, 90, 60, .18); color: #ff7a55; }
@@ -2808,7 +3056,7 @@ body.radar-on #radar-sweep {
 
 /* live HUD (during the run) */
 .race-hud {
-  position: fixed; left: 50%; bottom: 78px; transform: translate(-50%, 16px);
+  position: fixed; left: 50%; bottom: 100px; transform: translate(-50%, 16px);
   width: min(420px, calc(100vw - 24px));
   background: var(--surface-solid);
   border: 1px solid var(--line-strong);
@@ -2900,6 +3148,46 @@ body.radar-on #radar-sweep {
   white-space: nowrap;
 }
 
+/* Phones: bottom:46px is a desktop value. The mobile dock is edge-to-edge at
+   bottom:0 and grows by env(safe-area-inset-bottom), so the readout was clipped
+   at inset 0 and swallowed whole at a 48px gesture-nav inset. Step up again
+   over the eta card (bottom:82px + ~69px tall) so the arrival line stays
+   readable while navigating — both share z-index 6, and the speedo is appended
+   last, so without this it painted straight over .eta-meta.
+   NOTE: must stay AFTER the base .speedo rule above — equal specificity. */
+@media (max-width: 760px) {
+  .speedo { bottom: calc(88px + env(safe-area-inset-bottom, 0px)); }
+  body:has(#eta-card.show) .speedo { bottom: calc(160px + env(safe-area-inset-bottom, 0px)); }
+  /* The race card carries a per-racer speed column of its own, and there is not
+     room for both readouts once it steps above the eta card. Same call as radar
+     mode, which also has its own speed display. */
+  body:has(#race-hud.show) .speedo { display: none; }
+  /* Ambient rail (clock/compass/sunrise/trip) yields to a live race the same way
+     it yields to radar — it is the only thing left in the card's band. */
+  body:has(#race-hud.show) #hud-rail { display: none; }
+
+  /* The bottom sheet covers the map, so the control columns underneath were
+     visible-but-dead: three buttons rendered normally and swallowed every tap.
+     Hide them while a panel is open — an absent control beats a lying one. */
+  body:has(.panel.open) .map-controls,
+  body:has(.panel.open) .map-controls-left,
+  body:has(.panel.open) #wt-overlay { display: none; }
+}
+
+/* Phones: pin the race card inside the corridor between the two control columns
+   (left column ends at 52px, right starts at 308px on a 360px screen) so it can
+   never sit on a map button, then step it above the eta card while navigating.
+   At bottom:78px it covered the eta card outright and blocked its End button.
+   The #id selectors outrank the base .race-hud transform rules in both states. */
+@media (max-width: 760px) {
+  #race-hud {
+    left: 60px; right: 56px; width: auto;
+    transform: translateY(16px);
+  }
+  #race-hud.show { transform: translateY(0); }
+  body:has(#eta-card.show) #race-hud { bottom: calc(170px + env(safe-area-inset-bottom, 0px)); }
+}
+
 /* ============================== parking pin (js/places.js) ============================== */
 /* Universal parking-sign blue, independent of theme so it always reads as "P". */
 .m-park {
@@ -2967,7 +3255,7 @@ body.radar-on #radar-sweep {
   position: fixed;
   /* Clears the topbar (the profile button on the right reaches ~80px) so the first
      card never sits under it, and stays above the vertically-centred map controls. */
-  top: 88px; right: 14px;
+  top: calc(88px + env(safe-area-inset-top, 0px)); right: 70px;
   z-index: 6;
   display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
   max-height: calc(100vh - 340px);
@@ -2978,8 +3266,23 @@ body.radar-on #radar-sweep {
 .hud-rail::-webkit-scrollbar { display: none; }
 /* Phones: the chips become a wrapping row across the top, so drop the rail below
    them. Controls + dock sit at the bottom, so the mid-right band is clear. */
+/* Short viewports turn .chips into a row that runs to ~101px (see the
+   max-height block above), so the rail has to drop below it. Stated here rather
+   than in that block because the base .hud-rail rule follows it in source order
+   and would otherwise win on equal specificity. */
+@media (max-height: 560px) {
+  .hud-rail { top: calc(112px + env(safe-area-inset-top, 0px)); }
+}
+
 @media (max-width: 760px) {
-  .hud-rail { top: 128px; right: 10px; max-height: calc(100vh - 430px); }
+  .hud-rail {
+    top: calc(128px + env(safe-area-inset-top, 0px));
+    /* Control column is 42px wide at right:10px. Sitting the rail at right:10px
+       too meant the cards covered #ctl-compass and #ctl-hazard on short phones
+       (the two columns only miss each other at ~812px tall). 62px = 10 + 42 + 10. */
+    right: 62px;
+    max-height: calc(100vh - 430px);
+  }
 }
 .hud-coords .hc-v { white-space: nowrap; }
 .hud-card {
@@ -3054,7 +3357,9 @@ body.radar-on #radar-sweep {
 /* Overspeed banner (js/speedalert.js) — top-center, hidden until triggered. */
 .overspeed-banner {
   position: fixed;
-  top: 66px; left: 50%;
+  /* 66px collided head-on with the mobile chips row (also top:66px) and covered
+     most of the Global chip exactly while you were speeding. */
+  top: calc(132px + env(safe-area-inset-top, 0px)); left: 50%;
   transform: translate(-50%, -12px);
   z-index: 9;
   display: flex; align-items: center; gap: 8px;
@@ -3070,3 +3375,71 @@ body.radar-on #radar-sweep {
 .overspeed-banner.on { opacity: 1; transform: translate(-50%, 0); }
 .overspeed-banner b { font: 800 12px var(--font-body); letter-spacing: .1em; }
 .overspeed-banner span { font: 700 13px var(--font-mono); }
+
+/* ============================== phone in landscape ==============================
+   A phone turned sideways matches BOTH the max-width:760px (mobile) and the
+   max-height:560px (short) blocks, and the two disagree: the short block was
+   written for the desktop layout's floating dock, so `.map-controls{bottom:12px}`
+   drops the column onto the edge-to-edge mobile dock, and the mobile stack's
+   bottom offsets (240px controls, 344px walkie) simply do not fit — the walkie
+   ended up above the top of the screen.
+
+   At 640x360 there is ~200px of usable height between the header and the dock,
+   but ~630px of width. So lay the control columns out HORIZONTALLY just above
+   the dock and let the contextual cards own the middle band. Appended at the end
+   of the file deliberately: every rule here has to outrank the mobile and short
+   blocks above, and several are plain class selectors that win on order alone. */
+@media (max-width: 760px) and (max-height: 560px) {
+  .map-controls,
+  .map-controls-left {
+    flex-direction: row;
+    top: auto; transform: none;
+    bottom: calc(78px + env(safe-area-inset-bottom, 0px));
+  }
+  .map-controls { right: 10px; left: auto; }
+  .map-controls-left { left: 10px; right: auto; }
+
+  /* Ambient readouts have no band left to live in once the controls take the
+     strip above the dock. The eta/race cards carry what matters while moving. */
+  .speedo,
+  #hud-rail { display: none; }
+
+  /* Walkie moves to the right edge so it never shares x with the eta card or the
+     left control row; the mobile block parks it at bottom:344px, off-screen here. */
+  #wt-overlay {
+    left: auto; right: 10px;
+    bottom: calc(128px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .eta-card {
+    bottom: calc(128px + env(safe-area-inset-bottom, 0px));
+    width: min(420px, calc(100vw - 180px));
+  }
+
+  /* Race card takes the same band and stops short of the walkie. Capped, with
+     scrolling rows, because an uncapped card would run off the top here. */
+  #race-hud {
+    left: 10px; right: 80px; width: auto;
+    bottom: calc(128px + env(safe-area-inset-bottom, 0px));
+    max-height: 110px;
+    transform: translateY(16px);
+  }
+  #race-hud.show { transform: translateY(0); }
+  /* Nothing else fits beside a live race at this height: the chips and speedo are
+     already hidden by the short block, and navigation yields for the duration. */
+  body:has(#race-hud.show) .eta-card { display: none; }
+}
+
+/* ============================== very narrow phones ==============================
+   Everything positioned below the chips (hud-rail 128px, toasts 172px, the
+   overspeed banner 132px, the panel's 212px reserve) is calibrated against a
+   TWO-row chip band ending at 126px. At 320px wide the band silently becomes
+   three rows (66→160) and every one of those offsets lands inside it.
+
+   The band only overflows by ~10px: chip-live (133) + gap + chip-global (169) is
+   310 in a 300px space. Trimming horizontal padding and the icon gap claws back
+   enough for two rows and leaves the 26px chip height — and therefore the whole
+   126px calibration — untouched. Appended so it outranks the mobile block. */
+@media (max-width: 360px) {
+  .chip { padding: 7px 9px; gap: 6px; }
+}

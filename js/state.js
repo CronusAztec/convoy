@@ -27,7 +27,8 @@
     mapStyle: 'auto',     // auto | dark | positron | voyager | liberty | bright
     units: 'mi',          // mi | km
     showGlobal: true,
-    anim: true,
+    anim: !(typeof matchMedia === 'function' &&
+            matchMedia('(prefers-reduced-motion: reduce)').matches),
     showSpace: true,      // stars/planets/moon + day-night shading around the globe
     followCam: true,
     adaptiveZoom: true,   // follow camera eases zoom out at highway speed, in around town
@@ -47,10 +48,35 @@
     speedAlert: 0,        // overspeed alert threshold in current units; 0 = off (js/speedalert.js)
     nightDim: 0,          // night-drive glare dimmer 0..0.7 (js/dimmer.js)
     avoidPolice: true,    // prefer route alternatives that skirt police stations + speed cameras
+    // Anonymous crash reports + core-loop analytics (js/telemetry.js). ON by
+    // default and disclosed in the privacy policy; turning it off stops all
+    // sending immediately and drops anything already queued. telemetry.js reads
+    // this straight out of localStorage, because it runs before this module.
+    diagnostics: true,
     voiceNav: true,       // spoken turn-by-turn navigation during a trip
     navVoiceName: '',     // custom navigator voice ('' = auto-pick a female voice)
     proxVoice: 'off',     // auto voice chat with riders around you: off | radius | sight | road
+    // ---- walkie-talkie voice chat (js/voice.js) ----
+    // Everything below drives the audio graph directly. Per-rider volume is
+    // deliberately NOT here: rider ids are connection-scoped, so a persisted
+    // map would key on ids that don't survive a reconnect. It lives in memory
+    // for the session and resets, like a mute in any other call app.
+    voiceSelfMute: false, // mic held muted regardless of PTT / open / toggle
+    voiceDeafen: false,   // silence every peer at once, without dropping the calls
+    voiceOutVol: 1,       // master output volume 0..1
+    voiceInputId: '',     // chosen microphone deviceId ('' = system default)
+    voiceOutputId: '',    // chosen output deviceId ('' = system default; needs setSinkId)
+    voiceEc: true,        // echo cancellation
+    voiceNs: true,        // noise suppression
+    voiceAgc: true,       // automatic gain control
+    voiceIsolation: false,// browser voice isolation, where the engine offers it
+    voiceLeveler: false,  // compressor on the master bus — evens out a loud rider
     ghost: false,         // invisible to other riders; reveal aircraft + police
+    // Edge arrows pointing at convoy riders who are off screen (js/riderarrows.js).
+    // The complement to "fit the convoy": once riders are far enough apart that
+    // fitting them all would zoom out past usefulness, arrows are how you still
+    // know where everyone is.
+    riderArrows: true,
     // ---- radar sonar (Ghost Mode audio) ----
     sonarVol: 0.8,        // master sonar volume 0..1
     sonarHeart: true,     // heartbeat on/off
@@ -86,6 +112,11 @@
     ghostAirMil: true,      // military
     ghostAirPolice: true,   // law-enforcement (police planes + rotor units)
     ghostAirEms: true,      // EMS / medevac / air-ambulance
+    // Contacts the classifier will not guess at: no callsign, or a tactical one
+    // that is neither an airline flight number nor a registration. Kept ON by
+    // default — an unidentified aircraft overhead is the interesting case, and
+    // calling it "civilian" to tidy the map would be the wrong kind of tidy.
+    ghostAirUnknown: true,
     ghostHotspots: true,  // police probability "usually here" heatmap layer
     // ---- map rider-dot colors (recolor the 5 rider categories live) ----
     // Each maps to a CSS var (--dot-you, --dot-friend, …) written inline on :root.
@@ -150,7 +181,14 @@
   function emit(evt, data) {
     var list = subs[evt] || [];
     for (var i = 0; i < list.length; i++) {
-      try { list[i](data); } catch (e) { console.error('[convoy] handler error for ' + evt, e); }
+      // A throwing subscriber is a real bug that used to be invisible: the bus
+      // swallowed it into console.error, where nobody on a phone will ever read
+      // it. Log it AND report it — this is one of the highest-yield capture
+      // points in the app, since almost every module reaches the UI through here.
+      try { list[i](data); } catch (e) {
+        console.error('[convoy] handler error for ' + evt, e);
+        if (A.telemetry) A.telemetry.capture(e, 'bus:' + evt);
+      }
     }
   }
 
@@ -269,6 +307,12 @@
     var root = document.documentElement.style;
     root.setProperty('--accent', hex);
     root.setProperty('--accent-rgb', rgb[0] + ',' + rgb[1] + ',' + rgb[2]);
+    // Dark accents (Electric Violet, Hot Pink, any custom dark colour) need
+    // white ink on accent-backed controls; light ones keep the near-black.
+    // Chosen by measured contrast rather than a luma cutoff: luma() weights
+    // gamma-encoded channels, so it called hot pink, green, red, purple and blue
+    // "dark" and gave them white ink at 2.3-4.0:1. bestInk compares both.
+    root.setProperty('--accent-ink', U.bestInk(hex));
     emit('accent', hex);
   }
 
@@ -364,7 +408,7 @@
      stored consent, so the gate reappears and everyone re-accepts before they
      can ride. Bump it whenever either document changes materially, and keep it
      in step with the version printed at the top of legal/terms.html. */
-  var LEGAL_VERSION = '1.1';
+  var LEGAL_VERSION = '1.2';
 
   // TRUE only for a consent recorded against the CURRENT documents, with every
   // box actually ticked. An older version, or a partial record, reads as no

@@ -5,6 +5,15 @@
 
   window.addEventListener('DOMContentLoaded', function () {
     A.store.load();
+    // Straight after load() so the reporter can see the rider's opt-out, and
+    // before anything else gets a chance to throw. Its error handlers were
+    // installed back at script-load time; this only starts the session and
+    // wires the funnel.
+    if (A.telemetry) A.telemetry.init();
+    // OTA check first of all: it is fully async and must not depend on the map
+    // or any later step — a hotfix channel that only fires when the app is
+    // healthy cannot fix the app. ready() is confirmed at the END of boot.
+    if (A.ota) A.ota.init();
     A.store.applyTheme();
     A.store.applyAccent();
     A.store.applyAnim();
@@ -21,6 +30,7 @@
     }
 
     A.mapview.init().then(function () {
+      if (A.telemetry) A.telemetry.step('map_ready');
       A.sim.start();   // player marker + render loop (map runs under the auth screen)
       A.ui.init();     // wire panels/dock/search (no modal yet)
       A.voice.init();  // walkie-talkie: listen for convoy membership to start/stop voice
@@ -40,10 +50,23 @@
       if (A.battery) A.battery.init();
       if (A.coords) A.coords.init();
       if (A.destarrow) A.destarrow.init();
+      if (A.riderarrows) A.riderarrows.init(); // edge arrows to off-screen convoy riders
       if (A.speedalert) A.speedalert.init(); // overspeed banner (no rail card)
       if (A.dimmer) A.dimmer.init();         // night-drive glare overlay
       if (A.tripextras) A.tripextras.init(); // ETA-card weather + share + save
       A.auth.boot();   // decide: show auth screen, or enter app + connect (net.connect)
+      // OTA handshake, deliberately LAST and only on the success path: the
+      // bundle that is running proved it can boot (map up, UI wired, auth
+      // decided). A bundle that threw anywhere above must never be confirmed —
+      // that is what the plugin's watchdog counts.
+      if (A.ota) A.ota.ready();
+    }).catch(function (e) {
+      // The map failing to initialise is the worst crash this app has: the rider
+      // gets a black screen and nothing after this line runs. It used to be an
+      // unhandled rejection with no route off the device.
+      if (A.telemetry) A.telemetry.capture(e, 'mapview.init');
+      if (A.ui && A.ui.toast) A.ui.toast('The map failed to load. Try reopening Convoy.', 'warn');
+      // NOTE: no A.ota.ready() here on purpose — see the comment above it.
     });
   });
 })();

@@ -12,10 +12,21 @@ Last reviewed: 2026-08-25.
 
 ## Bundled / linked software
 
+> This page covers **licences and attribution**. For what each of these
+> *collects* — the list the store privacy labels are filled from — see
+> [SDK-INVENTORY.md](SDK-INVENTORY.md).
+
 | Component | Version | Licence | Notes |
 |---|---|---|---|
 | [MapLibre GL JS](https://maplibre.org/) | 5.24.0 | BSD-3-Clause | Loaded from jsDelivr. Map renderer. |
 | [Capacitor](https://capacitorjs.com/) (`@capacitor/core`, `/android`, `/geolocation`, CLI) | 8.x | MIT | Android shell + geolocation bridge. |
+| [TensorFlow.js](https://www.tensorflow.org/js) | 4.22.0 | Apache-2.0 | Loaded from jsDelivr **only when a rider picks a profile photo**. Runs on-device. |
+| [NSFWJS](https://github.com/infinitered/nsfwjs) + MobileNet v2 model | 4.2.1 | Apache-2.0 (model: Apache-2.0) | Same. Screens the photo locally; nothing is uploaded to screen it. |
+| **Google Play Services** — `play-services-location` (+ `-base`, `-basement`, `-tasks`, `auth-api-signin`) | — | [Google APIs Terms of Service](https://developers.google.com/terms) — **not open source** | Linked into the APK transitively by `@capacitor/geolocation`. The fused location provider behind every GPS fix. |
+| `io.ionic.libs:iongeolocation-android` | 2.2.0 | MIT | Transitive of `@capacitor/geolocation`. |
+| AndroidX — `appcompat`, `coordinatorlayout`, `core-splashscreen`, `browser` (Custom Tabs) | — | Apache-2.0 | UI + the Custom Tab that carries social sign-in. |
+| [Gson](https://github.com/google/gson) | 2.13.2 | Apache-2.0 | Transitive of `@capacitor/geolocation`. |
+| `org.jetbrains.kotlinx:kotlinx-coroutines-play-services` | — | Apache-2.0 | Transitive of `@capacitor/geolocation`. |
 | [ws](https://github.com/websockets/ws) | 8.x | MIT | WebSocket server. |
 | [node-postgres (`pg`)](https://node-postgres.com/) | 8.x | MIT | Postgres client. |
 | [Chakra Petch](https://fonts.google.com/specimen/Chakra+Petch), [Share Tech Mono](https://fonts.google.com/specimen/Share+Tech+Mono) | — | SIL Open Font License 1.1 | Served by Google Fonts. |

@@ -634,7 +634,15 @@
     ctx.fillStyle = '#eae6da';
     ctx.beginPath();
     ctx.arc(0, 0, r, -Math.PI / 2, Math.PI / 2, false);       // sunward half
-    ctx.ellipse(0, 0, rx, r, 0, Math.PI / 2, Math.PI * 1.5, k < 0.5); // terminator
+    if (ctx.ellipse) {
+      ctx.ellipse(0, 0, rx, r, 0, Math.PI / 2, Math.PI * 1.5, k < 0.5); // terminator
+    } else {
+      // Legacy WebViews without ellipse(): one quadratic from pole to pole. Its
+      // control point sits at 2·rx on the bulge side, which is the quadratic
+      // whose midpoint excursion equals the ellipse's semi-axis.
+      var cx = 2 * rx * (k < 0.5 ? -1 : 1);
+      ctx.quadraticCurveTo(cx, 0, 0, -r);
+    }
     ctx.fill();
     ctx.restore();
 

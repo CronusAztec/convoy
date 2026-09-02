@@ -341,6 +341,24 @@
     return Math.min(25, risk);
   }
 
+  /* The five aircraft ownership categories, shared with the map layer and the
+     settings panel. One table so a label, a badge and a filter key cannot drift
+     apart across three files. */
+  var OWNERS = {
+    military: { label: 'Military', badge: '⚑ ' },
+    police:   { label: 'Police',   badge: '🚤 ' },
+    ems:      { label: 'EMS',      badge: '✦ ' },
+    civilian: { label: 'Civilian', badge: '' },
+    unknown:  { label: 'Unidentified', badge: '? ' }
+  };
+  var OWNER_SETTING = {
+    military: 'ghostAirMil',
+    police: 'ghostAirPolice',
+    ems: 'ghostAirEms',
+    civilian: 'ghostAirCiv',
+    unknown: 'ghostAirUnknown'
+  };
+
   function classifyHeli(p) {
     if (p.category === 'A7') return true; // ADS-B Exchange rotorcraft category — authoritative
     if (p.alt == null || p.speed == null || p.ground) return false;
@@ -376,18 +394,20 @@
       var heli = classifyHeli(p);
       // Shape filter (airplane vs helicopter) — independent of ownership.
       if (!kindAllowed(heli ? 'heli' : 'air')) continue;
-      // Ownership filter: the board ranks threats, so each class gates separately.
-      // Civilian defaults off (a passing airliner isn't a threat); mil/police/EMS
-      // default on. The map dot stays regardless — these only govern the board/sonar.
-      var owner = p.owner || (p.mil ? 'military' : 'civilian');
-      if (owner === 'civilian' && !s('ghostAirCiv', false)) continue;
-      if (owner === 'military' && !s('ghostAirMil', true)) continue;
-      if (owner === 'police' && !s('ghostAirPolice', true)) continue;
-      if (owner === 'ems' && !s('ghostAirEms', true)) continue;
-      // sub line: ownership badge first (⚑ mil / 🚔 police / ✚ ems), then type/reg.
-      var badge = owner === 'military' ? '⚑ ' : owner === 'police' ? '🚔 ' : owner === 'ems' ? '✚ ' : '';
-      var ownLabel = p.ownerName || (owner === 'military' ? 'Military' : owner === 'police' ? 'Police' : owner === 'ems' ? 'EMS' : 'Civilian');
-      var sub = badge + ownLabel + ' · ' + (p.acType ? (p.acType + (p.reg ? ' · ' + p.reg : '')) : (p.country || 'Aircraft'));
+      // Ownership filter. These are the SAME five settings the map layer reads,
+      // so a category switched off disappears from the board and the map
+      // together — it used to gate only the board, which made "Civilian off"
+      // look like it had done nothing.
+      var owner = OWNERS[p.owner] ? p.owner : 'unknown';
+      if (!s(OWNER_SETTING[owner], true)) continue;
+      // sub line: ownership badge first, then whatever detail the feed gives.
+      var badge = OWNERS[owner].badge;
+      var ownLabel = p.ownerName || OWNERS[owner].label;
+      // OpenSky carries no aircraft type or registration — those came from
+      // ADS-B Exchange, which now refuses everyone — so the detail line falls
+      // back to origin country, then squawk. Real data rather than a blank.
+      var detail = p.country || (p.squawk ? 'Squawk ' + p.squawk : 'Aircraft');
+      var sub = badge + ownLabel + ' · ' + detail;
       out.push({
         // Prefer the publisher's stable key (ICAO hex) so the board can track a
         // contact across prediction repaints. The coordinate fallback only kicks in
@@ -397,7 +417,8 @@
         kind: heli ? 'heli' : 'air',
         owner: owner,
         type: heli ? 'Helicopter' : 'Airplane',
-        desc: (p.callsign && p.callsign !== '—') ? p.callsign : (p.reg || 'Unknown'),
+        desc: (p.callsign && p.callsign !== '—') ? p.callsign
+          : (p.icao ? String(p.icao).toUpperCase() : 'Unidentified'),
         sub: sub,
         coord: co, dist: d, rel: U.relBearing(c, hd, co), alt: p.alt
       });

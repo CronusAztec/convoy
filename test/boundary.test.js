@@ -66,6 +66,9 @@ H.group('Scraped sources never reach the shipped app');
   }
 
   // ...and the whole repo agrees: only the finder knows those hosts.
+  // legal/ is exempt: the third-party-notices page is where the licenses say
+  // the sources MUST be credited — naming PulsePoint there is disclosure to
+  // riders, not a client that talks to the host. Everything else is fair game.
   const strays = [];
   (function walk(dir) {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -74,7 +77,8 @@ H.group('Scraped sources never reach the shipped app');
       if (e.isDirectory()) { walk(p); continue; }
       if (!/\.(js|html)$/i.test(e.name)) continue;
       const rel = path.relative(ROOT, p).split(path.sep).join("/");
-      if (rel === 'server/police-finder.js' || rel.indexOf('test/') === 0) continue;
+      if (rel === 'server/police-finder.js' || rel.indexOf('test/') === 0 ||
+          rel.indexOf('legal/') === 0) continue;
       const body = fs.readFileSync(p, 'utf8');
       if (SERVER_ONLY.some((s) => s.re.test(body))) strays.push(rel);
     }

@@ -179,7 +179,13 @@
   register({ id: 'dark', name: 'Dark', dark: true });
 
   // Bright variant — vars live in styles.css [data-theme="light"].
-  register({ id: 'light', name: 'Light', dark: false });
+  // Light defines no vars (they live in styles.css [data-theme="light"]) but it
+  // MUST define an accent: without one it inherits the dark-tuned default
+  // #9aa3b0, which measures 2.15:1. #46505d keeps the same neutral slate
+  // character at 5.35:1, measured against the background the label actually sits
+  // on (--bg #c7d2e0): .glass is translucent over the map, so the --surface
+  // token is not what it renders against. Same reasoning as --text-dim on Frost.
+  register({ id: 'light', name: 'Light', dark: false, accent: '#46505d' });
 
   /* GTA V — Los Santos.
      UI: the pause-menu look — near-black panels, sharp rectangles, no neon glow,
@@ -475,7 +481,9 @@
     id: 'toon',
     name: 'Toon',
     dark: false,
-    accent: '#ff6b35',
+    // #ff6b35 measured 2.76:1 on Toon's cream surface; #c2410c holds the warm
+    // comic orange at 5.04:1.
+    accent: '#c2410c',
     fontsUrl: 'https://fonts.googleapis.com/css2?family=Bangers&family=Comic+Neue:wght@400;700&display=swap',
     vars: {
       '--bg': '#fdf3e0',
@@ -537,7 +545,10 @@
     id: 'frost',
     name: 'Frost',
     dark: false,
-    accent: '#0a84ff',
+    // #0a84ff measured 3.43:1 against the rendered background; #0060c7 stays in
+    // the same blue family at 5.11:1. Measured on .speedo span, not the surface
+    // token — .glass is translucent, so the map shows through.
+    accent: '#0060c7',
     fontsUrl: 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap',
     vars: {
       '--bg': '#e9edf3',

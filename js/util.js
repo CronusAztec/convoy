@@ -101,9 +101,39 @@
   }
 
   // Perceived brightness 0..255 — used to pick readable strokes on paint chips
+  // Rough brightness sort over gamma-encoded channels. Good enough to classify a
+  // palette as light or dark; do NOT use it to choose ink — see bestInk below.
   function luma(hex) {
     var c = hexToRgb(hex);
     return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  }
+
+  // WCAG relative luminance: channels linearized before weighting. This is what
+  // actually predicts contrast, and it is why luma() cannot: on gamma-encoded
+  // values a mid-bright hue like #ff2bd6 reads as "dark" and gets white ink at
+  // 3.2:1, when near-black would have given 6.0:1.
+  function relLuma(hex) {
+    var c = hexToRgb(hex);
+    var f = c.map(function (v) {
+      v /= 255;
+      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    });
+    return 0.2126 * f[0] + 0.7152 * f[1] + 0.0722 * f[2];
+  }
+
+  // WCAG 2.1 contrast ratio, 1..21.
+  function contrast(a, b) {
+    var l1 = relLuma(a), l2 = relLuma(b);
+    return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+  }
+
+  // Pick the ink that actually reads better on `bg`. With two candidates a direct
+  // ratio comparison is optimal and has no threshold to mis-tune — a luma cutoff
+  // got 5 of the 9 pickable accent swatches wrong, each landing under 4.5:1.
+  function bestInk(bg, darkInk, lightInk) {
+    darkInk = darkInk || '#02101a';
+    lightInk = lightInk || '#ffffff';
+    return contrast(darkInk, bg) >= contrast(lightInk, bg) ? darkInk : lightInk;
   }
 
   // Own-property probe for the object literals used as allowlists/lookup
@@ -268,7 +298,7 @@
     lerp: lerp, lerpPos: lerpPos, lerpAngle: lerpAngle,
     clamp: clamp, rand: rand, randInt: randInt, pick: pick, chance: chance, uid: uid, own: own,
     fmtDist: fmtDist, fmtDur: fmtDur, fmtClock: fmtClock,
-    hexToRgb: hexToRgb, luma: luma, esc: esc, safePaint: safePaint, safeFinish: safeFinish, el: el, debounce: debounce, deepClone: deepClone,
+    hexToRgb: hexToRgb, luma: luma, relLuma: relLuma, contrast: contrast, bestInk: bestInk, esc: esc, safePaint: safePaint, safeFinish: safeFinish, el: el, debounce: debounce, deepClone: deepClone,
     sunTimes: sunTimes, isDaylight: isDaylight,
     iconKey: iconKey, riderIcon: riderIcon, convoyFlag: convoyFlag, ICON_COUNT: ICON_PATHS.length
   };

@@ -47,6 +47,9 @@
       lastFocus = null;
     }
     openName = name;
+    // The screen a session ends on is the screen people quit from, so it is
+    // worth knowing — the NAME only, never what is rendered on it.
+    if (A.telemetry) A.telemetry.screen(name || 'map');
     if (name === 'nearby') renderNearby();
     if (name === 'convoy') renderConvoy();
     if (name === 'profile') {
@@ -316,6 +319,7 @@
 
   function renderNearby() {
     var body = document.getElementById('nearby-body');
+    if (!body) return; // absent panel must not desync openName from the DOM
     body.innerHTML = '';
     nearbyRefs = {};
 
@@ -386,7 +390,7 @@
       // Tap the row → fly + popup; tap the avatar/name → Instagram-style profile.
       row.addEventListener('click', function (e) {
         if (e.target === btn) return;
-        A.mapview.flyToUser(npc.livePos || npc.pos);
+        A.mapview.focusRider(npc.livePos || npc.pos);
         A.mapview.showNpcPopup(npc.id);
       });
       row.querySelector('.u-ava').addEventListener('click', function (e) {
@@ -477,7 +481,7 @@
       var npc = A.sim.getByUsername(f.username);
       if (npc) {
         var loc = U.el('button', 'btn btn-small', 'Locate');
-        loc.addEventListener('click', function () { A.mapview.flyToUser(npc.livePos || npc.pos); A.mapview.showNpcPopup(npc.id); });
+        loc.addEventListener('click', function () { A.mapview.focusRider(npc.livePos || npc.pos); A.mapview.showNpcPopup(npc.id); });
         side.appendChild(loc);
       }
       if (f.online) {
@@ -563,6 +567,7 @@
   function renderConvoy() {
     var body = document.getElementById('convoy-body');
     var sub = document.getElementById('convoy-sub');
+    if (!body || !sub) return; // absent panel must not desync openName from the DOM
     body.innerHTML = '';
     convoyMemberRefs = {};
 
@@ -591,7 +596,9 @@
       }
       var createBtn = U.el('button', 'btn btn-primary btn-block', 'Create convoy');
       createBtn.addEventListener('click', function () {
-        A.party.create(nameInput.value || nameInput.placeholder, chosen);
+        // Trim like the join-code path below: whitespace-only must fall back
+        // to the placeholder name, not create a convoy called "   ".
+        A.party.create(nameInput.value.trim() || nameInput.placeholder, chosen);
       });
       hero.appendChild(mkField('Convoy name', nameInput));
       hero.appendChild(mkField('Flag', flagRow));
@@ -629,6 +636,35 @@
     leaveBtn.addEventListener('click', function () { A.party.leave(); });
     head.appendChild(leaveBtn);
     body.appendChild(head);
+
+    // "Where is everyone" as one button. It fits the whole convoy into a single
+    // view, and when the group is too spread out for that to leave anyone
+    // visible it says so and leans on the edge arrows instead of zooming out to
+    // a map where nobody can be told apart.
+    var fitBtn = U.el('button', 'btn btn-block btn-ghost', 'Fit the whole convoy on screen');
+    fitBtn.addEventListener('click', function () {
+      var pts = [];
+      var me = A.sim && A.sim.playerPos && A.sim.playerPos();
+      if (me) pts.push(me);
+      S.party.members.forEach(function (id) {
+        var npc = A.sim.getNpc(id);
+        var p = npc && (npc.livePos || npc.pos);
+        if (p) pts.push(p);
+      });
+      var r = A.mapview.fitRiders(pts);
+      if (r.ok) { closePanels(); return; }
+      if (r.reason === 'spread') {
+        A.ui.toast('Riders are too far apart to fit — follow the edge arrows instead', 'info');
+        if (S.settings.riderArrows === false) {
+          ST.setSetting('riderArrows', true);
+          if (A.riderarrows) A.riderarrows.refresh();
+        }
+        closePanels();
+        return;
+      }
+      A.ui.toast('No rider positions yet', 'info');
+    });
+    body.appendChild(fitBtn);
 
     // SOS beacon: one tap drops a "needs help" pin for riders nearby AND tells
     // the convoy chat — for breakdowns, flats, or losing the group.
@@ -693,7 +729,7 @@
         chip.appendChild(kickBtn);
       }
       chip.querySelector('.u-ava').addEventListener('click', function () {
-        A.mapview.flyToUser(npc.livePos || npc.pos);
+        A.mapview.focusRider(npc.livePos || npc.pos);
       });
       // Tap the member's name for the Instagram-style profile.
       var nameEl = chip.querySelector('.member-info b');
@@ -796,6 +832,7 @@
 
   function updateDockBadge() {
     var badge = document.getElementById('dock-convoy-badge');
+    if (!badge) return; // a missing badge must not throw on every party emit
     var n = S.party ? S.party.members.length : 0;
     badge.hidden = !n;
     badge.textContent = n;
@@ -1583,6 +1620,7 @@
 
   function buildProfilePanel() {
     var body = document.getElementById('profile-body');
+    if (!body) return; // absent panel must not desync openName from the DOM
     body.innerHTML = '';
     if (profileView === 'garage') buildGaragePage(body);
     else buildProfileMain(body);
@@ -2047,30 +2085,49 @@
     });
     body.appendChild(resetBtn);
 
-    body.appendChild(U.el('div', 'section-label', 'Map & live'));
-
-    body.appendChild(mkRow('Global drivers', null,
-      mkToggle(S.settings.showGlobal, function (v) { ST.setShowGlobal(v); })));
-    body.appendChild(mkRow('Smooth animations', null,
+    /* "Map & live" used to be one bin holding the camera, the globe scenery, the
+       speedometer, the screen-wake lock and the parking pin — five unrelated
+       things under a heading that described none of them. Split by what a rider
+       is actually looking for. */
+    body.appendChild(U.el('div', 'section-label', 'Camera'));
+    body.appendChild(mkRow('Follow camera', 'Keep the map centred on you as you drive',
+      mkToggle(S.settings.followCam, function (v) { ST.setFollowCam(v); })));
+    body.appendChild(mkRow('Speed-adaptive zoom', 'Eases out at highway speed, back in around town',
+      mkToggle(S.settings.adaptiveZoom, function (v) { ST.setSetting('adaptiveZoom', v); })));
+    body.appendChild(mkRow('Smooth animations', 'Camera flights and transitions',
       mkToggle(S.settings.anim, function (v) { ST.setAnim(v); })));
+
+    /* ---- Riders on the map ---- */
+    body.appendChild(U.el('div', 'section-label', 'Riders on the map'));
+    body.appendChild(mkRow('Global drivers', 'The world-wide delayed layer, in amber',
+      mkToggle(S.settings.showGlobal, function (v) { ST.setShowGlobal(v); })));
+    body.appendChild(mkRow('Arrows to convoy riders', 'Off-screen riders get an edge arrow you can tap to fly to them',
+      mkToggle(S.settings.riderArrows !== false, function (v) {
+        ST.setSetting('riderArrows', v);
+        if (A.riderarrows && A.riderarrows.refresh) A.riderarrows.refresh();
+      })));
+    body.appendChild(U.el('div', 'hint-card',
+      'The convoy button on the map fits everyone into one view. When riders are too ' +
+      'far apart for that to be useful, the arrows are how you still know where they are.'));
+
+    /* ---- Driving ---- */
+    body.appendChild(U.el('div', 'section-label', 'Driving'));
+    body.appendChild(mkRow('Keep screen awake', 'Stops the display sleeping while riding',
+      mkToggle(S.settings.keepAwake, function (v) { ST.setSetting('keepAwake', v); })));
+    body.appendChild(mkRow('Auto parking pin', 'Drops a pin where a trip ends',
+      mkToggle(S.settings.autoParkPin, function (v) { ST.setSetting('autoParkPin', v); })));
     body.appendChild(mkRow('Space scenery', 'Stars, planets & day/night on the globe',
       mkToggle(S.settings.showSpace !== false, function (v) {
         ST.setSetting('showSpace', v);
         if (A.space && A.space.setEnabled) A.space.setEnabled(v);
       })));
-    body.appendChild(mkRow('Follow camera', null,
-      mkToggle(S.settings.followCam, function (v) { ST.setFollowCam(v); })));
-    body.appendChild(mkRow('Speed-adaptive zoom', 'Camera eases out at highway speed',
-      mkToggle(S.settings.adaptiveZoom, function (v) { ST.setSetting('adaptiveZoom', v); })));
-    body.appendChild(mkRow('Speedometer', 'Live speed HUD with session top & average',
-      mkToggle(S.settings.showSpeedo, function (v) { ST.setSetting('showSpeedo', v); })));
-    body.appendChild(mkRow('Keep screen awake', 'Stops the display sleeping while riding',
-      mkToggle(S.settings.keepAwake, function (v) { ST.setSetting('keepAwake', v); })));
-    body.appendChild(mkRow('Auto parking pin', 'Drops a pin where a trip ends',
-      mkToggle(S.settings.autoParkPin, function (v) { ST.setSetting('autoParkPin', v); })));
 
     /* ---- Instruments (HUD rail cards + driving alerts) ---- */
     body.appendChild(U.el('div', 'section-label', 'Instruments'));
+    // The speedometer is an instrument. It lived under "Map & live" purely
+    // because that is where it was written, not because anyone would look there.
+    body.appendChild(mkRow('Speedometer', 'Live speed with session top & average',
+      mkToggle(S.settings.showSpeedo, function (v) { ST.setSetting('showSpeedo', v); })));
     body.appendChild(mkRow('Compass', 'Heading rose with cardinal direction',
       mkToggle(S.settings.showCompass !== false, function (v) { ST.setSetting('showCompass', v); })));
     body.appendChild(mkRow('Clock & sun', 'Local time and the next sunrise / sunset',
@@ -2142,21 +2199,8 @@
     body.appendChild(mkRow('Ghost mode',
       'Go invisible and reveal nearby aircraft and police', ghostToggle));
 
-    /* ---- Voice chat (proximity auto-connect) ---- */
-    body.appendChild(U.el('div', 'section-label', 'Voice chat'));
-    body.appendChild(mkField('Auto voice chat', mkSegmented([
-      { label: 'Off', value: 'off' },
-      { label: 'Nearby', value: 'radius' },
-      { label: 'In sight', value: 'sight' },
-      { label: 'My road', value: 'road' }
-    ], (S.settings.proxVoice || 'off'), function (v) {
-      if (A.voice && A.voice.setProxMode) A.voice.setProxMode(v);
-      else ST.setSetting('proxVoice', v);
-    })));
-    body.appendChild(U.el('div', 'hint-card',
-      'Automatically links the walkie-talkie with riders <b>around you</b>, <b>in sight ahead</b> or ' +
-      '<b>sharing your road</b>, like proximity voice chat. Both riders need it on. ' +
-      'Convoy voice always works; Ghost mode pauses it.'));
+    /* ---- Voice chat ---- */
+    buildVoiceSettings(body);
 
     /* ---- Routing ---- */
     body.appendChild(U.el('div', 'section-label', 'Routing'));
@@ -2193,34 +2237,17 @@
     body.appendChild(mkRow('Spoken alerts', 'Voice callout: "Police ahead, 1.2 miles"',
       mkToggle(S.settings.sonarSpoken !== false, function (v) { ST.setSetting('sonarSpoken', v); })));
 
-    /* ---- Ghost target filters (which Ghost-Mode targets are tracked) ---- */
-    body.appendChild(U.el('div', 'section-label', 'Ghost targets'));
-    body.appendChild(mkRow('Police on map', 'Show police, cameras & live Waze sightings on the map everywhere',
+    /* ---- Ground targets ---- */
+    body.appendChild(U.el('div', 'section-label', 'Police & cameras'));
+    body.appendChild(mkRow('Police on map', 'Stations, cameras and live Waze sightings, everywhere you drive',
       mkToggle(S.settings.ghostPolice, function (v) { ST.setSetting('ghostPolice', v, 'ghostpolice'); })));
-    body.appendChild(mkRow('Speed cameras', null,
+    body.appendChild(mkRow('Speed cameras', 'Fixed enforcement cameras as their own pins',
       mkToggle(S.settings.ghostCamera, function (v) { ST.setSetting('ghostCamera', v); })));
-    body.appendChild(mkRow('Airplanes', 'Track fixed-wing aircraft on the radar',
-      mkToggle(S.settings.ghostAir, function (v) { ST.setSetting('ghostAir', v); })));
-    body.appendChild(mkRow('Helicopters', null,
-      mkToggle(S.settings.ghostHeli, function (v) { ST.setSetting('ghostHeli', v); })));
-
-    /* ---- Aircraft by owner (which classes the radar board ranks) ---- */
-    // These are independent of the airplane/heli shape filter above: a helicopter
-    // shows on the board only if BOTH its shape (ghostHeli) AND its ownership
-    // (e.g. ghostAirPolice) are on. Map dots are unaffected — these govern the
-    // threat list + sonar only.
-    body.appendChild(U.el('div', 'section-label', 'Aircraft classes'));
-    body.appendChild(mkRow('Military', 'Fighters, transports, gov aircraft',
-      mkToggle(S.settings.ghostAirMil !== false, function (v) { ST.setSetting('ghostAirMil', v); })));
-    body.appendChild(mkRow('Police / law enforcement', 'Police planes + rotor units',
-      mkToggle(S.settings.ghostAirPolice !== false, function (v) { ST.setSetting('ghostAirPolice', v); })));
-    body.appendChild(mkRow('EMS / medevac', 'Air ambulances and rescue helicopters',
-      mkToggle(S.settings.ghostAirEms !== false, function (v) { ST.setSetting('ghostAirEms', v); })));
-    body.appendChild(mkRow('Civilian', 'Airliners, private planes (off the threat board by default)',
-      mkToggle(S.settings.ghostAirCiv, function (v) { ST.setSetting('ghostAirCiv', v); })));
-
     body.appendChild(mkRow('Police hotspots', 'Heatmap of where police are usually seen at this hour',
       mkToggle(S.settings.ghostHotspots !== false, function (v) { ST.setSetting('ghostHotspots', v, 'ghosthotspots'); })));
+
+    /* ---- Aircraft ---- */
+    buildAircraftSettings(body);
 
     /* ---- Hardware radar detector (BLE) ---- */
     buildDetectorSettings(body);
@@ -2239,7 +2266,11 @@
     body.appendChild(mkRow('Hazards', 'Weather + reported road hazards as pins',
       mkToggle(S.settings.showHazards, function (v) { ST.setSetting('showHazards', v, 'hazards'); })));
 
-    body.appendChild(mkField('Units', mkSegmented([
+    // Units was a bare field floating between the overlay toggles and the legal
+    // block, belonging to neither. It governs every distance and speed in the
+    // app, so it gets its own heading instead of hiding under someone else's.
+    body.appendChild(U.el('div', 'section-label', 'Units'));
+    body.appendChild(mkField('Distance & speed', mkSegmented([
       { label: 'Miles', value: 'mi' },
       { label: 'Kilometers', value: 'km' }
     ], S.settings.units, function (v) { ST.setUnits(v); })));
@@ -2279,6 +2310,22 @@
         new Date(S.consent.at).toLocaleDateString() + ', confirming you ride as a ' +
         'passenger and are 16 or older.'));
     }
+
+    /* ---- diagnostics ----
+       Disclosed here rather than buried in Settings, because it is the one
+       switch on this screen that changes what leaves the device. The copy has
+       to be specific enough to be a real choice: naming what is sent is the
+       difference between a consent control and a dark pattern. */
+    body.appendChild(mkRow('Crash reports', 'Anonymous crashes & app usage — no location, no messages',
+      mkToggle(S.settings.diagnostics !== false, function (v) {
+        ST.setSetting('diagnostics', v);
+        if (A.telemetry) A.telemetry.setEnabled(v);
+      })));
+    body.appendChild(U.el('div', 'legal-consent',
+      'When something breaks we get the error, which screen you were on, and ' +
+      'your app version — tied to a random id that is thrown away when you close ' +
+      'the app. We never send where you are, where you were going, or anything ' +
+      'you or anyone else typed. Turn this off and nothing is sent at all.'));
 
     /* ---- Blocked riders ----
        The other half of "you can block someone": being able to see who, and
@@ -2369,6 +2416,213 @@
     r.innerHTML = '<div class="setting-text"><b>' + U.esc(title) + '</b>' + (sub ? '<span>' + U.esc(sub) + '</span>' : '') + '</div>';
     r.appendChild(control);
     return r;
+  }
+
+  /* ============================== aircraft settings ==============================
+     One section, five categories, and each switch governs BOTH the map dot and
+     the radar board.
+
+     It used to be two sections that looked like one. "Ghost targets" carried
+     Airplanes/Helicopters (a shape filter for the board), and "Aircraft classes"
+     carried Military/Police/EMS/Civilian (an ownership filter, also board-only,
+     with the map drawing everything regardless). So a rider who turned Civilian
+     off watched a screenful of airliners stay exactly where they were. Same
+     switch, one meaning now. */
+  function buildAircraftSettings(body) {
+    var MV = A.mapview || {};
+    var owners = MV.AIRCRAFT_OWNERS || ['military', 'police', 'ems', 'unknown', 'civilian'];
+    var colors = MV.AIRCRAFT_COLORS || {};
+    var labels = MV.AIRCRAFT_LABELS || {};
+    var KEYS = {
+      military: 'ghostAirMil',
+      police: 'ghostAirPolice',
+      ems: 'ghostAirEms',
+      unknown: 'ghostAirUnknown',
+      civilian: 'ghostAirCiv'
+    };
+    var SUBS = {
+      military: 'Transports, tankers, tactical callsigns',
+      police: 'Law-enforcement aircraft and rotor units',
+      ems: 'Air ambulances and rescue helicopters',
+      unknown: 'No callsign, or one we will not guess at',
+      civilian: 'Airliners and private aircraft'
+    };
+
+    body.appendChild(U.el('div', 'section-label', 'Aircraft'));
+
+    owners.forEach(function (o) {
+      // A coloured dot in the row title is the legend — the same colour the map
+      // draws — so there is no separate key to cross-reference while driving.
+      var title = U.el('span', 'air-cat');
+      var dot = U.el('span', 'air-dot');
+      dot.style.color = colors[o] || '#e8edf6';
+      title.appendChild(dot);
+      title.appendChild(document.createTextNode(labels[o] || o));
+
+      var row = mkRow(labels[o] || o, SUBS[o], mkToggle(
+        S.settings[KEYS[o]] !== false,
+        function (v) {
+          ST.setSetting(KEYS[o], v);
+          if (MV.setAircraftFilter) MV.setAircraftFilter();
+        }));
+      // Swap the plain bold title for the dotted one.
+      var b = row.querySelector('b');
+      if (b) { b.textContent = ''; b.appendChild(title); }
+      body.appendChild(row);
+    });
+
+    body.appendChild(U.el('div', 'hint-card',
+      '<b>Unidentified</b> is a real answer, not a bug. Live ADS-B carries no ownership ' +
+      'field, so a contact is placed by its callsign — and one that is neither an ' +
+      'airline flight number nor a registration is left unidentified rather than ' +
+      'quietly filed as civilian. Aircraft show only while <b>Ghost mode</b> is on.'));
+
+    /* Shape filter — genuinely separate from ownership, and only the board uses
+       it, so it says so rather than sitting next to the category switches as if
+       it did the same job. */
+    body.appendChild(mkRow('Rank airplanes on the radar', 'Fixed-wing contacts on the threat board',
+      mkToggle(S.settings.ghostAir, function (v) { ST.setSetting('ghostAir', v); })));
+    body.appendChild(mkRow('Rank helicopters on the radar', 'Rotor contacts on the threat board',
+      mkToggle(S.settings.ghostHeli, function (v) { ST.setSetting('ghostHeli', v); })));
+  }
+
+  /* ============================== voice chat settings ==============================
+     Every control here is gated on A.voice.capabilities(). The Android WebView
+     is not desktop Chrome: output-sink selection and device enumeration may
+     simply not exist there, and a switch that silently does nothing is worse
+     than no switch at all — so a missing capability removes the row. */
+  function buildVoiceSettings(body) {
+    var V = A.voice;
+    var caps = (V && V.capabilities) ? V.capabilities() : {
+      devices: false, inputPicker: false, outputPicker: false,
+      echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+      voiceIsolation: false, leveler: false
+    };
+
+    body.appendChild(U.el('div', 'section-label', 'Voice chat'));
+
+    /* --- who you are connected to --- */
+    body.appendChild(mkField('Auto voice chat', mkSegmented([
+      { label: 'Off', value: 'off' },
+      { label: 'Nearby', value: 'radius' },
+      { label: 'In sight', value: 'sight' },
+      { label: 'My road', value: 'road' }
+    ], (S.settings.proxVoice || 'off'), function (v) {
+      if (V && V.setProxMode) V.setProxMode(v);
+      else ST.setSetting('proxVoice', v);
+    })));
+    body.appendChild(U.el('div', 'hint-card',
+      'Automatically links the walkie-talkie with riders <b>around you</b>, <b>in sight ahead</b> or ' +
+      '<b>sharing your road</b>, like proximity voice chat. Both riders need it on. ' +
+      'Convoy voice always works; Ghost mode pauses it.'));
+
+    if (!V) return;   // voice module absent: the auto-link setting still saves
+
+    /* --- the two controls a rider reaches for in a hurry --- */
+    var muteToggle = mkToggle(V.isSelfMuted(), function (v) { V.setSelfMute(v); });
+    body.appendChild(mkRow('Mute my mic',
+      'Nobody hears you, whatever the mic mode says', muteToggle));
+
+    var deafToggle = mkToggle(V.isDeafened(), function (v) { V.setDeafen(v); });
+    body.appendChild(mkRow('Deafen',
+      'Silence every rider at once — the calls stay up, so it lifts instantly', deafToggle));
+
+    /* --- output level --- */
+    var outVol = U.el('input', 'input');
+    outVol.type = 'range'; outVol.min = '0'; outVol.max = '1'; outVol.step = '0.05';
+    outVol.value = V.getMasterVolume();
+    outVol.style.width = '100%';
+    outVol.addEventListener('input', function () { V.setMasterVolume(parseFloat(outVol.value)); });
+    body.appendChild(mkField('Voice volume', outVol));
+
+    /* --- live input meter. Self-cleaning: the settings body is destroyed and
+       rebuilt on every open, so the loop ends when its own bar leaves the
+       document rather than needing a teardown hook. --- */
+    var meterWrap = U.el('div', 'vc-meter');
+    var meterBar = U.el('div', 'vc-meter-fill');
+    meterWrap.appendChild(meterBar);
+    body.appendChild(mkField('Input level', meterWrap));
+    (function paintMeter() {
+      if (meterBar.isConnected === false) return;
+      var lvl = V.level ? V.level() : 0;
+      // Speech sits low in a linear RMS; scale so normal talking fills the bar.
+      var pct = Math.min(100, Math.round(Math.sqrt(lvl) * 140));
+      meterBar.style.width = pct + '%';
+      meterBar.classList.toggle('hot', pct > 6 && !V.isSelfMuted());
+      requestAnimationFrame(paintMeter);
+    })();
+
+    /* --- devices --- */
+    if (caps.inputPicker || caps.outputPicker) {
+      var devHost = U.el('div', 'vc-devices');
+      body.appendChild(devHost);
+      V.listDevices().then(function (d) {
+        if (devHost.isConnected === false) return;
+        if (!d.labelled) {
+          // Browsers withhold device LABELS until the mic has been granted
+          // once. A list of blank entries is useless, so ask instead.
+          devHost.appendChild(U.el('div', 'hint-card',
+            'Allow the microphone once and your input and output devices will be listed here by name.'));
+          return;
+        }
+        if (caps.inputPicker && d.inputs.length) {
+          devHost.appendChild(mkField('Microphone',
+            mkDeviceSelect(d.inputs, V.getInputDevice(), 'System default', function (id) {
+              V.setInputDevice(id).then(function (r) {
+                if (r && r.ok === false && A.ui) A.ui.toast('Could not use that microphone', 'warn');
+              });
+            })));
+        }
+        if (caps.outputPicker && d.outputs.length) {
+          devHost.appendChild(mkField('Output',
+            mkDeviceSelect(d.outputs, V.getOutputDevice(), 'System default', function (id) {
+              V.setOutputDevice(id).then(function (r) {
+                if (r && r.ok === false && A.ui) A.ui.toast('This browser cannot choose an output device', 'warn');
+              });
+            })));
+        }
+      });
+    }
+
+    /* --- sound enhancement. Each row appears only where the engine reports
+       the constraint, so an unsupported one is absent rather than dead. --- */
+    var enh = [];
+    if (caps.echoCancellation) enh.push(['ec', 'Echo cancellation', 'Stops the car speakers feeding back into your mic']);
+    if (caps.noiseSuppression) enh.push(['ns', 'Noise suppression', 'Cuts road, wind and engine noise']);
+    if (caps.autoGainControl) enh.push(['agc', 'Auto level', 'Evens out how loud you come across']);
+    if (caps.voiceIsolation) enh.push(['isolation', 'Voice isolation', 'Keeps your voice, drops the rest of the cabin']);
+    if (enh.length || caps.leveler) {
+      body.appendChild(U.el('div', 'section-label', 'Sound enhancement'));
+      enh.forEach(function (row) {
+        body.appendChild(mkRow(row[1], row[2],
+          mkToggle(V.getEnhancement(row[0]), function (v) { V.setEnhancement(row[0], v); })));
+      });
+      if (caps.leveler) {
+        body.appendChild(mkRow('Even out loud riders',
+          'Compresses incoming voice so nobody arrives twice as loud as the rest',
+          mkToggle(V.isLeveler(), function (v) { V.setLeveler(v); })));
+      }
+    }
+  }
+
+  // A <select> whose labels differ from its values, plus a leading "system
+  // default" row mapping to ''. mkSelect only handles value===label.
+  function mkDeviceSelect(list, value, defaultLabel, onChange) {
+    var s = U.el('select', 'input select');
+    var first = document.createElement('option');
+    first.value = ''; first.textContent = defaultLabel;
+    if (!value) first.selected = true;
+    s.appendChild(first);
+    list.forEach(function (d) {
+      if (!d.id || d.id === 'default') return;   // 'default' IS the row above
+      var o = document.createElement('option');
+      o.value = d.id;
+      o.textContent = d.label || d.id;
+      if (d.id === value) o.selected = true;
+      s.appendChild(o);
+    });
+    s.addEventListener('change', function () { onChange(s.value); });
+    return s;
   }
 
   /* ============================== radar detector settings ============================== */
@@ -2527,10 +2781,17 @@
       results.appendChild(item);
     }
     var STAR_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="m12 3.6 2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.2-4.1 5.8-.8Z"/></svg>';
+    // Show/hide the results list with the combobox semantics kept in step — a
+    // bare `results.hidden = x` left aria-expanded stuck and screen readers
+    // announcing the list as permanently closed.
+    function showResults(v) {
+      results.hidden = !v;
+      input.setAttribute('aria-expanded', String(!!v));
+    }
     function showRecents() {
       var savedP = (A.places && A.places.list()) || []; // starred places first
       var rec = loadRecents();
-      if (!savedP.length && !rec.length) { items = []; results.hidden = true; return; } // clear so Enter can't pick an invisible stale result
+      if (!savedP.length && !rec.length) { items = []; showResults(false); return; } // clear so Enter can't pick an invisible stale result
       items = savedP.concat(rec);
       results.innerHTML = '';
       if (savedP.length) {
@@ -2541,14 +2802,14 @@
         results.appendChild(U.el('div', 'sr-head', 'Recent'));
         rec.forEach(function (r) { addRow(r, CLOCK_SVG); });
       }
-      results.hidden = false;
+      showResults(true);
     }
 
     var run = U.debounce(function () {
       var q = input.value.trim();
       if (q.length < 3) { showRecents(); return; }
       items = []; // previous search's rows are dead the moment a new query is in flight
-      results.hidden = false;
+      showResults(true);
       results.innerHTML = '<div class="sr-loading">Searching…</div>';
       A.routing.geocode(q).then(function (rows) {
         items = rows;
@@ -2567,7 +2828,7 @@
     function choose(r) {
       saveRecent(r);
       input.value = r.label;
-      results.hidden = true;
+      showResults(false);
       input.blur();
       A.routing.setDestination([r.lng, r.lat], r.label);
     }
@@ -2601,13 +2862,13 @@
         // Enter would navigate to a result the user can no longer see.
         else if (!results.hidden && items.length) choose(items[0]);
       }
-      else if (e.key === 'Escape') { results.hidden = true; input.blur(); }
+      else if (e.key === 'Escape') { showResults(false); input.blur(); }
     });
     input.addEventListener('blur', function () {
-      setTimeout(function () { results.hidden = true; }, 150);
+      setTimeout(function () { showResults(false); }, 150);
     });
     input.addEventListener('focus', function () {
-      if (input.value.trim().length >= 3 && results.children.length) results.hidden = false;
+      if (input.value.trim().length >= 3 && results.children.length) showResults(true);
       else showRecents();
     });
     clearBtn.addEventListener('click', function () {
@@ -2629,24 +2890,20 @@
   }
 
   function syncGlobalChip() {
-    document.getElementById('chip-global').classList.toggle('chip-off', !S.settings.showGlobal);
+    var chip = document.getElementById('chip-global');
+    if (!chip) return;
+    chip.classList.toggle('chip-off', !S.settings.showGlobal);
+    // The chip is a toggle button — aria-pressed is how a screen reader hears the
+    // layer flip rather than reading a permanently unpressed button.
+    chip.setAttribute('aria-pressed', String(!!S.settings.showGlobal));
   }
 
   /* ============================== walkie-talkie ============================== */
-  // The PTT hold + spacebar wiring lives in js/voice.js (it owns mic state).
-  // Here we only wire the mode-cycle button so the overlay is self-contained.
-  function wireWalkieTalkie() {
-    var cycle = document.getElementById('wt-cycle');
-    if (!cycle) return;
-    cycle.addEventListener('click', function () {
-      if (!A.voice) return;
-      var order = ['ptt', 'open', 'toggle'];
-      var cur = A.voice.getMode();
-      var next = order[(order.indexOf(cur) + 1) % order.length];
-      A.voice.setMode(next);
-      toast('Mic: ' + (next === 'ptt' ? 'Push-to-talk' : next === 'open' ? 'Open mic' : 'Toggle'), 'info');
-    });
-  }
+  // All walkie wiring — PTT hold, Space, and the #wt-cycle mode button — lives in
+  // js/voice.js wirePttButton(), which runs from showOverlay(true) before the
+  // overlay is ever visible. This used to wire #wt-cycle too, so one tap ran
+  // both handlers and skipped a mode (PTT → Toggle) with two toasts.
+  function wireWalkieTalkie() { }
 
   function updateLiveChip() {
     var label = S.netMode === 'live' ? ' riders online' : ' nearby';

@@ -30,22 +30,43 @@ Environment=TRUST_PROXY=loopback
 # Supabase. Create + chown convoy:convoy this dir before enabling the service.
 Environment=DATA_DIR=/var/lib/convoy
 #
-# ── Supabase (REQUIRED — the server exits at boot without these) ──
-# Accounts and identity both live in Supabase. Do NOT put the real values in this
-# file if it is tracked in git: use an EnvironmentFile with 0600 permissions
-# owned by the convoy user, e.g.
-#   EnvironmentFile=/etc/convoy/convoy.env
-# containing SUPABASE_URL, SUPABASE_SECRET_KEY and SUPABASE_DB_URL.
-#   Environment=SUPABASE_URL=https://<project-ref>.supabase.co
-#   Environment=SUPABASE_SECRET_KEY=sb_secret_...   (admin over Auth + database)
-#   Environment=SUPABASE_DB_URL=postgresql://...    (embeds the DB password)
+# ══ SECRETS DO NOT GO IN THIS FILE ══════════════════════════════════════════
+# This unit is world-readable (systemd installs it 0644) AND tracked in git.
+# An `Environment=SOMEKEY=value` line here is readable by every user and every
+# process on the box, and `systemctl show convoy` prints it to anyone who asks.
+# Putting a key here is the same as publishing it.
 #
-# Optional keys — set only what you use:
-#   Environment=TOMTOM_KEY=...        (traffic-aware routing + traffic heatmap)
-#   Environment=OPENWEBNINJA_KEY=...  (live Waze police/hazard layer + hotspot data)
-#   Environment=TTS_DIR=...           (self-hosted Piper neural TTS for nav voice)
-#   Environment=SUPABASE_DB_CA=...    (path OR inline PEM - verify the DB TLS chain)
-#   Environment=SUPABASE_DB_STRICT_TLS=1  (refuse to boot without the CA above)
+# Every secret goes in the EnvironmentFile below instead — root-owned, group
+# convoy, mode 0640, so root writes it and only the service reads it:
+#
+#   ssh root@<vps>
+#   printf 'SUPABASE_URL=%s
+' 'https://<ref>.supabase.co' >> /var/lib/convoy/convoy.env
+#   chown root:convoy /var/lib/convoy/convoy.env && chmod 640 /var/lib/convoy/convoy.env
+#   systemctl restart convoy
+#
+# ── Supabase (REQUIRED — the server exits at boot without these) ──
+#   SUPABASE_URL=https://<project-ref>.supabase.co
+#   SUPABASE_SECRET_KEY=sb_secret_...    (admin over Auth + database)
+#   SUPABASE_DB_URL=postgresql://...     (embeds the DB password)
+#
+# ── Optional — set only what you use ──
+#   TOMTOM_KEY=...            (traffic-aware routing + traffic heatmap)
+#   OPENWEBNINJA_KEY=...      (live Waze police/hazard layer + hotspot data)
+#   RAPIDAPI_KEY=...          (upstream data feeds)
+#   AGENT_KEY=...             (the /api/agent/* ingest secret)
+#   ADMIN_TOKEN=...           (the /admin control panel; unset ⇒ /admin 404s.
+#                              This one secret can change any account and kill
+#                              the app — use `openssl rand -hex 32`.)
+#   APP_URL=https://your.host (REQUIRED for admin session cookies to be Secure)
+#   TTS_DIR=...               (self-hosted Piper neural TTS for nav voice)
+#   SUPABASE_DB_CA=...        (path OR inline PEM - verify the DB TLS chain)
+#   SUPABASE_DB_STRICT_TLS=1  (refuse to boot without the CA above)
+#
+# Note: server.js ALSO reads /opt/convoy/server/.env as a fallback. Anything
+# set here or in the EnvironmentFile wins over it. Keep that file 0640 too —
+# it is world-writable by default on some installs, which lets any local
+# process inject variables the unit never set.
 #
 # NOTE: Supabase Auth rate-limits /token BY IP, and every call it sees comes from
 # this box. The server sends Sb-Forwarded-For automatically with an sb_secret_ key,

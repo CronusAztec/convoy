@@ -21,9 +21,12 @@
 // is disabled; hasKey() makes the server fall back to keyless sources cleanly.
 // (Falls back to the legacy RAPIDAPI_KEY name so an older deploy keeps working.)
 const WAZE_KEY = process.env.OPENWEBNINJA_KEY || process.env.RAPIDAPI_KEY || '';
+// Per-call read: hasKey() is the gate the admin panel's kill switches layer
+// over (flags.js), so it must reflect the live env, not a require-time copy.
+function currentKey() { return process.env.OPENWEBNINJA_KEY || process.env.RAPIDAPI_KEY || ''; }
 const URL = 'https://api.openwebninja.com/waze/alerts-and-jams';
 
-function hasKey() { return !!WAZE_KEY; }
+function hasKey() { return !!currentKey(); }
 
 // Which Waze alert types we surface. POLICE is the headline feature; the road
 // hazards complement our own crowd-reporting and the OSM hazard pins.
@@ -47,11 +50,20 @@ function classify(a) {
 const COOLDOWN_MS = 10 * 60 * 1000; // 10 min upstream pause after a rate-limit
 let rateLimitedUntil = 0;
 
+// Upstream body cap. A normal alerts-and-jams reply for one bbox is a few hundred
+// KB at most; an upstream contract change (or a compromised/misbehaving endpoint)
+// returning something enormous would otherwise be buffered whole into memory.
+const MAX_BODY_CHARS = 5 * 1024 * 1024;
+
 // Fetch Waze alerts for a bbox. cb(err, status, geojson).
 // bottomLeft/topRight are [lng,lat] pairs (MapLibre convention); we convert to
 // the upstream "lat,lon" strings.
 async function alerts(bottomLeft, topRight, cb) {
-  if (!WAZE_KEY) return cb(new Error('no key'));
+  // Per-call key read, same as hasKey(): the admin panel's kill switch swaps the
+  // env at runtime, and gating on the require-time copy kept a cleared key
+  // fetching (billable) while hasKey() told the caps probe it was off.
+  var key = currentKey();
+  if (!key) return cb(new Error('no key'));
   if (Date.now() < rateLimitedUntil) return cb(new Error('rate limited (cooldown)'), 429);
   var bl = bottomLeft[1] + ',' + bottomLeft[0]; // lat,lon
   var tr = topRight[1] + ',' + topRight[0];
@@ -61,10 +73,13 @@ async function alerts(bottomLeft, topRight, cb) {
     // would otherwise pin one of our request slots forever.
     var timeoutMs = parseInt(process.env.UPSTREAM_TIMEOUT_MS || '8000', 10);
     var sig = AbortSignal.timeout ? AbortSignal.timeout(timeoutMs) : undefined;
-    var r = await fetch(u, { headers: { 'x-api-key': WAZE_KEY }, signal: sig });
+    var r = await fetch(u, { headers: { 'x-api-key': key }, signal: sig });
     // 429 can arrive as the HTTP status OR in the JSON body ({status:'ERROR',error:{code:429}}).
     if (r.status === 429) { rateLimitedUntil = Date.now() + COOLDOWN_MS; return cb(new Error('upstream rate limited'), 429); }
+    var clen = parseInt(r.headers.get('content-length') || '0', 10);
+    if (clen > MAX_BODY_CHARS) return cb(new Error('upstream response too large'), r.status);
     var text = await r.text();
+    if (text.length > MAX_BODY_CHARS) return cb(new Error('upstream response too large'), r.status);
     var j;
     try { j = JSON.parse(text); } catch (e) { return cb(new Error('bad upstream'), r.status); }
     if (j && j.error && j.error.code === 429) { rateLimitedUntil = Date.now() + COOLDOWN_MS; return cb(new Error('upstream rate limited'), 429); }

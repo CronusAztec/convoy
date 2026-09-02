@@ -190,12 +190,18 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
     head('8. friend-add is refused without confirming the block');
     const fr = await api('/api/me', 'GET', null, aTok);
-    A.clear();
+    A.clear(); B.clear();
     A.send({ t: 'friend:add', username: B_NAME });
-    const ferr = await A.want((m) => m.t === 'err' || m.t === 'friend:result');
-    ok('refused', !!(ferr && ferr.t === 'err'), ferr);
-    ok('message does not reveal the block',
-      !!(ferr && /No rider with that username/i.test(ferr.msg || '')), ferr && ferr.msg);
+    const ferr = await A.want((m) => m.t === 'friend:result' || m.t === 'err');
+    ok('answered exactly like a real request — no err, no "not found"',
+      !!(ferr && ferr.t === 'friend:result' && ferr.ok === true &&
+         /Friend request sent to /i.test(ferr.msg || '')), ferr);
+    const fl2 = await A.want((m) => m.t === 'friends');
+    ok('and nothing was created — B is in neither list',
+      !!(fl2 && !fl2.friends.some((x) => x.username === B_NAME) &&
+         !fl2.requests.some((x) => x.username === B_NAME)), fl2);
+    await sleep(500);
+    ok('the blocked rider never receives a request', B.seen((m) => m.t === 'friend:request').length === 0);
 
     head('9. reporting');
     const bad = await api('/api/report', 'POST', { riderId: bId, reason: 'nonsense' }, aTok);

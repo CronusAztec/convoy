@@ -43,6 +43,8 @@ flick-output/
 
 # Capacitor / Android build artifacts (the android/ source IS tracked; build outputs are not)
 www/
+# OTA hotfix bundles (scripts/pack-ota.js output — reproducible from www/, never commit)
+ota-out/
 android/app/build/
 android/.gradle/
 android/build/
@@ -57,3 +59,14 @@ android/key.properties
 android/convoy-release.credentials.txt
 !debug.keystore
 
+
+# ---- graphify knowledge graph (generated) ----
+# Everything under graphify-out/ is derived from the source tree and is rebuilt
+# by `graphify update .` or the post-commit hook, so none of it belongs in git:
+#   - graph.json / graph.html are ~4.5 MB combined and would churn on EVERY
+#     commit, since the hook regenerates them after each one.
+#   - .graphify_python and .graphify_root store ABSOLUTE paths to this machine's
+#     interpreter and checkout; committing them breaks the hook on any other
+#     clone, which is worse than not having them at all.
+# Anyone can regenerate the whole thing with /graphify.
+graphify-out/

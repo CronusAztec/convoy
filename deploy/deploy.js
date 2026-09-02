@@ -175,7 +175,13 @@ function finderUnitFile(port, user, nodeBin) {
 
    Values are taken from the local server/.env (or the ambient environment). If
    they aren't available locally we do NOT clear what's already on the box — a
-   deploy from a machine without the secrets must leave a working server working. */
+   deploy from a machine without the secrets must leave a working server working.
+
+   The file is MERGED, not rewritten: only the keys listed below are replaced.
+   Anything else set on the box by hand — ADMIN_TOKEN, APP_URL, a key rotated
+   in production — survives every deploy. (It did not always: this used to
+   truncate the file, so a deploy would quietly delete the admin panel's token
+   and pass its own health checks on the way out.) */
 const SUPABASE_VARS = ['SUPABASE_URL', 'SUPABASE_SECRET_KEY', 'SUPABASE_DB_URL'];
 const SUPABASE_OPTIONAL = ['SUPABASE_JWT_SECRET', 'AUTH_EMAIL_DOMAIN', 'SUPABASE_DB_CA'];
 
@@ -267,11 +273,31 @@ async function provisionSupabaseEnv() {
   const svc = await run('grep -oP "^User=\\K\\S+" /etc/systemd/system/convoy.service | head -1',
     { allowFail: true });
   const owner = (svc.out || '').trim() || 'convoy';
+  /* MERGE, never truncate.
+
+     This file is the only place a production-only secret can live: ADMIN_TOKEN
+     (the control panel), APP_URL, an API key rotated on the box and nowhere
+     else. Those are set by hand on the server precisely BECAUSE they should
+     not sit in a developer's local .env — and a deploy that rewrites the file
+     with `>` silently deletes every one of them. The symptom is delightful:
+     the deploy succeeds, health checks pass, and some feature is just gone.
+
+     So: keep every line whose key we are not about to write, drop the stale
+     copies of the keys we ARE writing, then append ours. The temp file is
+     created 0600 before any secret lands in it, and the rename is atomic so a
+     reader never sees a half-written file. */
+  const managed = SUPABASE_VARS.concat(SUPABASE_OPTIONAL);
+  const keyRe = '^(' + managed.join('|') + ')=';
   await step('Supabase credentials (/var/lib/convoy/convoy.env)',
-    'mkdir -p /var/lib/convoy && install -m 600 /dev/null /var/lib/convoy/convoy.env && ' +
-    'printf "%s\\n" ' + lines.map(shq).join(' ') + ' > /var/lib/convoy/convoy.env && ' +
-    'chown ' + owner + ':' + owner + ' /var/lib/convoy/convoy.env 2>/dev/null; ' +
-    'echo "$(grep -c . /var/lib/convoy/convoy.env) vars, mode $(stat -c %a /var/lib/convoy/convoy.env)"');
+    'mkdir -p /var/lib/convoy && ' +
+    'F=/var/lib/convoy/convoy.env; T=$F.tmp; ' +
+    'install -m 600 /dev/null "$T" && ' +
+    // Preserve everything this deploy does not manage.
+    'if [ -f "$F" ]; then grep -vE ' + shq(keyRe) + ' "$F" >> "$T" || true; fi && ' +
+    'printf "%s\\n" ' + lines.map(shq).join(' ') + ' >> "$T" && ' +
+    'chown ' + owner + ':' + owner + ' "$T" 2>/dev/null; ' +
+    'mv "$T" "$F" && ' +
+    'echo "$(grep -c . "$F") vars, mode $(stat -c %a "$F")"');
 
   // An already-installed unit (update mode) won't have the EnvironmentFile line
   // that unitFile() now emits. Insert it idempotently so the restart picks it up.

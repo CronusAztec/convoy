@@ -17,11 +17,16 @@
 // it out of source control. Supply it via the environment (e.g. systemd
 // Environment=TOMTOM_KEY=… or a gitignored .env). Empty = routing/traffic disabled;
 // hasKey() lets the server degrade gracefully instead of calling with no key.
+// Read per-call (not a require-time const): the env is the DEFAULT state, and
+// the admin panel's kill switches (flags.js) need caps to reflect the live
+// environment without a restart. The key used in requests below stays the same
+// frozen value for the process's lifetime — only the gate is live.
 const TOMTOM_KEY = process.env.TOMTOM_KEY || '';
+function currentKey() { return process.env.TOMTOM_KEY || ''; }
 const ROUTE_URL = 'https://api.tomtom.com/routing/1/calculateRoute/';
 const TRAFFIC_TILE = 'https://api.tomtom.com/traffic/map/4/tile/flow/relative0/';
 
-function hasKey() { return !!TOMTOM_KEY; }
+function hasKey() { return !!currentKey(); }
 
 // Node's fetch has NO default timeout, so a hung upstream held our client's
 // request, socket and response object open indefinitely — and the tile route
@@ -33,6 +38,15 @@ function withTimeout(ms) {
   const c = new AbortController();
   setTimeout(() => c.abort(), ms || UPSTREAM_MS).unref?.();
   return c.signal;
+}
+
+// Upstream body cap (bytes). A route reply is tens of KB and a tile a few KB; an
+// upstream contract change returning something enormous would otherwise be
+// buffered whole into memory on the main thread.
+const MAX_BODY_BYTES = 5 * 1024 * 1024;
+function oversize(r) {
+  const clen = parseInt(r.headers.get('content-length') || '0', 10);
+  return clen > MAX_BODY_BYTES;
 }
 
 // lng/lat guard reused by the routing endpoint.
@@ -59,7 +73,9 @@ async function route(body, cb) {
     '&instructionsType=text&routeRepresentation=polyline';
   try {
     const r = await fetch(url, { method: 'GET', signal: withTimeout() });
+    if (oversize(r)) return cb(new Error('upstream response too large'), r.status);
     const text = await r.text();
+    if (Buffer.byteLength(text) > MAX_BODY_BYTES) return cb(new Error('upstream response too large'), r.status);
     let j = null;
     try { j = JSON.parse(text); } catch (e) { return cb(new Error('bad upstream'), r.status); }
     // TomTom sometimes returns HTTP 200 with an error body (e.g. an invalid key
@@ -79,7 +95,9 @@ async function tile(z, x, y, cb) {
   const url = TRAFFIC_TILE + z + '/' + x + '/' + y + '.png?tileSize=256&key=' + TOMTOM_KEY;
   try {
     const r = await fetch(url, { signal: withTimeout() });
+    if (oversize(r)) return cb(new Error('upstream response too large'));
     const buf = Buffer.from(await r.arrayBuffer());
+    if (buf.length > MAX_BODY_BYTES) return cb(new Error('upstream response too large'));
     cb(null, r.status, { 'Content-Type': r.headers.get('content-type') || 'image/png' }, buf);
   } catch (e) { cb(e); }
 }
@@ -120,7 +138,9 @@ async function incidents(minLng, minLat, maxLng, maxLat, cb) {
     '&fields=' + encodeURIComponent(fields) + '&language=en-GB&timeValidityFilter=present&key=' + TOMTOM_KEY;
   try {
     const r = await fetch(url, { signal: withTimeout() });
+    if (oversize(r)) return cb(new Error('upstream response too large'), r.status);
     const text = await r.text();
+    if (Buffer.byteLength(text) > MAX_BODY_BYTES) return cb(new Error('upstream response too large'), r.status);
     let j;
     try { j = JSON.parse(text); } catch (e) { return cb(new Error('bad upstream'), r.status); }
     if (!j || !Array.isArray(j.incidents)) return cb(new Error('upstream error'), r.status);

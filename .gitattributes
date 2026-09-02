@@ -1,0 +1,14 @@
+# Windows batch files MUST have CRLF line endings. cmd.exe parses a bare-LF .bat
+# one character out of step — every line loses its first character, `REM` stops
+# being a comment, and the script fails with a screenful of
+# "'X' is not recognized as an internal or external command".
+#
+# Both release.bat and start.bat were checked out with bare LF and were
+# unrunnable by double-click, which is exactly how the README tells you to run
+# them. Pin the ending so it cannot happen again.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Shell scripts are the mirror image: they must keep LF, or bash fails with
+# "bad interpreter: /bin/sh^M".
+*.sh text eol=lf
