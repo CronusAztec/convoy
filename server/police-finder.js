@@ -131,10 +131,7 @@ let stopping = false;
 // query-level [timeout:25] only bounds Overpass's OWN work, not a stuck connection.
 // Throws 'timeout' on deadline so callers fall through to their try/catch.
 function fetchT(url, opts, ms) {
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), ms);
-  return fetch(url, Object.assign({ signal: ac.signal }, opts || {}))
-    .finally(() => clearTimeout(t));
+  return fetch(url, Object.assign({ signal: AbortSignal.timeout(ms) }, opts || {}));
 }
 
 /* ----------------------------- regions ----------------------------- */

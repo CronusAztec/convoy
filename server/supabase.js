@@ -524,7 +524,7 @@ async function loadJwks(force) {
 }
 
 function b64urlToBuf(s) {
-  return Buffer.from(String(s).replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+  return Buffer.from(String(s), 'base64url');
 }
 
 // Node's hash names for the JWS `alg` values GoTrue can issue.
