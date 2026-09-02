@@ -1,0 +1,396 @@
+/* Convoy — minimal browser shim + module loader for Node tests.
+
+   The client modules are plain IIFEs that hang themselves off window.App, so
+   they load fine in Node once `window`, `document` and a couple of timers exist.
+   Nothing here fakes app behaviour: the real js/*.js source is executed, and the
+   tests drive it through its real public API. */
+'use strict';
+const fs = require('fs');
+const path = require('path');
+
+const ROOT = path.join(__dirname, '..');
+
+/* ---------------- tiny DOM shim ----------------
+   Only what the modules under test touch at load time. Anything unexpected
+   throws loudly rather than silently returning undefined. */
+function makeEl(tag) {
+  const el = {
+    tagName: String(tag || 'div').toUpperCase(),
+    className: '', id: '', title: '', innerHTML: '', textContent: '',
+    hidden: false, disabled: false, value: '',
+    // style needs the CSS-custom-property methods, not just plain assignment:
+    // several modules set their accent through --paint, and a bare object makes
+    // that a TypeError rather than a no-op.
+    style: {
+      _vars: {},
+      setProperty(k, v) { this._vars[k] = String(v); },
+      getPropertyValue(k) { return this._vars[k] || ''; },
+      removeProperty(k) { delete this._vars[k]; }
+    },
+    dataset: {}, children: [], parentNode: null,
+    classList: {
+      _s: new Set(),
+      add(...c) { c.forEach((x) => this._s.add(x)); },
+      remove(...c) { c.forEach((x) => this._s.delete(x)); },
+      toggle(c, on) { const want = on === undefined ? !this._s.has(c) : !!on; want ? this._s.add(c) : this._s.delete(c); return want; },
+      contains(c) { return this._s.has(c); }
+    },
+    appendChild(c) { this.children.push(c); c.parentNode = this; return c; },
+    removeChild(c) { this.children = this.children.filter((x) => x !== c); return c; },
+    insertBefore(c) { this.children.unshift(c); c.parentNode = this; return c; },
+    remove() { if (this.parentNode) this.parentNode.removeChild(this); },
+    setAttribute(k, v) { this['attr_' + k] = v; },
+    getAttribute(k) { return this['attr_' + k]; },
+    addEventListener() {}, removeEventListener() {}, focus() {}, blur() {}, click() {},
+    querySelector() { return null },
+    querySelectorAll() { return []; },
+    closest() { return null; },
+    getBoundingClientRect() { return { top: 0, left: 0, width: 0, height: 0 }; }
+  };
+  return el;
+}
+
+function installBrowser() {
+  const store = new Map();
+  const win = {
+    App: {},
+    localStorage: {
+      getItem: (k) => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+      removeItem: (k) => store.delete(k),
+      clear: () => store.clear()
+    },
+    matchMedia: () => ({ matches: false, addEventListener() {} }),
+    requestAnimationFrame: (fn) => setTimeout(() => fn(Date.now()), 0),
+    cancelAnimationFrame: (id) => clearTimeout(id),
+    setTimeout, clearTimeout, setInterval, clearInterval,
+    addEventListener() {}, removeEventListener() {},
+    speechSynthesis: null,
+    AudioContext: null,
+    navigator: { geolocation: null, userAgent: 'node' },
+    performance: { now: () => Date.now() }
+  };
+  const doc = {
+    documentElement: makeEl('html'),
+    head: makeEl('head'),
+    body: makeEl('body'),
+    hidden: false,
+    createElement: makeEl,
+    getElementById: () => null,
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    addEventListener() {}, removeEventListener() {}
+  };
+  win.document = doc;
+
+  // Node ≥21 defines `navigator` and `performance` as getter-only globals, so
+  // plain assignment throws — define them instead.
+  function put(name, value) {
+    try { global[name] = value; }
+    catch (e) { Object.defineProperty(global, name, { value: value, writable: true, configurable: true }); }
+  }
+  put('window', win);
+  put('document', doc);
+  put('localStorage', win.localStorage);
+  put('navigator', win.navigator);
+  put('requestAnimationFrame', win.requestAnimationFrame);
+  put('cancelAnimationFrame', win.cancelAnimationFrame);
+  put('fetch', undefined);
+  win.performance = global.performance || win.performance;
+  return win;
+}
+
+// Execute a client module in the current (shimmed) global scope.
+function loadModule(rel) {
+  const src = fs.readFileSync(path.join(ROOT, rel), 'utf8');
+  // eslint-disable-next-line no-new-func
+  new Function(src).call(global.window);
+}
+
+/* ---------------- audio / WebRTC fakes ----------------
+   js/voice.js is pure Web Audio plus WebRTC, and Node has neither. These fakes
+   do not simulate sound — they record the GRAPH. Every node keeps its outgoing
+   connect() edges, so a test can assert *where* audio goes, which is the only
+   question behind per-peer mute: a gain node the audio never passes through is
+   a control that does nothing.
+
+   Every capability is individually removable through `opts`, because the
+   Android WebView is not the desktop browser this was written against and the
+   degradation paths have to be provable without a phone. */
+
+const ALL_CONSTRAINTS = ['deviceId', 'echoCancellation', 'noiseSuppression',
+  'autoGainControl', 'channelCount', 'sampleRate', 'voiceIsolation'];
+
+let seq = 0;
+
+function installAudio(win, opts) {
+  opts = opts || {};
+  const on = (k) => (opts[k] === undefined ? true : !!opts[k]);
+  const caps = {
+    ctxSetSinkId: on('ctxSetSinkId'),
+    elSetSinkId: on('elSetSinkId'),
+    enumerateDevices: on('enumerateDevices'),
+    replaceTrack: on('replaceTrack'),
+    deviceLabels: on('deviceLabels'),
+    constraints: opts.constraints || ALL_CONSTRAINTS.slice()
+  };
+
+  const rec = {
+    caps,
+    contexts: [], peers: [], elements: [], nodes: [],
+    gumCalls: [], sinkCalls: [], replaceCalls: [],
+    lastConstraints: null, lastStream: null,
+    gumFail: null,
+    devices: opts.devices || [
+      { kind: 'audioinput', deviceId: 'default', label: 'Default - Microphone' },
+      { kind: 'audioinput', deviceId: 'usb-mic', label: 'USB Podcast Mic' },
+      { kind: 'audiooutput', deviceId: 'default', label: 'Default - Speakers' },
+      { kind: 'audiooutput', deviceId: 'bt-headset', label: 'Bluetooth Headset' }
+    ]
+  };
+
+  /* --- graph primitives. `outputs` is the assertion surface. --- */
+  function node(type, ctx, extra) {
+    const n = Object.assign({
+      nodeType: type, ctx: ctx, outputs: [], inputs: [],
+      connect(dst) {
+        this.outputs.push(dst);
+        if (dst && dst.inputs) dst.inputs.push(this);
+        return dst;
+      },
+      disconnect() {
+        this.outputs.forEach((d) => { if (d && d.inputs) d.inputs = d.inputs.filter((x) => x !== this); });
+        this.outputs = [];
+      }
+    }, extra || {});
+    rec.nodes.push(n);
+    return n;
+  }
+  function param(v) {
+    return { value: v, setValueAtTime(x) { this.value = x; }, linearRampToValueAtTime(x) { this.value = x; } };
+  }
+  function mkTrack(deviceId, label) {
+    return {
+      kind: 'audio', id: 'trk' + (++seq), enabled: false, readyState: 'live',
+      label: label || 'fake mic', deviceId: deviceId || 'default',
+      appliedConstraints: null,
+      stop() { this.readyState = 'ended'; },
+      getSettings() { return { deviceId: this.deviceId }; },
+      applyConstraints(c) {
+        if (opts.applyConstraintsFails) return Promise.reject(new Error('OverconstrainedError'));
+        this.appliedConstraints = c;
+        rec.lastApplied = c;
+        return Promise.resolve();
+      }
+    };
+  }
+  function mkStream(track) {
+    return {
+      id: 'str' + (++seq), active: true,
+      getTracks() { return [track]; },
+      getAudioTracks() { return [track]; }
+    };
+  }
+
+  /* --- AudioContext.
+     Factory methods live on the PROTOTYPE, as they do on the real
+     BaseAudioContext. Feature detection runs before any context exists, so a
+     fake that hangs them on the instance would make correct detection look
+     broken and tempt someone into loosening the check. --- */
+  function FakeAudioContext() {
+    this.state = 'running';
+    this.sampleRate = 48000;
+    this.currentTime = 0;
+    this.destination = node('destination', this);
+    rec.contexts.push(this);
+  }
+  FakeAudioContext.prototype.createGain = function () { return node('gain', this, { gain: param(1) }); };
+  FakeAudioContext.prototype.createAnalyser = function () {
+    const an = node('analyser', this, {
+      _fft: 2048,
+      getByteTimeDomainData(buf) { for (let i = 0; i < buf.length; i++) buf[i] = 128; }
+    });
+    Object.defineProperty(an, 'fftSize', { get() { return this._fft; }, set(v) { this._fft = v; }, configurable: true });
+    Object.defineProperty(an, 'frequencyBinCount', { get() { return this._fft / 2; }, configurable: true });
+    return an;
+  };
+  FakeAudioContext.prototype.createBufferSource = function () {
+    return node('bufferSource', this, { buffer: null, started: false, start() { this.started = true; }, stop() {} });
+  };
+  FakeAudioContext.prototype.createBuffer = function (ch, len, rate) {
+    const data = new Float32Array(len);
+    return { numberOfChannels: ch, length: len, sampleRate: rate, getChannelData() { return data; } };
+  };
+  FakeAudioContext.prototype.createMediaStreamSource = function (s) {
+    return node('mediaStreamSource', this, { stream: s });
+  };
+  FakeAudioContext.prototype.createMediaStreamDestination = function () {
+    return node('mediaStreamDestination', this, { stream: mkStream(mkTrack('bus', 'bus out')) });
+  };
+  FakeAudioContext.prototype.createDynamicsCompressor = function () {
+    return node('compressor', this, {
+      threshold: param(-24), knee: param(30), ratio: param(12), attack: param(0.003), release: param(0.25)
+    });
+  };
+  FakeAudioContext.prototype.createScriptProcessor = function (size) {
+    return node('scriptProcessor', this, { bufferSize: size, onaudioprocess: null });
+  };
+  FakeAudioContext.prototype.resume = function () { this.state = 'running'; return Promise.resolve(); };
+  FakeAudioContext.prototype.close = function () { this.state = 'closed'; return Promise.resolve(); };
+  // On the prototype, not the instance: feature detection looks at
+  // AudioContext.prototype.setSinkId before any context has been built.
+  if (caps.ctxSetSinkId) {
+    FakeAudioContext.prototype.setSinkId = function (id) {
+      rec.sinkCalls.push({ target: 'ctx', id: id });
+      this.sinkId = id;
+      return Promise.resolve();
+    };
+  }
+
+  /* --- RTCPeerConnection --- */
+  function FakeRTC(cfg) {
+    this.config = cfg;
+    this.connectionState = 'new';
+    this.signalingState = 'stable';
+    this.localDescription = null;
+    this.remoteDescription = null;
+    this.closed = false;
+    this._senders = [];
+    this.onicecandidate = null;
+    this.ontrack = null;
+    this.onconnectionstatechange = null;
+    rec.peers.push(this);
+  }
+  FakeRTC.prototype.addTrack = function (t) {
+    const pc = this;
+    const sender = { track: t };
+    if (caps.replaceTrack) {
+      sender.replaceTrack = function (nt) { this.track = nt; rec.replaceCalls.push({ pc: pc, track: nt }); return Promise.resolve(); };
+    }
+    this._senders.push(sender);
+    return sender;
+  };
+  FakeRTC.prototype.getSenders = function () { return this._senders.slice(); };
+  FakeRTC.prototype.setLocalDescription = function (d) { this.localDescription = d || { type: 'offer', sdp: 'fake-sdp' }; return Promise.resolve(); };
+  FakeRTC.prototype.setRemoteDescription = function (d) { this.remoteDescription = d; return Promise.resolve(); };
+  FakeRTC.prototype.addIceCandidate = function () { return Promise.resolve(); };
+  FakeRTC.prototype.createOffer = function () { return Promise.resolve({ type: 'offer', sdp: 'fake-sdp' }); };
+  FakeRTC.prototype.createAnswer = function () { return Promise.resolve({ type: 'answer', sdp: 'fake-sdp' }); };
+  FakeRTC.prototype.close = function () { this.closed = true; this.connectionState = 'closed'; };
+
+  /* --- HTMLAudioElement --- */
+  function FakeAudio() {
+    this.muted = false; this.srcObject = null; this.paused = true; this.volume = 1;
+    rec.elements.push(this);
+  }
+  FakeAudio.prototype.play = function () { this.paused = false; return Promise.resolve(); };
+  FakeAudio.prototype.pause = function () { this.paused = true; };
+  if (caps.elSetSinkId) {
+    FakeAudio.prototype.setSinkId = function (id) { rec.sinkCalls.push({ target: 'el', id: id }); this.sinkId = id; return Promise.resolve(); };
+  }
+
+  /* --- navigator.mediaDevices --- */
+  const mediaDevices = {
+    getUserMedia(c) {
+      rec.gumCalls.push(c);
+      rec.lastConstraints = c && c.audio;
+      if (rec.gumFail) { const msg = rec.gumFail; rec.gumFail = null; return Promise.reject(new Error(msg)); }
+      const want = c && c.audio && c.audio.deviceId;
+      const id = typeof want === 'string' ? want : (want && (want.exact || want.ideal)) || 'default';
+      const s = mkStream(mkTrack(id, 'fake mic ' + id));
+      rec.lastStream = s;
+      return Promise.resolve(s);
+    },
+    getSupportedConstraints() {
+      const o = {};
+      caps.constraints.forEach((k) => { o[k] = true; });
+      return o;
+    },
+    addEventListener() {}, removeEventListener() {}
+  };
+  if (caps.enumerateDevices) {
+    mediaDevices.enumerateDevices = function () {
+      return Promise.resolve(rec.devices.map((d) => ({
+        kind: d.kind, deviceId: d.deviceId, groupId: 'grp',
+        label: caps.deviceLabels ? d.label : ''
+      })));
+    };
+  }
+
+  function put(name, value) {
+    win[name] = value;
+    try { global[name] = value; }
+    catch (e) { Object.defineProperty(global, name, { value: value, writable: true, configurable: true }); }
+  }
+  win.navigator.mediaDevices = mediaDevices;
+  put('AudioContext', FakeAudioContext);
+  put('webkitAudioContext', undefined);
+  put('RTCPeerConnection', FakeRTC);
+  put('RTCSessionDescription', function (d) { return d; });
+  put('RTCIceCandidate', function (d) { return d; });
+  put('Audio', FakeAudio);
+
+  /* Walk the graph from `from`, returning true when `to` is reachable. */
+  rec.reaches = function (from, to) {
+    const seen = new Set();
+    const stack = [from];
+    while (stack.length) {
+      const n = stack.pop();
+      if (!n || seen.has(n)) continue;
+      if (n === to) return true;
+      seen.add(n);
+      (n.outputs || []).forEach((o) => stack.push(o));
+    }
+    return false;
+  };
+  /* The chain of node types from `from` outward, for readable failures. */
+  rec.chain = function (from) {
+    const out = [];
+    let n = from;
+    const seen = new Set();
+    while (n && !seen.has(n)) { seen.add(n); out.push(n.nodeType); n = (n.outputs || [])[0]; }
+    return out.join(' -> ');
+  };
+  return rec;
+}
+
+/* ---------------- assertions ---------------- */
+let passed = 0;
+const failures = [];
+let suite = '';
+
+function group(name) { suite = name; console.log('\n\x1b[1m' + name + '\x1b[0m'); }
+
+function ok(label, cond, detail) {
+  if (cond) { passed++; console.log('  \x1b[32m✓\x1b[0m ' + label); }
+  else {
+    failures.push(suite + ' › ' + label + (detail ? ' — ' + detail : ''));
+    console.log('  \x1b[31m✗ ' + label + '\x1b[0m' + (detail ? '\n      ' + detail : ''));
+  }
+}
+
+function near(label, actual, expected, tol, unit) {
+  const d = Math.abs(actual - expected);
+  ok(label + '  (' + fmt(actual) + ' vs ' + fmt(expected) + (unit ? ' ' + unit : '') + ', |Δ|=' + fmt(d) + ' ≤ ' + tol + ')',
+    d <= tol, d <= tol ? null
+    : 'expected within ' + tol + (unit ? ' ' + unit : '') + ', off by ' + fmt(d));
+  return d;
+}
+
+function fmt(n) {
+  if (typeof n !== 'number' || !isFinite(n)) return String(n);
+  return Math.abs(n) >= 100 ? n.toFixed(2) : n.toFixed(4);
+}
+
+function report() {
+  console.log('\n' + '─'.repeat(60));
+  if (!failures.length) {
+    console.log('\x1b[32m\x1b[1mAll ' + passed + ' checks passed.\x1b[0m');
+    return 0;
+  }
+  console.log('\x1b[31m\x1b[1m' + failures.length + ' failed\x1b[0m, ' + passed + ' passed:');
+  failures.forEach((f) => console.log('  \x1b[31m•\x1b[0m ' + f));
+  return 1;
+}
+
+module.exports = { installBrowser, installAudio, loadModule, makeEl, group, ok, near, report, fmt, ROOT };

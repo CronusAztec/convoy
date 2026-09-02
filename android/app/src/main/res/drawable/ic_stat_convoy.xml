@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Status-bar icon for the location foreground service. Must be a single flat
+     white shape on transparent: Android tints it and masks out everything else,
+     which is why the old android.R.drawable.ic_menu_mylocation rendered as a
+     grey blob on anything modern. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFFFF">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,2A7,7 0 0,0 5,9c0,5.25 7,13 7,13s7,-7.75 7,-13A7,7 0 0,0 12,2zM12,11.5A2.5,2.5 0 1,1 12,6.5a2.5,2.5 0 0,1 0,5z"/>
+</vector>

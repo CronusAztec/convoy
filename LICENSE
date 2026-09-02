@@ -1,0 +1,41 @@
+Convoy — Proprietary Software License
+Copyright (c) 2026 odoreeci. All rights reserved.
+
+This software and its source code (the "Software") are proprietary and
+confidential. No licence, express or implied, is granted by publication of this
+source tree.
+
+YOU MAY, without further permission:
+  * read the source code;
+  * run the Software locally, unmodified, for the sole purpose of evaluating it
+    or contributing to it;
+  * submit patches, which you licence to the copyright holder under these terms.
+
+YOU MAY NOT, without prior written permission from the copyright holder:
+  * copy, publish, distribute, sublicense, sell, or host the Software or any
+    derivative of it, whether or not for a fee;
+  * operate the Software as a service available to anyone other than yourself;
+  * remove, obscure, or alter any copyright, trademark, or attribution notice;
+  * use the names "Convoy" or "odoreeci", or the Convoy marks and logo, other
+    than to refer accurately to this project.
+
+THIRD-PARTY COMPONENTS. The Software depends on, links to, and displays data
+from third-party software and data sources that carry their own licences and
+attribution requirements. Those licences govern those components, not this one.
+See THIRD-PARTY-NOTICES.md.
+
+USE OF THE HOSTED SERVICE at odoreeci.tech, and use of the Convoy Android
+application, is governed by the Terms of Service (legal/terms.html) and the
+Privacy Policy (legal/privacy.html), not by this licence.
+
+NO WARRANTY. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO
+EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM,
+OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+SAFETY. Convoy is a passenger-side application. It is not a driver aid, not a
+certified navigation system, and must not be operated by the driver of a moving
+vehicle. See the Terms of Service for the full safety and legality terms.

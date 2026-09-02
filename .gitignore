@@ -1,8 +1,65 @@
+# dependencies
 node_modules/
+
+# server runtime data — accounts & token secret, NEVER commit
+server/data/
+# env files — API keys / secrets (TOMTOM_KEY, WAZE_KEY, …), loaded by server.js. NEVER commit
+.env
+**/.env
+# self-hosted Piper TTS — binary + voice model, installed on the VPS by deploy/setup-tts.js
+tts/
+# deploy secrets & artifacts — NEVER commit these
+deploy/convoy_deploy_key
+deploy/convoy_deploy_key.pub
+deploy/*.pem
+deploy/id_*
+*.tgz
+# editor/OS
+.DS_Store
+Thumbs.db
+# stray Windows reserved-name file (from a misfired `> nul` redirect); git can't index it
+nul
+# runtime logs (server boot/run output, deploy diag, etc.) — never commit
+*.log
+logs/
+# stray credentials from local testing (a live Supabase access token) — NEVER commit
+tok.json
+# local AI-tooling config (MCP servers, skill packs) — machine-local, not project source
+.mcp.json
+.agents/
+.claude/
+skills-lock.json
+# local scratch output from flick/testing
+flick-output/
+# Capacitor / Android build artifacts (the android/ source IS tracked; build outputs are not)
+www/
+# OTA hotfix bundles (scripts/pack-ota.js output — reproducible from www/, never commit)
+ota-out/
+android/app/build/
+android/.gradle/
+android/build/
+android/captures/
+android/local.properties
+*.apk
+*.aab
+*.keystore
+*.jks
+# Release signing secrets — NEVER commit (these are the app's permanent identity)
+android/key.properties
+android/convoy-release.credentials.txt
+!debug.keystore
+# ---- graphify knowledge graph (generated) ----
+# Everything under graphify-out/ is derived from the source tree and is rebuilt
+# by `graphify update .` or the post-commit hook, so none of it belongs in git:
+#   - graph.json / graph.html are ~4.5 MB combined and would churn on EVERY
+#     commit, since the hook regenerates them after each one.
+#   - .graphify_python and .graphify_root store ABSOLUTE paths to this machine's
+#     interpreter and checkout; committing them breaks the hook on any other
+#     clone, which is worse than not having them at all.
+# Anyone can regenerate the whole thing with /graphify.
+graphify-out/
+# --- forge workspace additions ---
+.forge-tmp/
 .venv/
 __pycache__/
 *.pyc
-.env
-.forge-tmp/
-dist/
-build/

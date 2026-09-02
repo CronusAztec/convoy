@@ -1,0 +1,19 @@
+{
+  "appId": "tech.odoreeci.convoy",
+  "appName": "Convoy",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https",
+    "cleartext": false
+  },
+  "plugins": {
+    "Geolocation": {
+      "permissions": ["location"]
+    }
+  },
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  }
+}

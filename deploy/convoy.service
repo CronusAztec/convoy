@@ -1,0 +1,91 @@
+[Unit]
+Description=Convoy realtime server (riders, convoys, chat)
+After=network.target
+
+[Service]
+Type=simple
+User=convoy
+WorkingDirectory=/opt/convoy/server
+ExecStart=/usr/bin/node /opt/convoy/server/server.js
+# Marks this unit as the production deployment: db.js refuses to boot without
+# SUPABASE_DB_CA when NODE_ENV=production (an unverified owner-role Postgres
+# connection is fail-open otherwise). Opt out explicitly with
+# SUPABASE_DB_STRICT_TLS=0 if you really mean to.
+Environment=NODE_ENV=production
+Environment=PORT=5173
+# Simulated riders. MUST stay 0 in production: bots are indistinguishable from
+# real people in the UI (real-looking names and cars, they accept convoy invites
+# and reply to chat), so any non-zero value inflates the live rider count and
+# shows users other "drivers" who do not exist. Set BOTS=12 only on a demo box.
+Environment=BOTS=0
+Environment=NEARBY_KM=30
+# Caddy terminates TLS and reverse-proxies to us over loopback, so its
+# X-Forwarded-For is the one we trust for per-IP rate limiting. Set this to an
+# empty value if you ever expose the node process directly — X-Forwarded-For is
+# client-controlled and honouring it from an untrusted peer disables every rate
+# limit in the server.
+Environment=TRUST_PROXY=loopback
+# Runtime cache (hotspots.json) lives OUTSIDE the app tree so deploys
+# (scp/cp/tar) can't clobber it. Accounts no longer live here — they moved to
+# Supabase. Create + chown convoy:convoy this dir before enabling the service.
+Environment=DATA_DIR=/var/lib/convoy
+#
+# ══ SECRETS DO NOT GO IN THIS FILE ══════════════════════════════════════════
+# This unit is world-readable (systemd installs it 0644) AND tracked in git.
+# An `Environment=SOMEKEY=value` line here is readable by every user and every
+# process on the box, and `systemctl show convoy` prints it to anyone who asks.
+# Putting a key here is the same as publishing it.
+#
+# Every secret goes in the EnvironmentFile below instead — root-owned, group
+# convoy, mode 0640, so root writes it and only the service reads it:
+#
+#   ssh root@<vps>
+#   printf 'SUPABASE_URL=%s
+' 'https://<ref>.supabase.co' >> /var/lib/convoy/convoy.env
+#   chown root:convoy /var/lib/convoy/convoy.env && chmod 640 /var/lib/convoy/convoy.env
+#   systemctl restart convoy
+#
+# ── Supabase (REQUIRED — the server exits at boot without these) ──
+#   SUPABASE_URL=https://<project-ref>.supabase.co
+#   SUPABASE_SECRET_KEY=sb_secret_...    (admin over Auth + database)
+#   SUPABASE_DB_URL=postgresql://...     (embeds the DB password)
+#
+# ── Optional — set only what you use ──
+#   TOMTOM_KEY=...            (traffic-aware routing + traffic heatmap)
+#   OPENWEBNINJA_KEY=...      (live Waze police/hazard layer + hotspot data)
+#   RAPIDAPI_KEY=...          (upstream data feeds)
+#   AGENT_KEY=...             (the /api/agent/* ingest secret)
+#   ADMIN_TOKEN=...           (the /admin control panel; unset ⇒ /admin 404s.
+#                              This one secret can change any account and kill
+#                              the app — use `openssl rand -hex 32`.)
+#   APP_URL=https://your.host (REQUIRED for admin session cookies to be Secure)
+#   TTS_DIR=...               (self-hosted Piper neural TTS for nav voice)
+#   SUPABASE_DB_CA=...        (path OR inline PEM - verify the DB TLS chain)
+#   SUPABASE_DB_STRICT_TLS=1  (refuse to boot without the CA above)
+#
+# Note: server.js ALSO reads /opt/convoy/server/.env as a fallback. Anything
+# set here or in the EnvironmentFile wins over it. Keep that file 0640 too —
+# it is world-writable by default on some installs, which lets any local
+# process inject variables the unit never set.
+#
+# NOTE: Supabase Auth rate-limits /token BY IP, and every call it sees comes from
+# this box. The server sends Sb-Forwarded-For automatically with an sb_secret_ key,
+# but it only takes effect once IP Address Forwarding is switched ON under
+# Dashboard -> Authentication -> Rate Limits. The boot log says which mode it is in.
+Restart=always
+RestartSec=3
+
+# hardening (optional but free)
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
