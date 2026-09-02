@@ -23,6 +23,12 @@
   var connecting = false;  // a socket is mid-handshake
   var everConnected = false;
   var toldOffline = false; // only toast the outage once per outage
+  var toldOfflineTimer = null; // delays clearing toldOffline so a flapping
+                                // link (drop, reconnect, drop again within a
+                                // couple seconds) doesn't retoast every cycle
+  var PARTY_DROP_GRACE_MS = 3000; // survive a brief reconnect blip without
+                                   // instantly wiping convoy markers + mic
+  var partyDropTimer = null;
 
   function wsUrl() {
     // Capacitor shell gets an absolute wss URL; web client derives same-origin.
@@ -104,7 +110,11 @@
       ws = socket;
       everConnected = true;
       attempt = 0;
-      toldOffline = false;
+      // Don't clear toldOffline right away: a flapping link that drops again
+      // within a couple seconds of "reconnected" would otherwise retoast
+      // "Connection lost" on every cycle instead of once for the whole blip.
+      if (toldOfflineTimer) { clearTimeout(toldOfflineTimer); toldOfflineTimer = null; }
+      toldOfflineTimer = setTimeout(function () { toldOfflineTimer = null; toldOffline = false; }, PARTY_DROP_GRACE_MS);
       send({
         t: 'hello',
         token: S.auth ? S.auth.token : null,
@@ -157,6 +167,10 @@
   function onConnectFailed() {
     connecting = false;
     attempt++;
+    // A pending "connection settled" timer belongs to a connection we no
+    // longer have — let it clear toldOffline mid-outage and every retry
+    // after the first would retoast "Connection lost" again.
+    if (toldOfflineTimer) { clearTimeout(toldOfflineTimer); toldOfflineTimer = null; }
     if (!toldOffline) { toldOffline = true; fallbackSolo(everConnected); }
     else { teardownLive(); }
     scheduleRetry();
@@ -168,20 +182,35 @@
     teardownLive();
     connecting = false;
     attempt++;
+    if (toldOfflineTimer) { clearTimeout(toldOfflineTimer); toldOfflineTimer = null; }
     if (!toldOffline) { toldOffline = true; A.ui.toast('Connection lost. Reconnecting…', 'warn'); }
     scheduleRetry();
+  }
+
+  // Actually drop the convoy: clear member flags, null S.party, repaint.
+  // Split out of teardownLive so both the grace-timer path and an explicit
+  // 'party:left' from the server can reach the same single code path.
+  function dropPartyNow() {
+    partyDropTimer = null;
+    if (!S.party) return;
+    clearPartyFlags();
+    S.party = null;
+    A.mapview.setLinksData(null);
+    ST.emit('party');
   }
 
   function teardownLive() {
     live = false;
     S.netMode = 'connecting';
     if (posTimer) { clearInterval(posTimer); posTimer = null; }
-    if (S.party) {
-      clearPartyFlags();
-      S.party = null;
-      A.mapview.setLinksData(null);
-      ST.emit('party');
-    }
+    // Don't wipe the convoy the instant a socket drops — the server removes a
+    // disconnected rider from their convoy immediately, so a reconnect can't
+    // actually restore membership, but a brief flap (a tunnel handover, one
+    // dropped frame) used to null S.party and repaint on EVERY drop: markers
+    // flickered, the mic re-acquired, and reopening the convoy panel closed
+    // then reopened it. Coalesce a burst of drops into one grace-delayed,
+    // one-time transition instead of N of them.
+    if (S.party && !partyDropTimer) partyDropTimer = setTimeout(dropPartyNow, PARTY_DROP_GRACE_MS);
   }
 
   // Server unreachable / offline. No fake riders — the map shows just the player
@@ -288,6 +317,10 @@
   }
 
   function applyParty(p) {
+    // A real party message beats a pending grace-window drop — the convoy is
+    // confirmed still there, so don't null it out from under fresh state a
+    // moment later.
+    if (partyDropTimer) { clearTimeout(partyDropTimer); partyDropTimer = null; }
     var newIds = [];
     p.members.forEach(function (m) { if (m.id !== myId) newIds.push(m.id); });
 
@@ -371,10 +404,8 @@
     party: function (m) { applyParty(m.party); },
 
     'party:left': function () {
-      clearPartyFlags();
-      S.party = null;
-      A.mapview.setLinksData(null);
-      ST.emit('party');
+      if (partyDropTimer) { clearTimeout(partyDropTimer); partyDropTimer = null; }
+      dropPartyNow();
       A.ui.toast('You left the convoy', 'info');
     },
 

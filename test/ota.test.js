@@ -37,6 +37,10 @@ const { group, ok, report, ROOT, installBrowser, loadModule } = require('./harne
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'convoy-ota-'));
 const OTA_DIR = path.join(TMP, 'ota');
 fs.mkdirSync(OTA_DIR, { recursive: true });
+// Registered on 'exit' (not a trailing try/catch at the bottom of the file) so
+// a throw anywhere above — an assertion, a require — still cleans up TMP;
+// matches hotspots.test.js's exception-safe pattern.
+process.on('exit', () => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (e) { /* best effort */ } });
 const MANIFEST = path.join(OTA_DIR, 'manifest.json');
 {
   const STORE_PATH = require.resolve('../server/store.js');

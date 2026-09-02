@@ -142,10 +142,7 @@ async function jsonCapped(res) {
 }
 
 function fetchT(url, opts, ms) {
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), ms);
-  return fetch(url, Object.assign({ signal: ac.signal }, opts || {}))
-    .finally(() => clearTimeout(t));
+  return fetch(url, Object.assign({ signal: AbortSignal.timeout(ms) }, opts || {}));
 }
 
 // Normalise a bbox from the request. Returns null for anything that isn't four

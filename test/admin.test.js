@@ -892,9 +892,11 @@ function calls(method, frag) {
     SERVER_SRC.indexOf('flags.init()') < SERVER_SRC.indexOf('httpServer.listen('),
     'booting with the master switch on would still serve for a moment');
 
+  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (e) { /* best effort */ }
   process.exit(report());
 })().catch((e) => {
   restoreFetch();
+  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (e2) { /* best effort */ }
   console.error('\n\x1b[31mtest crashed:\x1b[0m', e && (e.stack || e.message));
   process.exit(1);
 });

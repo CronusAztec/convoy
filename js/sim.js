@@ -19,7 +19,6 @@
   var player = { pos: S.playerStart.slice(), heading: 0 };
   var npcs = {};            // id -> rider
   var npcOrder = [];
-  var solo = false;
   // Local player's dragy stats (PBs + race counters). Mirrors what the server
   // stores; kept in sync via adoptStats() and read by the profile overlay. Stays
   // null for guests.
@@ -167,21 +166,11 @@
   }
 
   function disableSolo() {
-    solo = false;
     if (globalTimer) { clearInterval(globalTimer); globalTimer = null; }
     clearRiders();
   }
 
   function tick() {
-    if (solo) {
-      var dt = TICK_MS / 1000;
-      var memberIdx = 0;
-      npcOrder.forEach(function (id) {
-        var npc = npcs[id];
-        if (npc.member) stepMember(npc, memberIdx++, dt);
-        else stepWanderer(npc, dt);
-      });
-    }
     ST.emit('tick');
   }
 
@@ -619,20 +608,7 @@
     lastRaw = null; // ...and the delta baseline, so the jump isn't read as speed
     hasRealPos = true; // an explicit relocate is as good as a fix for "the rider is here"
     A.mapview.setPlayer(pos, player.heading);
-    if (solo) {
-      npcOrder.forEach(function (id) {
-        var npc = npcs[id];
-        npc.pos = npc.member
-          ? U.destPoint(pos, U.rand(0, 360), U.rand(80, 300))
-          : U.destPoint(pos, U.rand(0, 360), U.rand(300, 4200));
-        npc.prev = { pos: npc.pos.slice(), heading: npc.heading };
-        npc.next = { pos: npc.pos.slice(), heading: npc.heading };
-        npc.livePos = null;
-        A.mapview.updateNpc(id, npc.pos, npc.heading);
-      });
-    } else if (A.net) {
-      A.net.sendPosNow(); // server re-scopes riders around the new position
-    }
+    if (A.net) A.net.sendPosNow(); // server re-scopes riders around the new position
     startWatch();
     ST.emit('tick');
   }
@@ -755,7 +731,6 @@
     start: start,
     enableSolo: enableSolo,
     disableSolo: disableSolo,
-    isSolo: function () { return solo; },
     playerHeading: function () { return player.heading; },
     getNpc: function (id) { return npcs[id]; },
     getByUsername: function (username) {

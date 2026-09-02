@@ -10,6 +10,7 @@ form convoys with nearby cars, and watch global drivers on a delayed feed.
 |---|---|---|
 | **LIVE (multiplayer)** | Double-click `start.bat` (or `node server/server.js`) → `http://localhost:5173` | Real riders via WebSocket + server bots, real convoys & chat across devices |
 | **Solo** | Double-click `index.html`, or serve with `python -m http.server 5173` | Same app, riders simulated on-device |
+| **LIVE, no Supabase project** | `CONVOY_DEV_AUTH=1 node server/server.js` | Same as LIVE, but accounts/sign-in/friends/stats/reports are disabled — guests can still ride, convoy and use voice. For local dev/CI only; refuses to start with `NODE_ENV=production` or `APP_URL` set to the production URL. |
 | **On your VPS** | See **[DEPLOY.md](DEPLOY.md)** | LIVE mode on the internet, HTTPS, auto-restart |
 
 The client auto-detects: if the Convoy server answers on the same origin it goes live,
@@ -121,7 +122,15 @@ otherwise it falls back to solo. One dependency (`ws`), no database, no API keys
 
 ## Tests
 
-`npm test` runs the unit suites — no server, no network, no database.
+`npm test` runs the unit suites — no server, no network, no database. It
+regenerates `www/` first (`pretest`) so a fresh clone works out of the box.
+
+`npm run smoke` is a real two-client end-to-end check: it boots a
+`CONVOY_DEV_AUTH=1` dev server, opens two headless Chromium pages (Playwright,
+fake media + fake geolocation ~300 m apart), takes each through guest
+onboarding, turns on Nearby Voice (`proxVoice=radius`) on both, and asserts
+they see each other in range. First run downloads Chromium
+(`npx playwright install chromium`, ~185 MB, one-time).
 
 Two suites are deliberately **not** in that run, because they need a live server
 and a real Supabase project. They register throwaway accounts and delete them in

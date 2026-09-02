@@ -64,7 +64,7 @@ function ttPath(pts) { return pts.map((p) => p[1] + ',' + p[0]).join(':'); }
 async function route(body, cb) {
   if (!TOMTOM_KEY) return cb(new Error('no key'));
   const from = body && body.from, to = body && body.to, via = body && body.via;
-  if (!isLngLat(from) || !isLngLat(to)) return cb(new Error('bad coords'));
+  if (!isLngLat(from) || !isLngLat(to)) return cb(new Error('bad coords'), 400);
   const pts = via && isLngLat(via) ? [from, via, to] : [from, to];
   const hasVia = pts.length > 2;
   const url = ROUTE_URL + ttPath(pts) + '/json?key=' + TOMTOM_KEY +

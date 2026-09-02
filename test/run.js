@@ -1,12 +1,20 @@
 /* Convoy — run every test suite. `npm test` */
 'use strict';
 const { spawnSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
+
+// serverpolicy.test.js reads www/index.html; regenerate it if missing so
+// `node test/run.js` works standalone, not just via the npm `pretest` hook.
+const wwwIndex = path.join(__dirname, '..', 'www', 'index.html');
+if (!fs.existsSync(wwwIndex)) {
+  spawnSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'copy-web.js')], { stdio: 'inherit' });
+}
 
 const suites = ['physics.test.js', 'behaviour.test.js', 'boundary.test.js',
   'auth.test.js', 'supabase.test.js', 'store.test.js',
   'mailer.test.js', 'oauth.test.js', 'overpass.test.js',
-  'serverpolicy.test.js', 'hotspots.test.js', 'net.test.js',
+  'serverpolicy.test.js', 'hotspots.test.js', 'net.test.js', 'netparty.test.js',
   'routegeo.test.js', 'voice.test.js', 'aircraft.test.js', 'riderarrows.test.js', 'telemetry.test.js', 'deletion.test.js',
   'sdk-inventory.test.js', 'ota.test.js', 'admin.test.js'];
 let failed = 0;

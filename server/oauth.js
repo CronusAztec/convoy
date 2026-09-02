@@ -119,8 +119,7 @@ function list() {
 }
 
 function b64url(buf) {
-  return Buffer.from(buf).toString('base64')
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return Buffer.from(buf).toString('base64url');
 }
 
 function sweep() {
