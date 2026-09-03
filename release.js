@@ -437,7 +437,7 @@ function isRoot(user) { return user === 'root'; }
 // in deploy/convoy.service). The OTA files land beside the telemetry/hotspots
 // stores; server/ota.js picks the manifest up per-request on mtime change, so
 // an OTA push never needs the systemd restart that a site deploy does.
-const OTA_DIR_REMOTE = process.env.OTA_DIR_REMOTE || '/var/lib/convoy/ota';
+const OTA_DIR_REMOTE = process.env.OTA_DIR_REMOTE || '/opt/convoy/server/data/ota';
 
 // Upload files[] in ORDER over one SSH connection. Order is the atomicity:
 // callers put the bundle zip before the manifest so an interrupted push leaves
@@ -457,6 +457,7 @@ async function uploadOtaFiles(files) {
     const ok = await new Promise((resolve) => {
       sshConnect(Client, PRIVKEY, PASS, user).then((c) => {
         if (!c) return resolve(false);
+        c.on('error', () => { try { c.end(); } catch (e5) {} resolve(false); });
         c.sftp((err, sftp) => {
           if (err) { log('   sftp error: ' + err.message); try { c.end(); } catch (e2) {} return resolve(false); }
           // mkdir is idempotent-by-ignore: EEXIST is the normal case.
@@ -478,7 +479,7 @@ async function uploadOtaFiles(files) {
               });
             })(0);
           });
-        }).catch(() => { try { c.end(); } catch (e5) {} resolve(false); });
+        });
       });
     });
     if (ok) return true;
