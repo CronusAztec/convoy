@@ -18,12 +18,25 @@
      F1  friend:add username oracle closed (silent, shape-identical no-op)
      C1  jsDelivr CSP allowlist pinned to exact files, not the origin
      U1  one throttling mechanism: the hand-rolled per-socket timestamp
-         arrays ride the shared rateOk buckets like everything else
+         arrays ride the shared rateOk buckets like everything else.
+         ONE deliberate exception, added with W1 below: the global
+         per-connection message budget in ws.on('message') keeps two
+         integers on the connection instead of a rateOk bucket, because
+         rateOk's per-call array filter at 1800/min would make the limiter
+         itself the amplifier under the flood it exists to stop. W1 pins
+         that the gate stays rateOk-free; U1 still forbids any OTHER
+         private throttle.
 
    Added with the second review round (name-sanitization regression):
      N1  rider-visible free text is character-allowlisted at the data layer —
          the door 400s (register/profile), the storage cleans, and the strip
-         is GLOBAL (first-match-only stripping was caught in review) */
+         is GLOBAL (first-match-only stripping was caught in review)
+
+   Added with the cycle-53 B3 truth pass (2026-09-03):
+     W1  the socket dispatcher survives an impolite client (a global
+         per-connection message budget over ALL message types, server-024)
+         and an absent one (the TTS synth callback checks for a response the
+         rider already abandoned before writing headers, server-022) */
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -170,5 +183,105 @@ if (n1Lit) {
   ok('the pen-test payload comes out inert and stays inert',
     !bad.test(clean('"><svg onload=alert(1)>`x`^<img src=x onerror=alert(1)>')));
 }
+
+group('W1 — the socket dispatcher survives an impolite or absent client');
+// server-024: every handler above throttles ONE message type; this is the
+// ceiling over all of them. The sizing invariant is computed from the source,
+// never hard-coded: a legitimate racer's documented peak is race:fix at 10Hz
+// (RACE_FIX_BUDGET/min) + pos at 1Hz (60/min, js/net.js sendPos) + voice:signal
+// at its own 40-per-5s ceiling (480/min). A retune below that starves a real
+// racer, and this check says so with the arithmetic in the message.
+const wsBudget = numDefault('WS_MSG_BUDGET');
+const raceFixBudget = numDefault('RACE_FIX_BUDGET');
+const legitPeak = (raceFixBudget || 0) + 60 + 480;
+ok('WS_MSG_BUDGET exists as an env-tunable parseInt default (per connection, per minute)',
+  wsBudget !== null,
+  'no WS_MSG_BUDGET constant — the dispatcher has no global budget and {"t":"wave"} at line rate is a scoped broadcast per message again');
+ok('WS_MSG_BUDGET (' + wsBudget + ') ≥ RACE_FIX_BUDGET + 60 + 480 = ' + legitPeak + " (a racer's legitimate peak)",
+  wsBudget !== null && raceFixBudget !== null && wsBudget >= legitPeak,
+  'retuned below the documented peak — a real racer at 10Hz is throttled by the flood gate');
+// Anchored on the code shape, not the phrase, so a comment that mentions the
+// handler elsewhere in the file cannot move the region.
+const msgAt = SRC.indexOf("ws.on('message', (buf) =>");
+const closeAt = SRC.indexOf("ws.on('close'", msgAt);
+const gateAt = SRC.indexOf('WS_MSG_BUDGET', msgAt);
+const lookupAt = SRC.indexOf('Object.prototype.hasOwnProperty.call(handlers, m.t)', msgAt);
+ok("the gate sits inside ws.on('message'), before the handlers[m.t] lookup",
+  msgAt >= 0 && gateAt > msgAt && lookupAt > gateAt && gateAt < closeAt,
+  'no WS_MSG_BUDGET use between the message handler start and the handler lookup (msg@' + msgAt + ' gate@' + gateAt + ' lookup@' + lookupAt + ')');
+const gate = (msgAt >= 0 && lookupAt > msgAt) ? SRC.slice(msgAt, lookupAt) : '';
+ok('the counter is two integers on the connection (c.msgWinStart / c.msgCount), lazily initialised in the gate',
+  /c\.msgWinStart/.test(gate) && /c\.msgCount/.test(gate),
+  'the fixed-window counter fields are gone');
+// Code only: the gate's own comment explains WHY it avoids rateOk, by name.
+const gateCode = gate.replace(/\/\/[^\n]*/g, '');
+ok('the gate is O(1): no rateOk() call anywhere in the dispatcher (its per-call array filter would be the amplifier)',
+  gateCode.length > 0 && gateCode.indexOf('rateOk(') === -1,
+  'rateOk crept into the hot path — every message now filters an ~1800-entry array under the flood the gate exists to stop');
+const overAt = gate.indexOf('c.msgCount > WS_MSG_BUDGET');
+const exemptAt = gate.indexOf("if (m.t !== 'hello') return;");
+ok("'hello' is counted toward the budget but never dropped (sign-in survives a reconnect storm)",
+  overAt >= 0 && exemptAt > overAt,
+  'the hello exemption is missing or precedes the budget check');
+ok('over budget drops the MESSAGE, never the socket (no close/terminate in the gate)',
+  gate.length > 0 && !/ws\.close\(|ws\.terminate\(/.test(gate),
+  "a rider whose phone burped gets disconnected instead of having a second's worth of pos frames dropped");
+ok('crossing the budget is logged once per window, naming the rider and the limit',
+  /c\.msgCount === WS_MSG_BUDGET \+ 1/.test(gate) && /console\.warn\([^;]*WS_MSG_BUDGET/.test(gate),
+  'a silent limiter that starves a real user is the failure mode to avoid');
+
+// Executed, not just grepped (the N1 pattern): the gate's real source text is
+// lifted out of server.js and run with a fake clock and a fake console. If the
+// window arithmetic, the hello exemption or the log-once rule regress, this
+// fails on the behaviour, not on a string.
+const gateStart = gate.indexOf('const now = Date.now();');
+if (gateStart >= 0) {
+  const gateSrc = gate.slice(gateStart, gate.lastIndexOf('\n'));
+  let runGate = null;
+  try { runGate = new Function('c', 'm', 'WS_MSG_BUDGET', 'WS_MSG_WINDOW_MS', 'console', 'Date', gateSrc + '\nreturn true;'); }
+  catch (e) { runGate = null; }
+  ok('the gate is self-contained (compiles with only c, m, the two constants, console and Date in scope)', !!runGate,
+    'the gate grew a dependency the executed check cannot see — keep it to the two integers');
+  if (runGate) {
+    let clock = 1000000;
+    const fakeDate = { now: () => clock };
+    const warns = [];
+    const fakeConsole = { warn: (line) => warns.push(String(line)), log() {}, error() {} };
+    const budget = wsBudget || 1800;
+    const c = { id: 'c-test', ip: '203.0.113.9', profile: { name: 'Ada' } };
+    let passed = 0, dropped = 0;
+    for (let i = 0; i < budget + 50; i++) {
+      if (runGate(c, { t: 'wave' }, budget, 60000, fakeConsole, fakeDate) === true) passed++; else dropped++;
+    }
+    ok('executed: exactly WS_MSG_BUDGET (' + budget + ') messages pass in one window, the next 50 are dropped',
+      passed === budget && dropped === 50, 'passed=' + passed + ' dropped=' + dropped);
+    ok('executed: a hello still passes while the connection is over budget',
+      runGate(c, { t: 'hello' }, budget, 60000, fakeConsole, fakeDate) === true);
+    ok('executed: crossing the budget warns exactly once per window and names the rider',
+      warns.length === 1 && /Ada/.test(warns[0]) && /203\.0\.113\.9/.test(warns[0]), warns.join(' | ') || '(no warning)');
+    clock += 60000;
+    ok('executed: after WS_MSG_WINDOW_MS the window resets and the rider is served again',
+      runGate(c, { t: 'wave' }, budget, 60000, fakeConsole, fakeDate) === true && c.msgCount === 1,
+      'msgCount=' + c.msgCount);
+    ok('executed: the counter is two plain integers on the connection, nothing else was attached',
+      Number.isInteger(c.msgWinStart) && Number.isInteger(c.msgCount) &&
+      Object.keys(c).filter((k) => k !== 'id' && k !== 'ip' && k !== 'profile').sort().join(',') === 'msgCount,msgWinStart',
+      Object.keys(c).join(','));
+  }
+}
+
+// server-022: synthesis is slow and the caller is a phone in a moving car. If
+// the client is gone by the time piper answers, writing headers throws out of
+// the async callback and lands in uncaughtException.
+const ttsAt = SRC.indexOf('ttsSynth(text, function (err, buf)');
+const releaseAt = SRC.indexOf('ttsRelease(ip);', ttsAt);
+const guardAt = SRC.indexOf('if (res.writableEnded || res.destroyed) return;', ttsAt);
+const firstWriteAt = SRC.indexOf('res.writeHead(', ttsAt);
+ok('the TTS synth callback checks res.writableEnded || res.destroyed before it writes headers',
+  ttsAt >= 0 && guardAt > ttsAt && firstWriteAt > guardAt,
+  'an aborted /api/tts throws ERR_STREAM_DESTROYED out of the synth callback again');
+ok('ttsRelease(ip) runs BEFORE that guard (an aborting client must not burn one of its in-flight synth slots)',
+  ttsAt >= 0 && releaseAt > ttsAt && guardAt > releaseAt,
+  'release after the early return = a slot leaks per aborted request until the IP is locked out of TTS');
 
 process.exit(report());

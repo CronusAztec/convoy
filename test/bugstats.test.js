@@ -53,6 +53,7 @@ function parseStatsTable(text) {
   let total = null;
   for (let i = start; i < lines.length; i++) {
     const l = lines[i];
+    if (i > start && /^#/.test(l)) break; // the severity table ends at the next heading (the roll-up below has its own)
     if (!l.startsWith('|')) continue;
     const raw = l.split('|'); // raw[0] is '' (text before the first pipe)
     if (raw.length < 7) continue;
@@ -104,5 +105,139 @@ function testBugStatsTableMatchesFile() {
     grandTotal === headerCount);
 }
 
+/* ---- B3 truth pass (cycle 53, 2026-09-03): the ledger is machine-checked ----
+   Every Server + Runtime entry carries exactly one
+     - **Status:** OPEN|FIXED|STALE (re-verified YYYY-MM-DD)[ — evidence]
+   line right after its Severity line. FIXED/STALE must cite a real path in
+   backticks, and the anti-rot check is the point of the whole thing: two
+   "critical" server entries filed against server/auth.js sat in this file for
+   two months after that file was deleted and nothing noticed. Now a FIXED line
+   whose evidence path vanishes — or a STALE line whose "no longer exists" path
+   comes back — turns npm test red with the bug's ID in the message. Scoped to
+   ## Server and ## Runtime; the other sections' truth passes are later cycles'
+   work and inherit these checks by being added to STATUS_SECTIONS. */
+const STATUS_SECTIONS = ['Server', 'Runtime'];
+const STATUS_RE = /^- \*\*Status:\*\* (OPEN|FIXED|STALE) \(re-verified (\d{4}-\d{2}-\d{2})\)( — (.+))?$/;
+const GONE_RE = /no longer exists|does not exist|was removed/;
+// `server/server.js:3054` → server/server.js · `js/net.js:222-230` → js/net.js · `users.json` → users.json
+const PATH_RE = /`([\w][\w./-]*\.(?:js|mjs|cjs|json|md|html|css|java|xml|gradle|service|sh|bat|env|txt))(?::\d+(?:-\d+)?)?`/g;
+
+function citedPaths(tail) {
+  const out = [];
+  let m;
+  PATH_RE.lastIndex = 0;
+  while ((m = PATH_RE.exec(tail || ''))) out.push(m[1]);
+  return out;
+}
+
+function parseStatuses(text) {
+  const lines = text.split('\n');
+  const entries = [];
+  let section = null, cur = null;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    const h2 = l.match(/^## (.+?)\s*$/);
+    if (h2) { section = h2[1]; cur = null; continue; }
+    const h3 = l.match(/^### BUG ([a-z]+-\d+)/);
+    if (h3) { cur = { id: h3[1], section, line: i + 1, sevLine: null, statuses: [] }; entries.push(cur); continue; }
+    if (!cur) continue;
+    if (cur.sevLine === null && /^- \*\*Severity:\*\* /.test(l)) cur.sevLine = i + 1;
+    if (/^- \*\*Status:\*\*/.test(l)) {
+      const m = l.match(STATUS_RE);
+      cur.statuses.push({ line: i + 1, status: m ? m[1] : null, date: m ? m[2] : null, tail: m ? (m[4] || '') : '' });
+    }
+  }
+  return entries.filter((e) => STATUS_SECTIONS.indexOf(e.section) !== -1);
+}
+
+function parseRollup(text) {
+  const lines = text.split('\n');
+  const start = lines.findIndex((l) => /^### Open-status roll-up/.test(l));
+  if (start === -1) return null;
+  const rows = {};
+  for (let i = start + 1; i < lines.length; i++) {
+    const l = lines[i];
+    if (/^#/.test(l)) break;
+    if (!l.startsWith('|')) continue;
+    const raw = l.split('|');
+    if (raw.length < 6) continue;
+    const area = raw[1].trim().replace(/\*/g, '');
+    const nums = raw.slice(2, 6).map((c) => parseInt(c.replace(/\*/g, '').trim(), 10));
+    if (nums.some((n) => Number.isNaN(n))) continue;
+    rows[area] = nums; // [OPEN, FIXED, STALE, total]
+  }
+  return rows;
+}
+
+function testStatusLedger() {
+  H.group('BUGS.md — Server + Runtime "Status" lines are present, well-formed and not rotten (B3)');
+  const text = fs.readFileSync(BUGS_PATH, 'utf8');
+  const entries = parseStatuses(text);
+  const ids = (arr) => arr.map((e) => e.id).join(', ') || 'none';
+
+  const wrongCount = entries.filter((e) => e.statuses.length !== 1);
+  H.ok('every Server/Runtime entry (' + entries.length + ') carries exactly one "- **Status:**" line',
+    entries.length >= 34 && wrongCount.length === 0,
+    'entries with 0 or 2+ Status lines: ' + ids(wrongCount) + (entries.length < 34 ? ' (only ' + entries.length + ' entries parsed)' : ''));
+
+  const misplaced = entries.filter((e) => e.statuses.length &&
+    (e.sevLine === null || e.sevLine > e.line + 5 || e.statuses[0].line <= e.sevLine));
+  H.ok('Status follows Severity, and Severity stays within 5 lines of the header (the Stats parser above depends on it)',
+    misplaced.length === 0, 'misplaced: ' + ids(misplaced));
+
+  const malformed = entries.filter((e) => e.statuses.some((st) => !st.status));
+  H.ok('every Status line reads "OPEN|FIXED|STALE (re-verified YYYY-MM-DD)[ — evidence]" — nothing else',
+    malformed.length === 0, 'malformed: ' + ids(malformed));
+
+  const flat = [];
+  for (const e of entries) for (const st of e.statuses) if (st.status) flat.push(Object.assign({ id: e.id }, st));
+
+  const noEvidence = flat.filter((st) => (st.status === 'FIXED' || st.status === 'STALE') && citedPaths(st.tail).length === 0);
+  H.ok('every FIXED and STALE line cites at least one `path` in its evidence tail',
+    noEvidence.length === 0, 'no path cited: ' + ids(noEvidence));
+
+  // The anti-rot check. FIXED: every cited path must exist. STALE: when the tail
+  // says something is gone, the FIRST cited path must be absent and the rest
+  // (what replaced it) must exist; otherwise everything cited must exist.
+  const rotten = [];
+  for (const st of flat) {
+    if (st.status === 'OPEN') continue;
+    const gone = st.status === 'STALE' && GONE_RE.test(st.tail);
+    citedPaths(st.tail).forEach((p, i) => {
+      const exists = fs.existsSync(path.join(ROOT, p));
+      if (gone && i === 0) { if (exists) rotten.push(st.id + ' says `' + p + '` is gone but it exists'); }
+      else if (!exists) rotten.push(st.id + ' cites `' + p + '` which does not exist');
+    });
+  }
+  H.ok('anti-rot: every FIXED evidence path exists on disk, and a STALE "no longer exists" path really is gone',
+    rotten.length === 0, rotten.join('; ') || 'none');
+
+  const tally = {};
+  for (const e of entries) {
+    const t = tally[e.section] || (tally[e.section] = { OPEN: 0, FIXED: 0, STALE: 0, total: 0 });
+    const st = e.statuses[0] && e.statuses[0].status;
+    if (st) t[st]++;
+    t.total++;
+  }
+  const rollup = parseRollup(text);
+  H.ok('BUGS.md has an "### Open-status roll-up" table under ## Stats',
+    !!rollup && Object.keys(rollup).length >= 3, 'missing or unparseable roll-up table');
+  const grand = { OPEN: 0, FIXED: 0, STALE: 0, total: 0 };
+  for (const area of STATUS_SECTIONS) {
+    const t = tally[area] || { OPEN: 0, FIXED: 0, STALE: 0, total: 0 };
+    for (const k of Object.keys(grand)) grand[k] += t[k];
+    const expected = [t.OPEN, t.FIXED, t.STALE, t.total];
+    const actual = rollup && rollup[area];
+    H.ok('roll-up row "' + area + '" (' + (actual ? actual.join('/') : 'MISSING') +
+      ') matches the Status lines (OPEN/FIXED/STALE/total = ' + expected.join('/') + ')',
+      !!actual && actual.length === 4 && actual.every((n, k) => n === expected[k]), 'recomputed: ' + expected.join('/'));
+  }
+  const expectedTotal = [grand.OPEN, grand.FIXED, grand.STALE, grand.total];
+  const actualTotal = rollup && rollup.Total;
+  H.ok('roll-up "Total" row (' + (actualTotal ? actualTotal.join('/') : 'MISSING') + ') matches (' + expectedTotal.join('/') + ')',
+    !!actualTotal && actualTotal.length === 4 && actualTotal.every((n, k) => n === expectedTotal[k]), 'recomputed: ' + expectedTotal.join('/'));
+}
+
 testBugStatsTableMatchesFile();
+testStatusLedger();
 process.exit(H.report());

@@ -18,7 +18,7 @@ installed APKs, unlimited cycles). The push stage follows `deploy/PUSH-RUNBOOK.m
 | # | Aspect | Status | Closes when |
 |---|---|---|---|
 | A | Front-end (cycles 0-4, closed in cycle 50) | **done 2026-09-03** — released by the cycle-50 push stage at 06:56Z (`stages/0021-c050-push.md`). Closing facts, re-measured in cycle 51 at 07:00Z with one request each: (1) `/api/ota` → `"current":{"version":"1.0.117",…}` (was `null` since the mission began); (2) https://odoreeci.tech serves `45 v=cy117` (== local). `livetest` PASS in the push report | `setShellInert` nesting fix + shell-restore invariant test + `#toasts` scoping landed ✔; stamp bumped to `cy117` ✔; review not BROKEN; push stage reports `cy117` served and `/api/ota` current = 1.0.117; livetest green |
-| B | Backend / server (`server/*.js`) | **current** — B1 **done** (cycle 51: measured Overpass truth pass, section "Aspect B — backend truth pass (cycle 51)" below); B2 **done in code** (cycle 52 stage 26: per-mirror failure reasons + counters in `server/overpass.js` = server-031, intro-globe junk queries stopped in `js/ghost.js` = frontend-019; ships with the cycle-52 push, stamp `cy118`); **next: B3 = the 33-entry BUGS.md server/runtime re-verification** — verify each entry against current code first, fix nothing until the open count is real | BUGS.md server+runtime truth pass (33 entries re-verified against current code, statuses updated, `bugstats` green); every open critical/high server bug fixed **with a regression test**; stamped assets cached `immutable`; shipped via Lane B/A |
+| B | Backend / server (`server/*.js`) | **current** — B1 **done** (cycle 51, section "Aspect B — backend truth pass (cycle 51)" below); B2 **done and shipped** (cycle 52: server-031 + frontend-019, live as `cy118` / OTA `1.0.118` since 2026-09-03 07:46Z, `stages/0029-c052-push.md`); **B3 done in code (cycle 53 stage 30)**: all **34** Server + Runtime entries re-verified against the current tree with a machine-checked `- **Status:**` line each — **8 OPEN / 22 FIXED / 4 STALE** (Server 8/17/3, Runtime 0/5/1; `test/bugstats.test.js` 11→20 checks incl. the anti-rot path check) and the two really-open ones fixed with tests: server-024 (global per-connection `WS_MSG_BUDGET` gate, O(1)) and server-022 (TTS callback dead-response guard), `test/serverpolicy.test.js` 39→55 (group W1). Server-only cycle → **no stamp bump** (`45 × cy118` == production); the push stage runs **Lane B**. **Closing criterion NOT met yet** — open critical/high after the pass: server-011 (critical, latent — needs a measured cycle of its own), server-017 (high, shared `auth:`+ip bucket still fronts every anon auth route), server-020 (high, `humanMembers[0]` leader pick), server-002 (high but latent — bots off in production). **Next: B3b** = fix 002/017/020 with regression tests and take the server-011 decision explicitly; then plan-v2's static cache policy (stamped assets still served `cache-control: no-cache`, stage-17 evidence) and B4 Overpass mirrors (production per-mirror log lines now accumulating since the 07:46Z restart) | BUGS.md server+runtime truth pass (33 entries re-verified against current code, statuses updated, `bugstats` green); every open critical/high server bug fixed **with a regression test**; stamped assets cached `immutable`; shipped via Lane B/A |
 | C | Smoothness (delivery + client runtime) | after B | request count ≤ 30 on first load; reduced-motion/idle-CPU audit (plan v1 M10); reconnect UX (frontend-012/013); measured with the headless Chromium recipe below; shipped |
 | D | Android native (code + compile-check only) | after C | android-002/003/004/009/011/014 fixed; compiles with a user-local JDK/SDK if that lands in 20 min, else code-reviewed; **shipping needs the human's keystore** |
 | E | Front-end round 2 | after D | plan v1 M7 (ui.js split), M8 (states), M9 (responsive), M11 (onboarding) |
@@ -53,6 +53,50 @@ if any shared key's value has been raised. New keys (e.g. this stage's `axeViola
 `axeViolations_authLogin` replacing `axeViolations_auth`) are exempt on the stage that introduces them.
 
 ## Current milestone
+**Cycle 53 stage 30 (IMPLEMENT, executing the cycle-52-stage-28 IMPROVE directive's Tasks 1-4) — DONE, server-only, NO STAMP BUMP.**
+The server stops assuming the client is polite (server-024) or present (server-022), and the Server/Runtime
+half of BUGS.md is finally a measured ledger instead of a two-month-old to-do list (B3 truth pass).
+
+1. **Task 1a — `server/server.js` global per-connection websocket budget (server-024).** `WS_MSG_BUDGET`
+   (env-tunable, default **1800/min**, defined next to `RACE_FIX_BUDGET` with the sizing argument: 700 race:fix
+   + 60 pos + 480 voice:signal ≈ 1240 legitimate peak, ×1.45 headroom) gates `ws.on('message')` after the
+   hello-first guard and before the `handlers[m.t]` lookup. Fixed 60 s window, **two integers on the connection**
+   (`c.msgWinStart`, `c.msgCount`, lazily initialised — the first message sees `NaN` and opens a window), **O(1)**
+   per message and deliberately NOT `rateOk()` (its per-call array filter would make the limiter the amplifier;
+   this is the one recorded exception to the U1 "one throttling mechanism" policy). `hello` is counted but never
+   dropped; over budget drops the **message, not the socket**; one `console.warn` per window naming the rider, IP
+   and limit. `WS_MSG_BUDGET` in `convoy.env` is the dial.
+2. **Task 1b — the TTS synth callback no longer writes to a dead response (server-022).** `ttsRelease(ip)` first
+   (the slot must be freed whether or not anyone is listening), then `if (res.writableEnded || res.destroyed) return;`.
+3. **Task 1c — `test/serverpolicy.test.js` group W1**, 39 → **55** checks (+16): the sizing invariant computed from
+   the source (`WS_MSG_BUDGET ≥ RACE_FIX_BUDGET + 60 + 480`), source-order (gate inside the handler, before the
+   lookup), the two-integer counter, no `rateOk(` in the dispatcher *code* (comments stripped), hello exempt, no
+   close/terminate, log-once — plus the gate's real source text lifted out of server.js and **executed** with a fake
+   clock (1800 pass / next 50 dropped / hello passes / one warning / window resets / only the two fields attached),
+   and the server-022 guard + `ttsRelease` ordering. **RED first:** 8 of the new checks failed against the
+   unmodified server (41 passed / 8 failed), all green after the two patches.
+4. **Task 2 — B3 truth pass.** Every one of the 34 Server + Runtime entries now carries exactly one
+   `- **Status:** OPEN|FIXED|STALE (re-verified 2026-09-03) — evidence` line right after its Severity line, with
+   `file:line` citations computed against the *patched* tree at write time (`/tmp` script, no hand-typed numbers).
+   Result **Server 8 OPEN / 17 FIXED / 3 STALE, Runtime 0 / 5 / 1** — vs the directive's pre-seed, four calls went
+   the other way after reading the code: server-009 OPEN (the "Proximity gate" the pre-seed cited belongs to
+   `race:join`, not `party:invite`), server-017 OPEN (the shared `auth:`+ip bucket still fronts every anon route at
+   24/10 min), server-014 OPEN-latent (the 200 k stringify premise is exactly the cap), server-002 OPEN-latent (no
+   try/catch, but bots are off); server-010 and runtime-002 FIXED (explicit `process.exit` / conditional-DELETE burn).
+5. **Task 3 — `test/bugstats.test.js`** 11 → **20** checks: exactly-one-Status, placement after Severity (parser
+   safety), format, evidence-path presence, the **anti-rot check** (every FIXED path must exist; a STALE "no longer
+   exists" path must be absent and the rest present), and the roll-up table rows. **RED first** (5 failed naming all
+   34 IDs before the lines existed); the anti-rot check proven by pointing server-001 at `server/auth.js`:
+   `server-001 cites \`server/auth.js\` which does not exist`. `parseStatsTable` now stops at the next heading so the
+   new `### Open-status roll-up` table under `## Stats` cannot collide with the severity table.
+6. **Task 4 — housekeeping.** Top-priorities table: the dangling `server-030` reference is gone (`server-003` alone,
+   note that 028-030 were never assigned), the five Server/Runtime rows carry their verdicts, the three Android rows
+   say "not re-verified". Stamp untouched: `45 ?v=cy118` == production.
+
+**What B still needs (the honest count):** 4 open critical/high server entries — server-011 (latent, measure first),
+server-017, server-020, server-002 (small fixes + tests) — then the static cache policy, then B4 with real Overpass
+log lines. See the roadmap row above.
+
 **Cycle 52 stage 26 (IMPLEMENT, executing the cycle-51-stage-24 IMPROVE directive's Tasks 1-4) — DONE.
 B2 shipped in code: the Overpass proxy now says which mirror failed and why (server-031), and the client no
 longer asks Overpass about the intro globe's fictional 4° box at longitude 0 (frontend-019). The two halves
@@ -710,6 +754,13 @@ one and why"). `frontend.test.js` 78 (unchanged), `browser.test.js` 5/5, `bugsta
 bugs). `npm run test:frontend` 7 baseline keys **unchanged** (`htmlValidateErrors` 13, `axeViolations_*`
 0 ×6, `detectorWarnings` 17) — expected: Task 2 touched no markup. Keep suite count (25), every per-suite
 check count, and the 7 baseline keys from going down.
+`npm test` on 2026-09-03 (implementer stage 30, cycle 53, after Tasks 1-4, server-only): **All 25 suites passed**
+(unchanged count). `serverpolicy.test.js` 39 → **55** (+16, group W1 incl. 6 executed-gate checks).
+`bugstats.test.js` 11 → **20** (+9, B3 ledger + anti-rot + roll-up; still **100** bugs). `frontend.test.js` 78,
+`overpass.test.js` 66, `ghostbbox.test.js` 18, `browser.test.js` 5/5 — all unchanged. `npm run test:frontend`
+7 baseline keys **unchanged** (`htmlValidateErrors` 13, `axeViolations_*` 0 ×6, `detectorWarnings` 17) —
+expected: no web file touched. Stamp deliberately **not** bumped: `45 ?v=cy118` == production `cy118`. Keep suite
+count (25), every per-suite check count, and the 7 baseline keys from going down.
 
 ## Operating contract (cycle 50+, plan v2) — every role reads this; it is the tail of this file on purpose
 1. **One aspect at a time.** Implement works only on the current aspect's next milestone from plan v2

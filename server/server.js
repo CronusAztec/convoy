@@ -1783,6 +1783,18 @@ const RACE_MAX = 8;        // racers per race (matches the parking-lot feel of a
 // cadence, and per IP at "a full NAT'd race group" headroom.
 const RACE_FIX_BUDGET = parseInt(process.env.RACE_FIX_BUDGET || '700', 10);        // per connection /min
 const RACE_FIX_IP_BUDGET = parseInt(process.env.RACE_FIX_IP_BUDGET || '3600', 10); // per IP /min (6 racers @10Hz)
+// Global per-connection websocket message budget (server-024). Every bucket
+// above throttles ONE message type; this is the ceiling over ALL of them, so a
+// signed-in client cannot push {"t":"wave"} at line rate and turn each one
+// into a scoped broadcast. Sized against a legitimate racer's documented peak:
+// race:fix at 10Hz (RACE_FIX_BUDGET, 700/min) + pos at 1Hz (60/min, js/net.js
+// sendPos) + voice:signal at its own ceiling of 40 per 5s (480/min) ≈ 1240/min.
+// 1800 leaves ~1.45× headroom and still cuts a line-rate flood by orders of
+// magnitude; test/serverpolicy.test.js W1 pins that arithmetic. Per
+// connection, per fixed 60s window; the gate itself sits in the socket's
+// message handler, after the hello-first guard and before the handler lookup.
+const WS_MSG_BUDGET = parseInt(process.env.WS_MSG_BUDGET || '1800', 10);
+const WS_MSG_WINDOW_MS = 60 * 1000;
 // How far from your own position you may drop a crowd report. Generous enough
 // for "police a couple of exits up", tight enough that the hotspot model can't
 // be seeded from the other side of the planet.
@@ -3585,7 +3597,15 @@ const httpServer = http.createServer((req, res) => {
     catch (e) { text = ''; }
     if (!text) { ttsRelease(ip); res.writeHead(400); res.end('no text'); return; }
     ttsSynth(text, function (err, buf) {
+      // Free the in-flight slot FIRST, whether or not anyone is still listening:
+      // an aborting client must not permanently burn one of its concurrent-synth
+      // slots (server-022, the ordering is the subtle part).
       ttsRelease(ip);
+      // The rider can drive out of the tab (or background the app) mid-synth;
+      // writing headers to a response the client already destroyed throws out
+      // of this async callback and lands in uncaughtException. Nothing to send
+      // to, so just stop.
+      if (res.writableEnded || res.destroyed) return;
       if (err || !buf) { res.writeHead(503); res.end('synth failed'); return; }
       res.writeHead(200, Object.assign({ 'Content-Type': 'audio/wav', 'Content-Length': buf.length, 'Cache-Control': 'public, max-age=86400' }, CORS_HEADERS));
       res.end(req.method === 'HEAD' ? undefined : buf);
@@ -3826,6 +3846,33 @@ wss.on('connection', (ws, req) => {
     try { m = JSON.parse(buf.toString()); } catch (e) { return; }
     if (!m || typeof m.t !== 'string') return;
     if (m.t !== 'hello' && !c.profile) return; // must say hello first
+    // Global budget (server-024): a fixed 60s window and two integers on the
+    // connection — O(1) per message, on purpose. rateOk() is the ONE throttling
+    // mechanism everything else rides (U1 in test/serverpolicy.test.js), but it
+    // .filter()s its timestamp array on every call: at an 1800/min budget that
+    // is ~1800 array operations per message, so under the exact flood this gate
+    // exists to stop, the limiter would become the amplifier. This is the one
+    // deliberate exception to U1. The fields are initialised lazily here (the
+    // first message sees msgWinStart undefined → NaN → a fresh window) rather
+    // than in the connection literal, so nothing else has to know about them.
+    // 'hello' is counted but never dropped: dropping it would break sign-in
+    // during a reconnect storm, and hello floods are already bounded by
+    // MAX_PER_IP plus the once-per-socket guard in the handler itself. Over
+    // budget → drop the MESSAGE, keep the socket: every high-rate type (pos at
+    // 1Hz, race:fix at 10Hz) is superseded within a second, and disconnecting
+    // a rider whose phone burped is worse than the flood. Logged once per
+    // window so a real rider tripping it shows up in journalctl with a name
+    // and the limit — WS_MSG_BUDGET in convoy.env is the dial.
+    const now = Date.now();
+    if (!(now - c.msgWinStart < WS_MSG_WINDOW_MS)) { c.msgWinStart = now; c.msgCount = 0; }
+    c.msgCount++;
+    if (c.msgCount > WS_MSG_BUDGET) {
+      if (c.msgCount === WS_MSG_BUDGET + 1) {
+        console.warn('[ws] ' + ((c.profile && c.profile.name) || c.id) + ' (' + c.ip + ') crossed WS_MSG_BUDGET (' +
+          WS_MSG_BUDGET + ' msgs/min) — dropping the rest of this window');
+      }
+      if (m.t !== 'hello') return;
+    }
     // Own properties only, and only callables: m.t comes off the wire, and a
     // bare lookup would hand back inherited Object.prototype members
     // ('constructor', 'toString', …) as if they were message handlers.
