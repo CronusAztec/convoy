@@ -2569,7 +2569,7 @@
       var lvl = V.level ? V.level() : 0;
       // Speech sits low in a linear RMS; scale so normal talking fills the bar.
       var pct = Math.min(100, Math.round(Math.sqrt(lvl) * 140));
-      meterBar.style.width = pct + '%';
+      meterBar.style.transform = 'scaleX(' + (pct / 100) + ')';
       meterBar.classList.toggle('hot', pct > 6 && !V.isSelfMuted());
       requestAnimationFrame(paintMeter);
     })();

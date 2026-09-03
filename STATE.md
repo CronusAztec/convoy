@@ -30,10 +30,10 @@ neutral-slate accent, Chakra Petch / Share Tech Mono) is preserved.
    styles with no behavioural impact) are pinned as the new floor for `htmlValidateErrors` in
    `test/frontend-baseline.json`, not chased to literal zero.
 
-## Metrics (baseline 2026-09-03 → cycle 2 stage 8 → target)
-| Gate | Original baseline (M1) | **Current (stage 8)** | Target | Command |
+## Metrics (baseline 2026-09-03 → cycle 3 stage 11 → target)
+| Gate | Original baseline (M1) | **Current (stage 11)** | Target | Command |
 |---|---|---|---|---|
-| M-A design-integrity findings (impeccable detector) | 37 (32 warnings, 5 advisories) | **37, unchanged** (no CSS touched this stage — committed to cycle 2's readability pass, see stage 7's "Loop health") | 22 actionable findings → 0 (see amendment 1) | `node /opt/data/skills/creative/impeccable/scripts/detect.mjs --json index.html css/styles.css js/ui.js \| grep -c '"antipattern"'` |
+| M-A design-integrity findings (impeccable detector) | 37 (32 warnings, 5 advisories) | **17** — the actionable subset (`undersized-ui-text` 14, `tiny-text` 1, `layout-transition` 5, `clipped-overflow-container` 2) is now **0**; remaining 17 is the checked-in design-identity allowlist, see `css/DESIGN-DECISIONS.md` | 22 actionable findings → 0 — **MET**; remaining 17 allowlisted per amendment 1, not chased further | `node /opt/data/skills/creative/impeccable/scripts/detect.mjs --json index.html css/styles.css js/ui.js \| grep -c '"antipattern"'` |
 | M-B html-validate errors on `index.html` | 57 | **13, unchanged** (7 `void-style` + 5 `no-inline-style`, both taste — pinned; 1 `prefer-native-element` on `#search-results`, kept on purpose — see below) | 0 in correctness/a11y rule classes — **already met** (see amendment 2) | `npm run test:frontend` |
 | M-B axe-core violations per surface | shell 1, nearby 1, convoy 2, profile 5, auth **5 (mismeasured, see below)** | **shell 0, nearby 0, convoy 0, profile 0, authWelcome 0, authLogin 0 — target met on all six surfaces** (stage 8: `#radar-dock` landmark fix cleared `region` everywhere; `mkRow`/`mkField`/`.dot-color`/`.emoji-btn` accessible-name fixes cleared the rest) | 0 on every surface — **MET** | `npm run test:frontend` |
 | M-B open BUGS.md UI/UX bugs | 13 listed, ui-003/011/013 confirmed open | **19 listed** (added ui-015..019 this stage), **9 fixed** (ui-001, ui-004, ui-006, ui-014, ui-015, ui-016, ui-017, ui-018, ui-019) | all closed | read `BUGS.md` §UI/UX |
@@ -46,7 +46,59 @@ if any shared key's value has been raised. New keys (e.g. this stage's `axeViola
 `axeViolations_authLogin` replacing `axeViolations_auth`) are exempt on the stage that introduces them.
 
 ## Current milestone
-**Cycle 2 stage 8 (IMPLEMENT, improvement-directive tasks 1-4) — DONE.** `axeViolations_*` driven
+**Cycle 3 stage 11 (IMPLEMENT, executing the cycle-2-stage-10 IMPROVE directive's tasks 1-4) — DONE. First stage of the mission
+that changed how the app looks to a sighted user.** `detectorWarnings` driven **37 → 17**. Four
+tasks, all complete:
+1. **Task 1 — 12px typography floor across `css/styles.css`.** All 76 `font-size` declarations below
+   12px (32 sub-11px + 44 at 11px) raised to `12px`, changing only the `font-size` token on each line
+   (verified: `git diff` shows exactly 152 changed lines = 76 × 2, no `font-weight`/`letter-spacing`/
+   `text-transform`/`font-family` touched). What a sighted user sees differently: the bottom dock
+   labels (Map/Nearby/Convoy/Profile/Scan, `css:514`, 10px→12px), the status chips on phone width
+   (`css:2192`, 9.5px→12px — the mobile-only shrink that was the app's single clearest legibility
+   bug, per the improvement directive), the radar risk/status labels (`css:2410`, 10px→12px), the PTT
+   mode label (`css:2069`), and the speed-limit-sign "LIMIT"/"MPH" captions (`css:2456,2463`,
+   9px/8px→12px). `undersized-ui-text` 14→0, `tiny-text` 1→0. Detector 37→22 (exact predicted
+   number). `npm test` unaffected (still 22 suites / 41 checks at this point).
+2. **Task 2 — the floor is now enforced by code.** New `testFontSizeFloor()` group in
+   `test/frontend.test.js`, source-text regex over `css/styles.css` (not computed-style — this is
+   the only gate that covers the ~61 font-size rules on JS-built panels the detector's static-HTML
+   render never sees, vs. the 15 it can). `FONT_SIZE_FLOOR_EXCEPTIONS` map ready for a documented
+   exception, currently empty. **Verified it actually fails**: appended a throwaway `font-size: 9px`
+   rule, ran `npm run test:frontend`, got `1 failed, 42 passed` naming the exact offending
+   declaration, then reverted and confirmed `git status --short css/styles.css` showed only the
+   legitimate Task-1 diff (no test contamination). Check count 41→43 (this task's 2 assertions).
+3. **Task 3 — killed all 5 `layout-transition` findings.** Converted `.progress i`, `.vc-meter-fill`,
+   `.rrisk-fill`, `.dragy-prog i`, `.race-row-bar i` from animating `width` to animating
+   `transform: scaleX()` (compositor-only — `.vc-meter-fill` in particular re-renders every 60ms
+   during voice activity, so this removes a layout+paint forced on the main thread ~16×/sec while it's
+   also driving the MapLibre canvas and GPS stream). Updated all 5 single JS writers in the same
+   change (confirmed via `grep -rn "style.width" js/*.js` before/after — the 4 fill writers plus
+   `race.js`'s inline-template writer are gone, only the 3 unrelated one-time `='100%'` setups and 1
+   canvas-sizing call remain; `grep -rn style.transform` confirms all 5 new writers present,
+   including `race.js:362`'s inline-template form). `layout-transition` 5→0. Detector 22→17 (exact
+   predicted number). `npm test` still 22 suites / 43 checks.
+4. **Task 4 — checked in the design-identity allowlist and re-baselined.** New file
+   `css/DESIGN-DECISIONS.md`: the remaining 17 detector findings (`dark-glow` 6, `side-tab` 4,
+   `codex-grid-background` 2, `gpt-thin-border-wide-shadow` 2, `repeating-stripes-gradient` 1,
+   `clipped-overflow-container` 2) each get a one-line justification; counts sum to exactly 17.
+   `clipped-overflow-container` is recorded as a **false positive** (fires on `html`/`body`'s
+   load-bearing `overflow:hidden`, flagging `position:fixed` children that rule doesn't actually
+   clip) — allowlisted, not touched. `test/frontend-baseline.json`: `detectorWarnings` 37→17,
+   `_comment` extended (not replaced) with this stage's method and the two visual-verification-pending
+   caveats below. `BUGS.md`: added **ui-020** (`.rd-limit` badge may grow past its 46px min-width at
+   12px — acceptable trade, min-width not max-width so it grows not clips, unverified without a
+   browser) and **ui-021** (`.progress i`/`.dragy-prog i` box-shadow glow is horizontally compressed
+   by `scaleX(s)` at partial fill — subtle on a 5-6px bar, unverified). Stats table: UI/UX
+   19→21 entries (+2, neither fixed nor broken — genuinely unverified), grand total 84→86.
+   `graphify update .`: **3071 nodes, 5700 edges, 198 communities.**
+
+**Visual-verification-pending (carry forward — see Human-only actions below):** the `.rd-limit`
+badge-growth and `scaleX` glow-compression items above are reasoned from CSS/JS source, not seen on
+a rendered screen. No browser on this box (M2 formally dropped). A human with a browser should
+glance at the radar dock and the routing/drag progress bars at phone width; this is a ~1-minute
+check, not a redo of the work.
+
+Prior milestone, for context — **Cycle 2 stage 8 (IMPLEMENT, improvement-directive tasks 1-4) — DONE.** `axeViolations_*` driven
 from 11 total (across 6 surfaces) to **0 everywhere**. Four tasks, all complete:
 1. **Task 1 — fixed the ratchet guard's `_comment` bug** (`test/frontend.test.js`, `testBaselineRatchet()`):
    the loop now skips any committed key whose value is not a `number`, so appending to the prose
@@ -123,20 +175,17 @@ or JS behaviour touched). Four tasks, all complete:
    was added above `#search-results`). `graphify update .` run — 3065 nodes, 5692 edges, 197
    communities.
 
-**Next (per the stage-7 IMPROVE directive's explicit commitment): cycle 2's second task is
-`ui-003` (focus trap) and `ui-013` (`inert` closed panels)** — both deferred three times on
-purpose, on the stated logic that they're panel-lifecycle behavioural changes and the sane order
-was to land + verify accessible-naming (this stage) first. That naming work is now done and
-verified, so nothing blocks starting them. **After that: the stage-7-committed "readability
-pass"** — drive the impeccable detector's actionable subset (14 `undersized-ui-text` + 1
-`tiny-text` + 5 `layout-transition` + 2 `clipped-overflow-container` = 22 findings) to zero; this
-is the first CSS-touching work of the mission and the reviewer's standing mission-fit criticism
-("nothing shipped so far is visible to a sighted user") applies until it lands. The remaining ~15
-detector findings (`dark-glow`, `side-tab`, `codex-grid-background`, `repeating-stripes-gradient`)
-are the deliberate visual identity — checked-in allowlist with justifications, never a silently
-lowered number (plan amendment §5(a), still not built — process work, correctly deprioritized
-twice now behind higher-value fixes). M2 (headless Chromium) remains formally dropped — no sudo,
-20 missing shared libs, do not re-attempt without a human installing them.
+**Next (per the cycle 2 stage 10 IMPROVE directive's explicit "first item of cycle 3" commitment):
+`ui-003` (focus trap) and `ui-013` (`inert` closed panels).** These have now been deferred **four**
+times, always on a stated, legitimate dependency (naming had to be trustworthy first, then the CSS
+readability pass had to land as its own clean diff rather than being mixed with a panel-lifecycle
+behavioural change). Both dependencies are now satisfied — accessible naming is done and verified
+(cycle 2 stage 8), and the CSS readability pass is done and verified (this stage). **Nothing
+technical blocks starting them; this must be the top item of the next IMPLEMENT stage.** After that:
+`htmlValidateErrors` (13) and the `.htmlvalidate.json` rule-class split (plan amendment §5(b)),
+still enforced by narrative only — genuinely lower priority than ui-003/013, correctly deprioritized
+again this stage. M2 (headless Chromium) remains formally dropped — no sudo, 20 missing shared libs,
+do not re-attempt without a human installing them.
 
 ## Progress log
 - 2026-09-03 stage 1 (PLAN): plan written; skills installed; baselines measured; STATE.md created. No app code changed.
@@ -170,6 +219,21 @@ twice now behind higher-value fixes). M2 (headless Chromium) remains formally dr
   bogus assertion, +2 for the new duplicate-id regression test). `BUGS.md`: 14→19 entries (5 new,
   all fixed), plus the stats-table arithmetic error fixed. `graphify update .`: 3067 nodes, 5697
   edges, 197 communities.
+- 2026-09-03 stage 9 (REVIEW): verified stage 8's claims (zero BLOCKER/HIGH/MEDIUM findings — first
+  clean review of the mission); reiterated the standing mission-fit gap: 9 stages in, `css/styles.css`
+  had never changed, so nothing shipped was visible to a sighted user. Directed the next IMPROVE role
+  to commit to a CSS readability pass rather than deferring it a third time.
+- 2026-09-03 stage 10 (IMPROVE): ran two font-floor experiments (11px vs 12px) to falsify a suspected
+  relabelling trap before writing the work order — found the trap does not exist, and that 12px
+  clears both `undersized-ui-text` and `tiny-text` (37→22, measured, not predicted). Traced all 5
+  `layout-transition` findings to their single JS writers each. Wrote the 4-task directive executed
+  in stage 11; explicitly deferred `ui-003`/`ui-013` a fourth time on a stated capacity reason, and
+  named it as the mandatory first item of cycle 3.
+- **2026-09-03 stage 11 (IMPLEMENT, this stage): executed all 4 tasks — see "Current milestone"
+  above for full detail.** Headline: `detectorWarnings` **37 → 17**, the first CSS change of the
+  mission. `npm test`: 22 suites, **43/43 checks** (+2 for `testFontSizeFloor()`). `BUGS.md`: 19→21
+  entries (+2, both visual-verification-pending, neither fixed nor broken), stats table updated.
+  New file `css/DESIGN-DECISIONS.md`. `graphify update .`: 3071 nodes, 5700 edges, 198 communities.
 
 ## How to run (solo mode — no Supabase needed)
 ```bash
@@ -203,12 +267,19 @@ Test baseline: see "Test baseline" below.
 - `test/frontend-baseline.json` is now ratchet-enforced by code (`testBaselineRatchet()`), not just convention.
 
 ## Human-only actions (surface every review)
-1. `node release.js --ota` to ship web changes (needs VPS_KEY/VPS_HOST). **Production still serves the
-   line-15 orphan-markup defect (BUGS.md ui-014) and the 59 previously-unnamed controls (BUGS.md
-   ui-015..019) until this happens** — all fixed in this repo, none shipped.
-2. Supabase keys in `server/.env` only if live-mode local testing is wanted.
-3. Product name decision (Slipstream vs Convoy). Unresolved for 8 stages, still not an agent's call.
-4. Optional, would unblock visual verification: install Chromium's shared libraries (needs root).
+1. `node release.js --ota` to ship web changes (needs VPS_KEY/VPS_HOST). **Production still serves
+   the line-15 orphan-markup defect (BUGS.md ui-014), the 59 previously-unnamed controls (BUGS.md
+   ui-015..019), and now also the entire typography floor (76 declarations) and the 5-site
+   progress-bar performance fix (this stage) until this happens** — all fixed in this repo, none
+   shipped.
+2. **Now the single highest-value unblock: install Chromium's shared libraries (needs root).** This
+   stage shipped the mission's first CSS/visual change. Two items are explicitly
+   visual-verification-pending (BUGS.md ui-020, ui-021: the `.rd-limit` "LIMIT" badge may grow past
+   its 46px min-width at the new 12px floor; the `.progress i`/`.dragy-prog i` box-shadow glow is
+   horizontally compressed by `transform: scaleX()` at partial fill). A human glancing at the radar
+   dock and the routing/drag progress bars at phone width would retire both in about a minute.
+3. Supabase keys in `server/.env` only if live-mode local testing is wanted.
+4. Product name decision (Slipstream vs Convoy). Unresolved for 10 stages, still not an agent's call.
 
 ## Test baseline
 `npm test` on 2026-09-03 00:44Z (planner stage, before any code change): **All 21 suites passed, 184 checks passed.**
@@ -219,5 +290,8 @@ passed** (corrected — this line previously said 38, which was wrong; frontend.
 assertions).
 `npm test` on 2026-09-03 (implementer stage 8, after Tasks 1-4): **All 22 suites passed, all 41
 checks passed** (frontend.test.js: 40→39 from Task 1a removing the bogus `_comment` ratchet
-assertion, 39→41 from Task 3's new `testGeneratedIdsUnique()` regression group, 2 assertions). Keep
-both counts (suites, checks) from going down.
+assertion, 39→41 from Task 3's new `testGeneratedIdsUnique()` regression group, 2 assertions).
+`npm test` on 2026-09-03 (implementer stage 11, after Tasks 1-4): **All 22 suites passed, all 43
+checks passed** (frontend.test.js: 41→43, +2 from the new `testFontSizeFloor()` group). `npm run
+test:frontend` measured counts unchanged except `detectorWarnings: 37→17`. Keep both counts (suites,
+checks) from going down.

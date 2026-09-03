@@ -394,7 +394,7 @@
     els.speed.textContent = stale ? '––' : Math.round(spVal(liveSpeed));
     els.speedUnit.textContent = spUnit();
     els.timer.innerHTML = timerText() + '<small>s</small>';
-    els.prog.style.width = (progress() * 100).toFixed(1) + '%';
+    els.prog.style.transform = 'scaleX(' + progress().toFixed(3) + ')';
     els.status.textContent = statusText();
     overlay.classList.toggle('is-run', phase === 'run');
     overlay.classList.toggle('is-done', phase === 'done');

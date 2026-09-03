@@ -359,7 +359,7 @@
         '<div class="race-row-main">' +
           '<div class="race-row-top"><span class="race-row-name">' + U.esc(mem.name) + '</span>' +
             '<span class="race-row-speed">' + speedTxt + '</span></div>' +
-          '<div class="race-row-bar"><i style="width:' + pct + '%"></i></div>' +
+          '<div class="race-row-bar"><i style="transform:scaleX(' + (pct / 100) + ')"></i></div>' +
         '</div>' +
         '<span class="race-row-stat">' + status + '</span>' +
       '</div>';

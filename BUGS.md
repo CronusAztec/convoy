@@ -781,6 +781,41 @@ Each bug has:
   `.active` class toggle, so the picker also announces its current selection.
 - **Ships to users when:** `node release.js --ota` (not done by any agent this mission).
 
+### BUG ui-020 — visual-verification-pending (cycle 2 stage 10, 2026-09-03)
+- **Severity:** low
+- **File:** `css/styles.css:2463` (`.rd-limit span`)
+- **Title:** speed-limit-sign "LIMIT" caption grew 8px→12px (typography floor) and may widen the
+  badge past its 46px `min-width`
+- **Detail:** `.rd-limit` is `min-width: 46px; padding: 3px 8px 4px; letter-spacing: .12em`. At 12px
+  uppercase, "LIMIT" is roughly 44-48px of text plus 16px padding, so the badge is expected to grow
+  wider than its current 46px minimum. `min-width` is not `max-width`, so it grows rather than clips
+  or wraps — this is the correct trade per the cycle 2 stage 10 IMPROVE directive (legible beats
+  compact for a safety-relevant caption). **Not verified on a rendered screen** — no browser on this
+  box (Chromium's shared libs are missing, no sudo; M2 formally dropped, see STATE.md). A human with
+  a browser should glance at the radar dock at phone width and confirm the badge growth doesn't
+  crowd its neighbors.
+- **Fix:** none needed unless the visual check finds real crowding; if so, `11px` with an entry in
+  `test/frontend.test.js`'s `FONT_SIZE_FLOOR_EXCEPTIONS` and this file updated.
+
+### BUG ui-021 — visual-verification-pending (cycle 2 stage 10, 2026-09-03)
+- **Severity:** low
+- **File:** `css/styles.css:1256` (`.progress i`) and `css/styles.css:2818` (`.dragy-prog i`)
+- **Title:** progress-bar fill glow (`box-shadow: 0 0 8px` / `0 0 10px`) is horizontally compressed
+  by the new `transform: scaleX()` fill technique at partial fill
+- **Detail:** these two fills were converted from animating `width` to animating `transform: scaleX()`
+  (cycle 2 stage 10, Task 3 — kills a layout-thrashing `width` transition; `transform` is
+  compositor-only). Both carry a `box-shadow` glow around the filled element. Under `scaleX(s)`, the
+  glow is scaled horizontally by `s` too, so at e.g. half-fill the side glow is roughly half as wide
+  as the top/bottom glow. On a 5-6px-tall accent bar this is expected to be a subtle delta, and the
+  performance win (no layout/paint thrash) is worth the trade — but **this is reasoned, not seen**;
+  no browser on this box to confirm. A human should glance at the routing progress bar and the drag
+  strip's progress bar mid-fill.
+- **Fix:** none needed unless the visual check finds a real problem; if so, move the glow to a
+  pseudo-element that doesn't inherit the `scaleX` transform, or accept the distortion in writing
+  here.
+- **Ships to users when:** `node release.js --ota` (not done by any agent this mission — applies to
+  both ui-020 and ui-021, and to the rest of this stage's changes).
+
 ---
 
 ## Runtime
@@ -908,6 +943,6 @@ Convoy server → http://localhost:5173  (ws: /ws, bots: 0, nearby: 30km)
 | Frontend | 0 | 4 | 10 | 1 | 15 | (note: frontend-002/003/008/009 are the highs; row total corrected cycle 2 stage 8, was mis-added as 18) |
 | Server | 4 | 9 | 11 | 0 | 24 | (server-003/006/008/011 critical; row total corrected cycle 2 stage 8, was mis-added as 27) |
 | Android | 4 | 8 | 7 | 1 | 20 | (android-001/002/003 + ui-014-class) |
-| UI/UX | 0 | 5 | 10 | 4 | 19 | (ui-001/004/006/014/015/016/017/018/019 fixed; ui-015..019 added cycle 2 stage 8 — #radar-dock landmark, toggle/field/color-swatch/icon-picker accessible names) |
+| UI/UX | 0 | 5 | 10 | 6 | 21 | (ui-001/004/006/014/015/016/017/018/019 fixed; ui-015..019 added cycle 2 stage 8 — #radar-dock landmark, toggle/field/color-swatch/icon-picker accessible names; ui-020/021 added cycle 2 stage 10 — visual-verification-pending items from the typography floor + progress-bar transform work, neither fixed nor broken, just unverified without a browser) |
 | Runtime | 0 | 2 | 3 | 1 | 6 | |
-| **Total** | **8** | **28** | **41** | **7** | **84** |
+| **Total** | **8** | **28** | **41** | **9** | **86** |

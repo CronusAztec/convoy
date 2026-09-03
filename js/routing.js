@@ -1179,7 +1179,7 @@
     var bar = document.getElementById('trip-bar');
     if (remEl) remEl.textContent = U.fmtDist(remain, S.settings.units) + ' left';
     if (etaEl) etaEl.textContent = U.fmtClock(new Date(Date.now() + secs * 1000));
-    if (bar) bar.style.width = (total > 0 ? U.clamp(trip.progress / total * 100, 0, 100) : 0) + '%';
+    if (bar) bar.style.transform = 'scaleX(' + ((total > 0 ? U.clamp(trip.progress / total * 100, 0, 100) : 0) / 100) + ')';
     // LIVE badge: lit only once real GPS is actually driving the trip.
     var liveEl = document.getElementById('trip-live');
     if (liveEl) liveEl.hidden = !(trip.live && trip.gotFix);

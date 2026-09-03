@@ -590,7 +590,7 @@
     setText('radar-risk', String(risk));
     var bar = byId('radar-risk-bar');
     if (bar) {
-      bar.style.width = (risk / 25 * 100) + '%';
+      bar.style.transform = 'scaleX(' + (risk / 25) + ')';
       bar.className = 'rrisk-fill ' + (risk <= 8 ? 'lo' : risk <= 16 ? 'mid' : 'hi');
     }
 

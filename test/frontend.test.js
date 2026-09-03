@@ -281,6 +281,31 @@ function testStamps() {
   H.ok('every ?v= stamp is identical', unique.size === 1, 'found: ' + Array.from(unique).join(', '));
 }
 
+/* ---------------- 4b. typography floor (source text, not computed style) ---------------- */
+// Functional text below 12px fails legibility in a windscreen-mounted HUD.
+// Any exception needs a one-line justification here, not a silent lowering.
+var FONT_SIZE_FLOOR_EXCEPTIONS = {
+  // '.rd-limit span': 'US speed-limit-sign caption; 12px overflows the 46px badge',
+};
+
+function testFontSizeFloor() {
+  H.group('css/styles.css — no functional text below a 12px floor (source-text check)');
+  // Source-text, not computed-style: this is the only gate that covers the
+  // ~61 font-size rules on JS-built panels the detector never renders (it
+  // only sees index.html's static markup), vs. the 15 it can see.
+  const css = fs.readFileSync(path.join(ROOT, 'css', 'styles.css'), 'utf8');
+  const matches = css.match(/font-size:\s*[0-9.]+px/g) || [];
+  const offenders = matches.filter((m) => {
+    const px = parseFloat(m.match(/[0-9.]+/)[0]);
+    return px < 12;
+  });
+  H.ok('at least one font-size declaration found (sanity check)', matches.length > 0,
+    'found ' + matches.length);
+  H.ok('no font-size below 12px outside the documented exception list (' + offenders.length + ' found)',
+    offenders.length === Object.keys(FONT_SIZE_FLOOR_EXCEPTIONS).length,
+    'offending declarations: ' + offenders.join(', '));
+}
+
 /* ---------------- 5. impeccable design-integrity detector ---------------- */
 function testDetector() {
   H.group('impeccable detector — design-integrity antipatterns');
@@ -309,6 +334,7 @@ function testDetector() {
   testGeneratedIdsUnique();
   testThemes();
   testStamps();
+  testFontSizeFloor();
   testDetector();
   console.log('\nMeasured counts (compare against test/frontend-baseline.json):');
   console.log(JSON.stringify(measured, null, 2));
