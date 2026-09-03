@@ -2865,7 +2865,15 @@ const handlers = {
       // them may have been in it first. Neither hears the other, and neither is
       // told the other is there.
       if (blockedPair(c, member)) continue;
-      send(member, { t: 'chat', from: entry.from, text, t2: now });
+      // `t` is the envelope's message-type key, so the timestamp travels as
+      // `t2` — the same field partySys() and the bot reply below already fill
+      // correctly (from `m.t` / `reply.t`). From the initial commit until
+      // cycle 55 this line read `now` instead of `entry.t`, and `now` was never
+      // defined: the handler threw before the first send() and no rider-typed
+      // chat line was ever delivered in live mode, the sender's own echo
+      // included (server-032; pinned by test/serverpolicy.test.js X1 and
+      // test/globals.test.js).
+      send(member, { t: 'chat', from: entry.from, text, t2: entry.t });
     }
 
     const botMembers = party.members.filter((id) => bots.has(id));
@@ -3974,6 +3982,18 @@ setInterval(() => {
   try {
     await store.init();
   } catch (e) {
+    // A `systemctl restart` that lands mid-boot runs shutdown(), which ends the
+    // pool under this await; the rejection that produces ("Cannot use a pool
+    // after calling end on the pool") is indistinguishable from a dead
+    // database unless we ask first. Return — shutdown() owns the exit from
+    // here (it has its own 5 s force-exit safety net) — instead of exit(1),
+    // which logged a spurious status=1/FAILURE and sent the operator hunting
+    // for a SUPABASE_DB_URL problem that does not exist (server-033).
+    // `shuttingDown` is declared ~190 lines below, next to shutdown(); that is
+    // safe because this catch can only run after the await above, by which
+    // time the whole module body (that `let` included) has executed — do not
+    // "fix" it by moving the declaration.
+    if (shuttingDown) { console.log('[boot] aborted — shutting down before the database was ready'); return; }
     console.error('[boot] could not reach the Supabase database: ' + e.message);
     console.error('[boot] Check SUPABASE_DB_URL in server/.env.');
     process.exit(1);
@@ -3982,7 +4002,11 @@ setInterval(() => {
   // come up looking healthy while silently logging out the entire user base and
   // 401-ing every request until a later refresh happened to succeed. The comment
   // above has always said this is a boot requirement — enforce it.
-  if (!await sb.loadJwks(true)) {
+  const jwksOk = await sb.loadJwks(true);
+  // Same race as the catch above, one await later: a restart during this fetch
+  // must not be reported as a JWKS outage.
+  if (shuttingDown) { console.log('[boot] aborted — shutting down before the JWKS was loaded'); return; }
+  if (!jwksOk) {
     console.error('[boot] could not load the Supabase JWKS — every access token would be');
     console.error('[boot] rejected, i.e. every signed-in rider silently logged out.');
     console.error('[boot] Check SUPABASE_URL and outbound network access, then restart.');

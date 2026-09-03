@@ -45,6 +45,7 @@ much lighter declaration.
 | First-party Java plugins — `AuthPlugin`, `BackgroundLocationPlugin`, `LocationService`, `RadarDetectorPlugin`, `SabrePlugin`, `VoicePlugin` | this repo | Various | Ours, not third-party. Location, microphone and BLE, all surfaced through the app's own UI. | No |
 | `junit`, `androidx.test.*`, `espresso-core` | test-only | — | Not in the release APK. | — |
 | `jsdom`, `axe-core`, `html-validate` | npm devDependency | `npm run test:frontend` only, on this dev box | Nothing — a headless DOM + a WCAG/markup linter that run against local files. Not in the release APK, not in `www/`, not fetched by the device. | — |
+| `acorn-globals` (pulls `acorn`, `acorn-walk`; all MIT) | npm devDependency | `npm test` only (`test/globals.test.js`, the undefined-identifier gate), on this dev box | Nothing — a JavaScript parser + scope walker that reads local source files and reports free identifiers. Not in the release APK, not in `www/`, not fetched by the device. | — |
 | `@capacitor/cli`, `com.android.tools.build:gradle`, `com.google.gms:google-services` | build tooling | Build machine | Never linked into the app. `google-services` is a classpath entry only — see the note below. | — |
 
 **Not present, deliberately:** Firebase (any module), Crashlytics, Firebase

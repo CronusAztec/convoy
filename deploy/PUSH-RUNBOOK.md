@@ -66,7 +66,12 @@ deploy/live-deploy.sh release -- --no-apk 2>&1 | tail -30   # expect "✓ Releas
 curl -s --max-time 15 https://odoreeci.tech/api/health        # {"ok":true,"maintenance":false}
 curl -s --max-time 15 https://odoreeci.tech/api/ota           # Lane A: "current":{"version":"1.0.NNN",...}
 curl -s --max-time 15 https://odoreeci.tech/ | grep -oE 'v=cy[0-9]+' | head -1   # cyNNN == local
-deploy/live-deploy.sh livetest 2>&1 | tail -8                 # two real WS clients: convoy + chat OK
+deploy/live-deploy.sh livetest 2>&1 | tail -8                 # two real WS clients: convoy + chat delivered both ways
+# Production signal — ONE read-only SSH, right after the checks above. Any `[handler …]` line is a
+# swallowed handler exception, i.e. a broken feature (cycle 55: chat had never worked, and only this
+# line said so); any `Failed with result` is a failed (re)start. Quote every hit VERBATIM in the
+# report as a finding for the next cycle — the deploy still counts as successful if the service is up.
+deploy/live-deploy.sh diag 2>&1 | grep -nE "\[handler |Failed with result|uncaughtException|crossed WS_MSG_BUDGET" | head
 ```
 What `--ota` does (release.js `pushOta`): packs `www/` → `ota-out/bundle-1.0.NNN.zip` + manifest,
 uploads the site tarball and restarts the `convoy` systemd unit (~5 s, riders reconnect), then
@@ -106,6 +111,7 @@ keystore would not install over existing riders' installs (signature mismatch). 
    served; livetest result — paste the trimmed outputs.
 3. What did NOT move and why (held-back gate, HIGH finding, no keystore).
 4. Human-only items carried forward (see STATE.md "Human-only actions").
+5. The production-signal read: every `[handler …]` / `Failed with result` line verbatim, or "none".
 
 ## Never
 

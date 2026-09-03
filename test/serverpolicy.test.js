@@ -48,7 +48,18 @@
      D1  every deferred body goes through defer() (a try/catch around the
          five setTimeout bodies that used to land on uncaughtException,
          server-002) and leadership goes to a socket that is still OPEN
-         (server-020) */
+         (server-020)
+
+   Added with the cycle-55 chat-outage stage (2026-09-03):
+     X1  a rider's chat message actually reaches the convoy — the chat handler
+         is lifted out of server.js and EXECUTED against fakes. Its fan-out
+         envelope carried `t2: now`, an undefined name, from the initial commit
+         to cycle 55, so every live chat line died in the dispatcher's catch
+         (server-032). The mutation guard re-runs the same lift with `t2: now`
+         and demands the ReferenceError, so the group is a detector, not a
+         passenger
+     X2  a `systemctl restart` that lands mid-boot returns from boot() instead
+         of blaming SUPABASE_DB_URL and exiting 1 (server-033) */
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -402,5 +413,138 @@ if (lp) {
   ok('executed: with every remaining socket mid-close the fallback keeps the join-order pick (B) — never leaderless',
     party.leader === 'B' && parties.has('p1'), 'leader=' + party.leader);
 }
+
+
+/* ---- X1 — a rider's chat message actually reaches the convoy (server-032) ----
+   Lift-and-execute, the D1 pattern: the `chat` handler is an object-literal
+   method, so it is sliced from `\n  chat(c, m) {` to its matching `\n  },\n`
+   and wrapped as a plain function over fakes for everything it closes over. */
+group('X1 — a rider\'s chat message actually reaches the convoy (server-032)');
+const chatOpen = '\n  chat(c, m) {';
+const chatAt = SRC.indexOf(chatOpen);
+const chatEnd = chatAt >= 0 ? SRC.indexOf('\n  },\n', chatAt) : -1;
+const chatBody = (chatAt >= 0 && chatEnd > chatAt) ? SRC.slice(chatAt + chatOpen.length, chatEnd) : '';
+ok('the chat handler can be lifted: `chat(c, m) {` … `},` found once, body non-trivial',
+  chatBody.length > 300 && SRC.indexOf(chatOpen, chatAt + 1) === -1, 'at=' + chatAt + ' end=' + chatEnd + ' len=' + chatBody.length);
+
+function chatWorld(opts) {
+  opts = opts || {};
+  const parties = new Map(), clients = new Map(), bots = new Map(), sent = [];
+  const blocked = new Set(opts.blocked || []);
+  const mk = (id) => ({ id, party: 'p1', profile: { name: id, emoji: '🏍' }, ws: { readyState: 1 } });
+  const members = ['A', 'B', 'C'];
+  members.forEach((id) => clients.set(id, mk(id)));
+  if (opts.withBot) { const z = mk('Z'); clients.set('Z', z); bots.set('Z', z); members.push('Z'); }
+  const party = { id: 'p1', code: 'X', leader: 'A', members, chat: [] };
+  parties.set('p1', party);
+  const chat = new Function('parties', 'clients', 'rateOk', 'str', 'liteOf', 'blockedPair', 'send', 'bots', 'B', 'defer',
+    'return function chat(c, m) {' + (opts.body || chatBody) + '\n};')(
+    parties, clients,
+    () => opts.rateOk !== false,
+    (v, n) => (typeof v === 'string' ? v.trim().slice(0, n) : ''),
+    (c) => ({ id: c.id, name: c.profile.name, emoji: c.profile.emoji }),
+    (a, b) => blocked.has(a.id + ':' + b.id) || blocked.has(b.id + ':' + a.id),
+    (c, m) => sent.push({ to: c.id, m }),
+    bots,
+    { chance: () => !!opts.withBot, pick: (a) => a[0], randInt: () => 0, CHAT_REPLIES: ['copy that'] },
+    (fn) => { fn(); return { unref() { return this; } }; });
+  return { parties, clients, party, sent, chat, say: (from, text) => chat(clients.get(from), { t: 'chat', text }) };
+}
+
+if (chatBody) {
+  const w = chatWorld();
+  let threw = null;
+  try { w.say('A', '  hi  '); } catch (e) { threw = e; }
+  const envs = w.sent.filter((s) => s.m.t === 'chat');
+  ok('executed: A says "hi" in a 3-member convoy → three chat envelopes go out (A, B, C), each { t:\'chat\', text:\'hi\', t2:<finite> }',
+    threw === null && envs.length === 3 && ['A', 'B', 'C'].every((id) => envs.some((s) => s.to === id)) &&
+    envs.every((s) => s.m.text === 'hi' && Number.isFinite(s.m.t2)),
+    threw ? 'threw: ' + threw.message : 'sent=' + JSON.stringify(w.sent));
+  ok('executed: the sender gets their own line back (from.id === A) — the live client has no local echo, so this is the only way "me" ever renders',
+    envs.some((s) => s.to === 'A' && s.m.from && s.m.from.id === 'A'), 'sent=' + JSON.stringify(w.sent));
+  ok('executed: t2 equals the party.chat entry\'s t, so the live envelope and the backlog (visibleChat ships `t`) agree on the timestamp',
+    w.party.chat.length === 1 && envs.length > 0 && envs.every((s) => s.m.t2 === w.party.chat[0].t),
+    'chat=' + JSON.stringify(w.party.chat) + ' t2=' + envs.map((s) => s.m.t2).join(','));
+
+  const wb = chatWorld({ blocked: ['A:B'] });
+  let threwB = null;
+  try { wb.say('A', 'hi'); } catch (e) { threwB = e; }
+  const to = wb.sent.filter((s) => s.m.t === 'chat').map((s) => s.to).sort().join('');
+  ok('executed: a member who has blocked (or is blocked by) the sender receives nothing; the others still do — the blockedPair guard survives',
+    threwB === null && to === 'AC', threwB ? 'threw: ' + threwB.message : 'delivered to=' + to);
+
+  const wr = chatWorld({ rateOk: false });
+  wr.say('A', 'hi');
+  ok('executed: over the chat rate limit → one err to the sender, nothing to the convoy, nothing in the backlog',
+    wr.sent.length === 1 && wr.sent[0].to === 'A' && wr.sent[0].m.t === 'err' && wr.party.chat.length === 0, JSON.stringify(wr.sent));
+
+  const we = chatWorld();
+  we.say('A', '   ');
+  ok('executed: whitespace-only text sends nothing and stores nothing', we.sent.length === 0 && we.party.chat.length === 0);
+
+  const wz = chatWorld({ withBot: true });
+  let threwZ = null;
+  try { wz.say('A', 'hi'); } catch (e) { threwZ = e; }
+  const replies = wz.sent.filter((s) => s.m.t === 'chat' && s.m.text === 'copy that');
+  ok('executed: with a bot in the convoy the deferred bot reply reaches all four members with t2 === its own backlog entry\'s t (the third envelope site)',
+    threwZ === null && replies.length === 4 && wz.party.chat.length === 2 && replies.every((s) => s.m.from.id === 'Z' && s.m.t2 === wz.party.chat[1].t),
+    threwZ ? 'threw: ' + threwZ.message : 'replies=' + JSON.stringify(replies));
+
+  // The mutation guard: the same lift with the shipped bug put back must throw
+  // where the shipped server threw. If this stops failing, the assertion above
+  // has stopped detecting anything.
+  ok('the fan-out stamps the envelope with `t2: entry.t` — the party.chat entry\'s own timestamp', /t2: entry\.t\b/.test(chatBody));
+  const mutated = chatBody.replace(/t2: entry\.t\b/, 't2: now');
+  let mutErr = null;
+  try { chatWorld({ body: mutated }).say('A', 'hi'); } catch (e) { mutErr = e; }
+  ok('mutation guard: the same lift with `t2: now` (the shipped bug) throws ReferenceError before the first send() — so the checks above are a real detector',
+    mutated !== chatBody && mutErr instanceof ReferenceError && /\bnow\b/.test(mutErr.message), mutErr ? String(mutErr) : 'did not throw');
+}
+const chatSites = SRC.split('\n').map((l, i) => ({ l, n: i + 1 })).filter((x) => /\bt: 'chat'/.test(x.l));
+ok('static: server.js builds exactly three chat envelopes (partySys, the rider fan-out, the bot reply)',
+  chatSites.length === 3, 'lines ' + chatSites.map((x) => x.n).join(','));
+ok('static: every one of them carries a t2 that is a defined expression (<entry>.t), and none is `t2: now`',
+  chatSites.length > 0 && chatSites.every((x) => /t2: [A-Za-z_$][\w$]*\.t\b/.test(x.l) && !/t2:\s*now\b/.test(x.l)),
+  chatSites.map((x) => x.n + ': ' + x.l.trim()).join(' | '));
+
+/* ---- X2 — a restart that lands mid-boot is not a database misconfiguration (server-033) ----
+   shutdown() ends the pool under boot()'s pending store.init(); the rejection
+   that produces is indistinguishable from a dead database unless the catch
+   asks whether a shutdown is in progress FIRST. */
+group('X2 — a restart that lands mid-boot returns from boot() instead of blaming SUPABASE_DB_URL (server-033)');
+ok('shutdown() sets shuttingDown as its first statement after the re-entrancy guard — the boot catch depends on it',
+  /function shutdown\(sig\) \{\n  if \(shuttingDown\) return;\n  shuttingDown = true;\n/.test(SRC));
+ok('shuttingDown is declared exactly once, at module level, and assigned exactly once — no second flag',
+  (SRC.match(/^let shuttingDown = false;$/gm) || []).length === 1 && (SRC.match(/\bshuttingDown = true\b/g) || []).length === 1);
+const bootAt = SRC.indexOf('(async function boot() {');
+const initAt = bootAt >= 0 ? SRC.indexOf('await store.init();', bootAt) : -1;
+const catchOpen = '} catch (e) {';
+const catchAt = initAt >= 0 ? SRC.indexOf(catchOpen, initAt) : -1;
+const catchEnd = catchAt >= 0 ? SRC.indexOf('\n  }\n', catchAt) : -1;
+const bootCatch = (catchAt > initAt && catchEnd > catchAt) ? SRC.slice(catchAt + catchOpen.length, catchEnd) : '';
+ok('boot(): the store.init() catch tests shuttingDown BEFORE it prints "Check SUPABASE_DB_URL"',
+  bootCatch.indexOf('if (shuttingDown)') >= 0 && bootCatch.indexOf('if (shuttingDown)') < bootCatch.indexOf('Check SUPABASE_DB_URL'),
+  'catch body: ' + bootCatch.replace(/\s+/g, ' ').slice(0, 160));
+function runBootCatch(flag) {
+  const out = { log: [], error: [], exit: [] };
+  new Function('shuttingDown', 'console', 'process', 'e', bootCatch)(flag,
+    { log: (...a) => out.log.push(a.join(' ')), error: (...a) => out.error.push(a.join(' ')) },
+    { exit: (code) => out.exit.push(code) }, new Error('Cannot use a pool after calling end on the pool'));
+  return out;
+}
+if (bootCatch) {
+  const r1 = runBootCatch(true);
+  ok('executed: with shuttingDown set, the catch logs "[boot] aborted" and returns — no exit(1), no SUPABASE_DB_URL blame',
+    r1.exit.length === 0 && r1.log.some((l) => /^\[boot\] aborted/.test(l)) && !r1.error.some((l) => /SUPABASE_DB_URL/.test(l)), JSON.stringify(r1));
+  const r0 = runBootCatch(false);
+  ok('executed: with shuttingDown clear, a genuine failure still names the cause, says where to look, and exits 1',
+    r0.exit.length === 1 && r0.exit[0] === 1 && r0.error.some((l) => /could not reach the Supabase database: Cannot use a pool/.test(l)) &&
+    r0.error.some((l) => /Check SUPABASE_DB_URL/.test(l)), JSON.stringify(r0));
+}
+const jwksAt = bootAt >= 0 ? SRC.indexOf('await sb.loadJwks(true)', bootAt) : -1;
+const jwksMsgAt = jwksAt >= 0 ? SRC.indexOf('could not load the Supabase JWKS', jwksAt) : -1;
+const jwksGuardAt = jwksAt >= 0 ? SRC.indexOf('if (shuttingDown)', jwksAt) : -1;
+ok('boot(): the JWKS check is guarded the same way — shuttingDown is tested between that await and the "could not load the Supabase JWKS" exit',
+  jwksAt > 0 && jwksGuardAt > jwksAt && jwksGuardAt < jwksMsgAt, 'jwks@' + jwksAt + ' guard@' + jwksGuardAt + ' msg@' + jwksMsgAt);
 
 process.exit(report());

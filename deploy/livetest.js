@@ -52,8 +52,16 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   console.log('B received chat:', JSON.stringify(B.chat.slice(-3)));
   console.log('A received chat:', JSON.stringify(A.chat.slice(-3)));
 
+  // Delivery, not just sending: until cycle 55 the server threw on every rider
+  // chat line ([handler chat] now is not defined) and this script still said
+  // PASS, because it only looked at the roster. Each side must now see the
+  // OTHER side's actual text.
+  const chatOk = B.chat.some((l) => l.indexOf('AlphaRider: Hello from Alpha') === 0) &&
+    A.chat.some((l) => l.indexOf('BravoRider: Bravo copies') === 0);
+  console.log('Chat delivered both ways? ', chatOk, chatOk ? '' : '(a rider-typed line never arrived — read the journal for "[handler chat]")');
+
   A.ws.close(); B.ws.close();
-  const ok = A.sees.has(B.id) && B.sees.has(A.id) && B.invite && A.party && A.party.members.length === 2;
-  console.log('\n' + (ok ? 'RESULT: PASS — two internet clients see each other, convoyed, and chatted.' : 'RESULT: incomplete — see above.'));
+  const ok = A.sees.has(B.id) && B.sees.has(A.id) && B.invite && A.party && A.party.members.length === 2 && chatOk;
+  console.log('\n' + (ok ? 'RESULT: PASS — two internet clients see each other, convoyed, and chatted (delivery verified both ways).' : 'RESULT: incomplete — see above.'));
   process.exit(0);
 })();

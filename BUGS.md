@@ -24,12 +24,13 @@ Each bug has:
 
 **Severity legend:** `critical` = security hole / data loss / hard crash · `high` = broken feature / resource leak · `medium` = degraded UX / latent bug · `low` = polish / a11y.
 
-**Jump to a section:** [Frontend (19)](#frontend) · [Server (28)](#server) · [Android (20)](#android) · [UI/UX (22)](#uiux) · [Runtime (6)](#runtime)
+**Jump to a section:** [Frontend (19)](#frontend) · [Server (30)](#server) · [Android (20)](#android) · [UI/UX (22)](#uiux) · [Runtime (6)](#runtime)
 
 ### Top priorities (fix first — Server/Runtime rows re-verified 2026-09-03, see each entry's `- **Status:**` line; Android rows not yet re-verified)
 
 | ID | Why |
 |---|---|
+| `server-032` | Convoy chat was **never delivered in live mode** — the fan-out envelope's timestamp was an undefined name (`now`), the handler threw before its first `send()`, and the dispatcher's catch swallowed it on every message since the initial commit. — **FIXED 2026-09-03 (cycle 55)**, with a class gate (`test/globals.test.js`) |
 | `server-008` | `X-Forwarded-For` is trusted blindly → defeats **every** per-IP rate limit and connection ceiling. Trivial DoS. — **FIXED 2026-09-03** |
 | `runtime-001` / `runtime-002` | Concurrent `/api/register` and `/api/recover` create duplicate accounts / burn one code 5×. Auth data integrity. — **STALE / FIXED 2026-09-03** (the local-JSON store is gone; the recovery burn is a conditional DELETE) |
 | `server-003` | Re-`hello` with same token leaks the old socket → duplicate rider pins + resource leak. — **FIXED 2026-09-03** (`server-030` was never assigned — the old reference was dangling) |
@@ -454,6 +455,24 @@ Each bug has:
 - **Repro:** `OVERPASS_URLS=https://127.0.0.1:9/a,https://127.0.0.1:9/b node server/server.js`, then `POST /api/overpass {"kind":"enforcement","bbox":{"minLat":34.03,"minLng":-118.3,"maxLat":34.09,"maxLng":-118.2}}` → the log said only `[overpass] all mirrors failed for enforcement 34.03,-118.3,34.09,-118.2`. The same line for a dead host, a 429, a 504, an HTML body, or JSON without `elements[]`; a first mirror failing while the second answered logged nothing at all.
 - **Impact:** 7 production failures over the mission (2026-09-03) with no diagnosable cause; a mirror that is down 100% of the time is invisible while the other one covers for it; every B4 decision (mirror list, timeouts, client backoff) is a guess until the reason is in the log.
 - **Fix (applied):** each failed attempt records `host reason NNNms` (`timeout` / `net:<ErrorName>` / `http:<status>` / `body:<message>` / `shape`); the failure line carries all of them plus `(session ok=N fail=N)`; a partial failure now emits one `console.warn` naming the mirror that failed, why, and the one that served; `stats()` gains `ok`/`fail`/`cached`, `byMirror` and `byReason` (fixed-vocabulary keys, so it cannot grow unbounded). Still at most one line per query. `test/overpass.test.js` "A failed mirror says which one and why" (29 checks, scripted `fetch`, real `Response` streams). IDs `server-028…030` are unassigned — the Top-priorities table's `server-030` has no entry; B3 reconciles.
+
+### BUG server-032 — FIXED (cycle 55 stage 38, 2026-09-03)
+- **Severity:** critical
+- **Status:** FIXED (re-verified 2026-09-03) — `server/server.js:2876` sends `t2: entry.t`; executed regression `test/serverpolicy.test.js` group X1 (the handler lifted and run: 3-member fan-out, sender echo, blocked pair, rate limit, bot reply, and a mutation guard that puts `now` back and demands the `ReferenceError`); class gate `test/globals.test.js` (acorn-globals free-identifier scan over 112 files — RED on `server/server.js: now` before the fix, 130/130 after)
+- **File:** `server/server.js:2868` before the fix (the rider→convoy fan-out inside the `chat` handler)
+- **Title:** Convoy chat is never delivered in live mode — the fan-out envelope read `t2: now`, an undefined identifier, so the handler threw `ReferenceError` before its first `send()`
+- **Repro:** two real clients (`deploy/livetest.js`): A creates a convoy, B accepts, A sends `{t:'chat', text:'…'}`. Production journal 2026-09-03 08:41:29Z and 08:41:30Z (the cycle-53 push's own `livetest`): `[handler chat] now is not defined` — one line per message, nothing delivered to anyone, the sender included. `git log -S "t2: now" -- server/server.js` → `3c77b70 Initial commit`, i.e. since the beginning.
+- **Impact:** every rider-typed convoy chat message in live mode was dropped server-side, including the sender's own echo (the live client does not echo locally, `js/party.js:124`, and `js/net.js:399` already reads `m.t2` correctly). System lines (`partySys`, `t2: m.t`) and bot replies (`t2: reply.t`) use their own correct envelopes, so chat looked fine in sim/bot mode, and late joiners saw earlier lines through the `party` envelope's backlog (`visibleChat()` ships plain `t`) — which is why nobody noticed. The dispatcher's `try { h(c, m) } catch` (`server/server.js:3933` before the fix) logged the throw and dropped it; `livetest` sent two chat messages on every push and reported PASS because it asserted on the roster, not on delivery.
+- **Fix (applied):** `t2: entry.t` (one word) with a comment saying why the field is `t2` (`t` is the envelope's type key) and pointing at the two sibling sites; `test/serverpolicy.test.js` X1 lifts the handler and executes it; `test/globals.test.js` (new suite, devDependency `acorn-globals`) fails on any free identifier in `release.js`, `server/`, `scripts/`, `deploy/`, `js/` or `test/` that no platform defines — the whole class, not this instance; `deploy/livetest.js` now asserts that each side received the other's text; `deploy/PUSH-RUNBOOK.md` §2 reads the journal for `[handler …]` lines after every restart.
+
+### BUG server-033 — FIXED (cycle 55 stage 38, 2026-09-03)
+- **Severity:** low
+- **Status:** FIXED (re-verified 2026-09-03) — `server/server.js:3996` (the `store.init()` catch) and `:4008` (the JWKS check): `boot()` tests the existing `shuttingDown` flag first and returns, so shutdown() owns the exit; executed + static checks in `test/serverpolicy.test.js` group X2
+- **File:** `server/server.js:3976-3980` before the fix (`boot()`'s `store.init()` catch) and `:3985` (the JWKS check, same failure mode one await later)
+- **Title:** A `systemctl restart` that lands during boot is reported as a database misconfiguration (`Check SUPABASE_DB_URL`) and exits 1 — a spurious `status=1/FAILURE` in systemd
+- **Repro:** production journal 2026-09-03 08:41Z (the cycle-53 push's restart): `[shutdown] SIGTERM received — draining…` → `[boot] could not reach the Supabase database: Cannot use a pool after calling end on the pool` → `[boot] Check SUPABASE_DB_URL in server/.env.` → `convoy.service: Main process exited, code=exited, status=1/FAILURE` → systemd `Restart=` brought it back about a second later. `shutdown()` ends the pool under `boot()`'s pending `await store.init()`; the rejection that produces is indistinguishable from a dead database unless the catch asks first.
+- **Impact:** no rider impact (systemd recovers). The cost is the diagnostic: an operator reading the log is sent hunting for a config bug that does not exist, and `Failed with result 'exit-code'` shows up in exactly the post-deploy log read the runbook now asks for (cycle 55), so it would be a false finding every time a restart is fast.
+- **Fix (applied):** `if (shuttingDown) { console.log('[boot] aborted — shutting down before the database was ready'); return; }` as the first statement of the catch — `return`, not `exit(1)`; the existing message and `exit(1)` stay for the genuine case. The JWKS check gets the same guard. `shuttingDown` is the flag the shutdown section already declares (about 190 lines below `boot()` — safe because the catch runs after an await, commented in place; no second flag). `test/serverpolicy.test.js` X2: the catch body is lifted and executed with the flag set (returns, no exit, no blame) and clear (exits 1 naming the cause), plus static pins on the flag's first-statement assignment and the JWKS guard.
 
 ---
 
@@ -1110,13 +1129,13 @@ this table ever drifts from what's actually here.
 | Area | critical | high | medium | low | total |
 |---|---:|---:|---:|---:|---:|
 | Frontend | 0 | 5 | 13 | 1 | 19 | (frontend-001/002/003/008/009 are the highs; frontend-019 fixed) |
-| Server | 4 | 10 | 14 | 0 | 28 | (server-003/006/008/011 critical — 003/008 FIXED, 006 STALE, 011 OPEN-latent; 6 OPEN / 19 FIXED / 3 STALE after the 2026-09-03 re-verification and the cycle-54 B3b fixes of 002 + 020, roll-up below) |
+| Server | 5 | 10 | 14 | 1 | 30 | (server-003/006/008/011/032 critical — 003/008/032 FIXED, 006 STALE, 011 OPEN-latent; 6 OPEN / 21 FIXED / 3 STALE after the 2026-09-03 re-verification, the cycle-54 B3b fixes of 002 + 020 and the cycle-55 fixes of 032 + 033, roll-up below) |
 | Android | 3 | 8 | 8 | 1 | 20 | (android-001/002/003 critical) |
 | UI/UX | 1 | 5 | 10 | 6 | 22 | (ui-001/004/006/013/014/015/016/017/018/019/003/003b fixed; ui-020/021 visual-verification-pending, unresolved without a browser) |
 | Runtime | 0 | 2 | 3 | 1 | 6 | (runtime-001 STALE, the other five FIXED — re-verified 2026-09-03) |
 | Add | 0 | 1 | 1 | 2 | 4 | |
 | Perf | 0 | 0 | 1 | 0 | 1 | |
-| **Total** | **8** | **31** | **50** | **11** | **100** |
+| **Total** | **9** | **31** | **50** | **12** | **102** |
 
 ### Open-status roll-up (Server + Runtime only — re-verified 2026-09-03)
 
@@ -1127,8 +1146,8 @@ OPEN entries marked *latent* describe a real risk whose premise production has n
 
 | Area | OPEN | FIXED | STALE | total |
 |---|---:|---:|---:|---:|
-| Server | 6 | 19 | 3 | 28 |
+| Server | 6 | 21 | 3 | 30 |
 | Runtime | 0 | 5 | 1 | 6 |
-| **Total** | **6** | **24** | **4** | **34** |
+| **Total** | **6** | **26** | **4** | **36** |
 
-Open after the pass (updated cycle 54 — `server-002` and `server-020` fixed with executed tests): `server-009`, `server-011` (latent, **deferred with a trigger**), `server-014` (latent), `server-015`, `server-016`, `server-017` (**scheduled B5, cycle 55**).
+Open after the pass (updated cycle 55 — `server-032` critical and `server-033` low were filed from the production journal and fixed the same cycle with executed tests; cycle 54 fixed `server-002` and `server-020`): `server-009`, `server-011` (latent, **deferred with a trigger**), `server-014` (latent), `server-015`, `server-016`, `server-017` (**scheduled B5, cycle 56**).

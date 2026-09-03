@@ -18,7 +18,7 @@ installed APKs, unlimited cycles). The push stage follows `deploy/PUSH-RUNBOOK.m
 | # | Aspect | Status | Closes when |
 |---|---|---|---|
 | A | Front-end (cycles 0-4, closed in cycle 50) | **done 2026-09-03** — released by the cycle-50 push stage at 06:56Z (`stages/0021-c050-push.md`). Closing facts, re-measured in cycle 51 at 07:00Z with one request each: (1) `/api/ota` → `"current":{"version":"1.0.117",…}` (was `null` since the mission began); (2) https://odoreeci.tech serves `45 v=cy117` (== local). `livetest` PASS in the push report | `setShellInert` nesting fix + shell-restore invariant test + `#toasts` scoping landed ✔; stamp bumped to `cy117` ✔; review not BROKEN; push stage reports `cy117` served and `/api/ota` current = 1.0.117; livetest green |
-| B | Backend / server (`server/*.js`) | **current** — B1 **done** (cycle 51, section "Aspect B — backend truth pass (cycle 51)" below); B2 **done and shipped** (cycle 52: server-031 + frontend-019, live as `cy118` / OTA `1.0.118` since 2026-09-03 07:46Z, `stages/0029-c052-push.md`); **B3 done in code (cycle 53 stage 30)**: all **34** Server + Runtime entries re-verified against the current tree with a machine-checked `- **Status:**` line each — **8 OPEN / 22 FIXED / 4 STALE** (Server 8/17/3, Runtime 0/5/1; `test/bugstats.test.js` 11→20 checks incl. the anti-rot path check) and the two really-open ones fixed with tests: server-024 (global per-connection `WS_MSG_BUDGET` gate, O(1)) and server-022 (TTS callback dead-response guard), `test/serverpolicy.test.js` 39→55 (group W1). Server-only cycle → **no stamp bump** (`45 × cy118` == production); the push stage runs **Lane B**. **B3b + static cache policy done in code (cycle 54 stage 34)**: server-002 (`defer()` try/catch around all five deferred bodies) and server-020 (leadership goes to the earliest member whose socket is still OPEN) **FIXED with executed tests** (`test/serverpolicy.test.js` 55→77, group D1 lifts `defer()` and `leaveParty()` out of server.js and runs them); server-011 **deferred with a recorded trigger** (tick > 50 ms or > 60 concurrent humans) and server-017 **scheduled as milestone B5, cycle 55** — both decisions written into their BUGS.md entries; ledger now **6 OPEN / 24 FIXED / 4 STALE** (Server 6/19/3, Runtime 0/5/1). The cache policy: new `server/httpcache.js` — stamped `?v=cyNNN` assets `public, max-age=31536000, immutable`, everything unstamped (`index.html`, legal, `/convoy.apk`) `no-cache` **+ ETag + Last-Modified**, the static handler stats before it reads and answers a matching `If-None-Match` with a body-less 304 before any `fs.readFile`; `STATIC_IMMUTABLE=0` kill switch (documented in `server/.env.example` with `WS_MSG_BUDGET`); new suite `test/httpcache.test.js` (41 checks: real round-trips over a temp dir + the production static tail lifted verbatim and executed). Server-only cycle → **no stamp bump** (`45 × cy118` == production); the push stage runs **Lane B**. **Closing criterion still open on:** server-017 (high → B5) and B4 Overpass mirrors; server-011 is closed *by decision* (critical-latent, re-open trigger recorded). **Next: B5** (server-017: per-route auth buckets, charge only after `readBody()` succeeds — touches auth, needs its own cycle + `serverpolicy` green), then **B4** with the per-mirror log lines accumulating since 07:46Z | BUGS.md server+runtime truth pass (33 entries re-verified against current code, statuses updated, `bugstats` green); every open critical/high server bug fixed **with a regression test**; ~~stamped assets cached `immutable`~~ ✔ cycle 54 (`server/httpcache.js`, pending the cycle-54 push); shipped via Lane B/A |
+| B | Backend / server (`server/*.js`) | **current** — B1 **done** (cycle 51, section "Aspect B — backend truth pass (cycle 51)" below); B2 **done and shipped** (cycle 52: server-031 + frontend-019, live as `cy118` / OTA `1.0.118` since 2026-09-03 07:46Z, `stages/0029-c052-push.md`); **B3 done in code (cycle 53 stage 30)**: all **34** Server + Runtime entries re-verified against the current tree with a machine-checked `- **Status:**` line each — **8 OPEN / 22 FIXED / 4 STALE** (Server 8/17/3, Runtime 0/5/1; `test/bugstats.test.js` 11→20 checks incl. the anti-rot path check) and the two really-open ones fixed with tests: server-024 (global per-connection `WS_MSG_BUDGET` gate, O(1)) and server-022 (TTS callback dead-response guard), `test/serverpolicy.test.js` 39→55 (group W1). Server-only cycle → **no stamp bump** (`45 × cy118` == production); the push stage runs **Lane B**. **B3b + static cache policy done in code (cycle 54 stage 34)**: server-002 (`defer()` try/catch around all five deferred bodies) and server-020 (leadership goes to the earliest member whose socket is still OPEN) **FIXED with executed tests** (`test/serverpolicy.test.js` 55→77, group D1 lifts `defer()` and `leaveParty()` out of server.js and runs them); server-011 **deferred with a recorded trigger** (tick > 50 ms or > 60 concurrent humans) and server-017 **scheduled as milestone B5, cycle 55** — both decisions written into their BUGS.md entries; ledger now **6 OPEN / 24 FIXED / 4 STALE** (Server 6/19/3, Runtime 0/5/1). The cache policy: new `server/httpcache.js` — stamped `?v=cyNNN` assets `public, max-age=31536000, immutable`, everything unstamped (`index.html`, legal, `/convoy.apk`) `no-cache` **+ ETag + Last-Modified**, the static handler stats before it reads and answers a matching `If-None-Match` with a body-less 304 before any `fs.readFile`; `STATIC_IMMUTABLE=0` kill switch (documented in `server/.env.example` with `WS_MSG_BUDGET`); new suite `test/httpcache.test.js` (41 checks: real round-trips over a temp dir + the production static tail lifted verbatim and executed). Server-only cycle → **no stamp bump** (`45 × cy118` == production); the push stage runs **Lane B**. **Cycle 55 stage 38 (server-only, no bump): the chat outage.** The cycle-54 improve stage's one `diag` showed `[handler chat] now is not defined` on every rider chat line — the `server/server.js` fan-out sent `t2: now`, undefined since the initial commit, so no live convoy chat message was ever delivered, the sender's own echo included (server-032, critical, **FIXED** `t2: entry.t` + executed group X1 with a mutation guard), and a mid-boot `systemctl restart` was logged as a `SUPABASE_DB_URL` failure with exit 1 (server-033, low, **FIXED**, group X2). New class gate `test/globals.test.js` (acorn-globals free-identifier scan over 112 files, 130 checks; RED on `server/server.js: now` before the fix, and it caught `ReferenceError` missing from its own allowlist on the first green attempt). `deploy/livetest.js` now asserts chat delivery both ways; `deploy/PUSH-RUNBOOK.md` §2 reads the journal for `[handler …]` after every restart. Ledger **6 OPEN / 26 FIXED / 4 STALE** (102 bugs). `npm test` 26 → **27** suites. **Closing criterion still open on:** server-017 (high → B5) and B4 Overpass mirrors; server-011 is closed *by decision* (critical-latent, re-open trigger recorded). **Next: B5** (cycle 56 — server-017: per-route auth buckets, charge only after `readBody()` succeeds; touches auth, needs its own cycle + `serverpolicy` green; spec already written in `stages/0036-c054-improve.md`), then **B4** (cycle 57) with the per-mirror log lines accumulating since 07:46Z | BUGS.md server+runtime truth pass (33 entries re-verified against current code, statuses updated, `bugstats` green); every open critical/high server bug fixed **with a regression test**; ~~stamped assets cached `immutable`~~ ✔ cycle 54 (`server/httpcache.js`, pending the cycle-54 push); shipped via Lane B/A |
 | C | Smoothness (delivery + client runtime) | after B | request count ≤ 30 on first load; reduced-motion/idle-CPU audit (plan v1 M10); reconnect UX (frontend-012/013); measured with the headless Chromium recipe below; shipped |
 | D | Android native (code + compile-check only) | after C | android-002/003/004/009/011/014 fixed; compiles with a user-local JDK/SDK if that lands in 20 min, else code-reviewed; **shipping needs the human's keystore** |
 | E | Front-end round 2 | after D | plan v1 M7 (ui.js split), M8 (states), M9 (responsive), M11 (onboarding) |
@@ -53,6 +53,49 @@ if any shared key's value has been raised. New keys (e.g. this stage's `axeViola
 `axeViolations_authLogin` replacing `axeViolations_auth`) are exempt on the stage that introduces them.
 
 ## Current milestone
+**Cycle 55 stage 38 (IMPLEMENT, executing the cycle-54-stage-36 IMPROVE directive's Tasks 1-5) — DONE, server-only, NO STAMP BUMP.**
+Convoy chat had never worked in live mode, the production journal had been saying so on every deploy, and no suite
+could see it. This stage fixes the word and — the actual deliverable — adds the gate that makes the class impossible.
+
+1. **Task 1 — `test/globals.test.js`, the undefined-identifier gate (new suite, 26 → 27; devDependency `acorn-globals`
+   7.0.1 = `acorn` + `acorn-walk` + itself, nothing shipped to a rider).** Parses `release.js`, `server/*.js`,
+   `scripts/*.js`, `deploy/*.js`, `js/*.js`, `test/*.js` (112 files) and lists every free identifier; each must be on
+   its tree's allowlist (ES 29 · HOST 10 · NODE 2 · CJS 3 · WEB 20 · WEB_NOT_IN_JSDOM 7 · APP_WEB 1 · TEST_EXTRA 4 ·
+   TEST_DOM 1 — derived from the scan, not typed from memory; `Capacitor`/`tf`/`nsfwjs` are reached via `window.*` and
+   are therefore not free names, so the dead-entry check keeps them out). A parse failure is a failed check. Three
+   honesty checks keep it from rotting: no dead entries (every name referenced under its trees), no project symbols
+   (1101 column-0 definitions, none allowlisted; `now` at `test/auth.test.js:67` and `shutdown` are the named teeth),
+   and every entry resolves where it claims (this Node, a jsdom window, the CJS wrapper, an `index.html`
+   `<script src>`; the jsdom-gap list must stay absent from jsdom). **RED first:** 3 failed / 127 passed naming
+   `server/server.js: now` (the other two were the gate's own `globalThis`/`exports`/`__filename`, removed rather than
+   allowlisted). After the fix the first green attempt flagged `ReferenceError` in the new X1 group — a real ES global
+   the honesty checks vouch for once listed — then **130/130**. Registered after `httpcache.test.js`.
+2. **Task 2 — `server/server.js:2876` `t2: now` → `t2: entry.t`** (server-032, critical). One word, with a comment
+   saying why the field is `t2` and naming the two sibling sites that were right. Not one line under `js/`: the client
+   already reads `m.t2` (`js/net.js:399`) and renders the sender's echo as `me`.
+3. **Task 3 — `test/serverpolicy.test.js` group X1** (77 → 95 checks together with X2; `executed:` lines 9 → 18): the
+   `chat` handler lifted verbatim and run — three-member fan-out (A, B, C each get `{t:'chat', text, t2:<finite>}`),
+   the sender's own echo, `t2 === party.chat[0].t`, the `blockedPair` guard, the rate limit, whitespace-only text, and
+   the bot reply's `t2: reply.t`; plus the **mutation guard** (the same lift with `t2: now` put back must throw
+   `ReferenceError`) and a static pin on the three `t: 'chat'` envelopes. **RED first:** 11 failed / 84 passed, every
+   executed check dying on `now is not defined` — the production journal line, reproduced in the suite.
+4. **Task 4 — server-033 (low):** `boot()`'s `store.init()` catch (`server/server.js:3996`) and the JWKS check
+   (`:4008`) test the existing `shuttingDown` flag first and `return` — shutdown() owns the exit — instead of blaming
+   `SUPABASE_DB_URL` / the JWKS and exiting 1 when a `systemctl restart` lands mid-boot. The TDZ argument (the flag is
+   declared below `boot()`; the catch can only run after an await) is commented in place; no second flag. Group X2:
+   the catch body lifted and executed with the flag set and clear, static pins on the flag and the JWKS guard.
+5. **Task 5 — ledger, runbook, state.** BUGS.md 100 → **102** (server-032 critical FIXED, server-033 low FIXED; Stats
+   Server 5/10/14/1 = 30, Total 9/31/50/12 = 102; roll-up **6 OPEN / 26 FIXED / 4 STALE** = 36; `bugstats` 20/20).
+   `deploy/PUSH-RUNBOOK.md` §2 gains the production-signal read (`[handler |Failed with result|uncaughtException|crossed
+   WS_MSG_BUDGET`, every hit quoted verbatim) and §5 item 5. **Beyond the letter of the directive, inside its intent:**
+   `deploy/livetest.js` now asserts that each side received the *other* side's text (`Chat delivered both ways?`) and
+   only prints PASS when it did — this is the script that reported PASS through the whole outage. It cannot run here
+   (no local Supabase, and it targets production); the push stage's run is its first execution.
+6. **Not bumped:** `45 ?v=cy118` == production; `git diff -- index.html css js legal` is empty. Push stage → **Lane B**.
+
+**What B still needs:** B5 (server-017, cycle 56 — spec in `stages/0036-c054-improve.md`) and B4 (Overpass mirrors,
+cycle 57). server-011 stays deferred by decision with its recorded trigger.
+
 **Cycle 54 stage 34 (IMPLEMENT, executing the cycle-53-stage-32 IMPROVE directive's Tasks 1-3) — DONE, server-only, NO STAMP BUMP.**
 The site finally has a cache policy (repeat visits stop re-downloading 342 KB), and two of the four open
 critical/high server bugs are fixed with executed tests; the other two carry recorded decisions instead of ambiguity.
@@ -708,6 +751,12 @@ canvas or behind `backdrop-filter`.
   `js/ghost.js` `clampBBox` returns null for a view wider than 4× the clamp, killing the intro globe's
   `-2…2` junk queries (frontend-019). `npm test` 24→25 suites (`ghostbbox.test.js` 18), `overpass.test.js`
   37→66, BUGS.md 98→100, stamp `cy117→cy118`, nothing deployed.
+- **2026-09-03 stage 38 (IMPLEMENT, cycle 55): the chat outage.** `server/server.js` chat fan-out sent `t2: now`
+  (undefined since the initial commit) → every live convoy chat line died in the dispatcher's catch (server-032,
+  critical, fixed: `t2: entry.t`); a mid-boot restart was mis-reported as `SUPABASE_DB_URL` (server-033, low, fixed).
+  New class gate `test/globals.test.js` (acorn-globals, 112 files, 130 checks; RED on `now` first), `serverpolicy`
+  77→95 (X1 executed chat lift + mutation guard, X2), `livetest` asserts chat delivery, runbook §2 reads the journal.
+  `npm test` 26→27 suites, BUGS.md 100→102, no stamp bump (`cy118` == production), nothing deployed.
 
 ## How to run (solo mode — no Supabase needed)
 ```bash
@@ -720,7 +769,7 @@ following `deploy/PUSH-RUNBOOK.md`; implement/review/improve never run `update`/
 
 ## How to test
 ```bash
-npm test                 # 22 Node suites, no network (includes frontend.test.js)
+npm test                 # 27 Node suites, no network (includes frontend.test.js; globals.test.js is the undefined-identifier gate)
 npm run test:frontend    # jsdom + axe-core + html-validate + detector + ratchet guard, gated on test/frontend-baseline.json
 node /opt/data/skills/creative/impeccable/scripts/detect.mjs --json index.html css/styles.css js/ui.js | grep -c '"antipattern"'
 graphify query "<area>"  # before editing;  graphify update .  # after editing
@@ -816,6 +865,15 @@ roll-up now 6/24/4). `frontend.test.js` 78, `overpass.test.js` 66, `ghostbbox.te
 unchanged. `npm run test:frontend` 7 baseline keys **unchanged** (`htmlValidateErrors` 13, `axeViolations_*` 0 ×6,
 `detectorWarnings` 17) — expected: no web file touched. Stamp deliberately **not** bumped: `45 ?v=cy118` == production
 `cy118`. Keep suite count (26), every per-suite check count, and the 7 baseline keys from going down.
+`npm test` on 2026-09-03 (implementer stage 38, cycle 55, after Tasks 1-5, server-only): **All 27 suites passed**
+(26→27, new `test/globals.test.js`, **130/130** checks, registered after `httpcache.test.js`; it was 3 failed / 127
+passed against the unfixed server, naming `server/server.js: now`). `serverpolicy.test.js` 77 → **95** (+18: group X1
+12 incl. 7 executed + the mutation guard, group X2 6 incl. 2 executed; `executed:` lines 9 → 18; 11 failed / 84 passed
+against the unfixed server). `bugstats.test.js` 20/20 (**102** bugs; roll-up 6/26/4). `frontend.test.js` 78,
+`httpcache.test.js` 41, `overpass.test.js` 66, `ghostbbox.test.js` 18, `browser.test.js` 5/5 — all unchanged.
+`npm run test:frontend` 7 baseline keys **unchanged** (`htmlValidateErrors` 13, `axeViolations_*` 0 ×6,
+`detectorWarnings` 17) — expected: no web file touched. Stamp deliberately **not** bumped: `45 ?v=cy118` == production
+`cy118`. Keep suite count (27), every per-suite check count, and the 7 baseline keys from going down.
 
 ## Operating contract (cycle 50+, plan v2) — every role reads this; it is the tail of this file on purpose
 1. **One aspect at a time.** Implement works only on the current aspect's next milestone from plan v2
@@ -826,8 +884,8 @@ unchanged. `npm run test:frontend` 7 baseline keys **unchanged** (`htmlValidateE
    read the current stamp (`grep -oE '\?v=cy[0-9]+' index.html | sort | uniq -c`, one value, 45×), then e.g.
    `sed -i 's/?v=cy117/?v=cy118/g' index.html && grep -oc '?v=cy118' index.html` (must print 45),
    then `node scripts/pack-ota.js --offline 2>&1 | tail -6` (must print the matching `version 1.0.NNN`).
-   Current stamp after cycle 54 stage 34: `cy118` **== production** (`cy118` served since 2026-09-03 07:46Z, the
-   cycle-52 push). Cycles 53 and 54 were server-only — no bump, Lane B both times. The next web edit (aspect C) bumps
+   Current stamp after cycle 55 stage 38: `cy118` **== production** (`cy118` served since 2026-09-03 07:46Z, the
+   cycle-52 push). Cycles 53, 54 and 55 were server-only — no bump, Lane B each time. The next web edit (aspect C) bumps
    to `cy119`; until then `LOCAL == PROD` is the expected state. If a push is held back, the next implement stage
    does not bump again.
    Server-only stages do not bump. Never leave a mixed page. The bumped stamp is what the push stage
@@ -850,6 +908,13 @@ unchanged. `npm run test:frontend` 7 baseline keys **unchanged** (`htmlValidateE
    `grep -oE '\?v=cy[0-9]+' index.html | sort | uniq -c`). If a push is held back or fails, the next implement
    stage does **not** bump again — the pending bump ships first (`LOCAL > PROD` stays exactly one), then new
    web edits. No stage other than implement ever edits `index.html`/`css/`/`js/`/`legal/`.
+8. **A swallowed-exception log line in production is a test gap, and the fix is a test, not a log grep (standing
+   rule, added cycle 55).** `[handler …]`, `[defer] deferred task threw`, `uncaughtException` or `Failed with result`
+   in the journal means a feature is broken and no suite noticed — chat was dead from the initial commit while every
+   suite was green. The next implement stage owns a test that would have failed (an executed lift, or a class gate
+   like `test/globals.test.js`); never an allowlist entry, never just a runbook grep. The runbook's §2 read exists so
+   the line is *seen*, once per cycle; `livetest` PASS covers exactly what it asserts (from cycle 55: roster + chat
+   delivery both ways) and nothing else.
 
 ## Human-only actions (v2 — surface in every review and every push report)
 1. **Android signing keystore** (`android/key.properties` + `convoy-release.keystore`) or running
@@ -860,7 +925,9 @@ unchanged. `npm run test:frontend` 7 baseline keys **unchanged** (`htmlValidateE
 3. Product name (Slipstream in UI vs Convoy in repo) — still not an agent's call.
 4. A 60-second look at the live app in a real browser **now that the cycle-50 release is live (06:56Z)**: the
    routing/drag progress bars at phone width (ui-021), and open a race lobby, let the countdown tick, tap the
-   dock (the ui-003b scenario).
+   dock (the ui-003b scenario). **Cycle 55 adds the cheapest, highest-value check of all:** two devices (or two
+   browsers), the same convoy, one chat message each way — before the cycle-55 push nobody saw anything (not even
+   their own line); after it both do.
 5. Supabase keys in `server/.env` only if live-mode local testing is ever wanted.
 6. **`release.js` OTA path — half-answered, do not re-litigate.** `OTA_DIR_REMOTE` was *already changed* to
    `/opt/convoy/server/data/ota` by commit `5028570` (2026-09-03 06:56:07Z, an untagged commit that landed
