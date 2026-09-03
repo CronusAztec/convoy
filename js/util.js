@@ -169,6 +169,18 @@
     return n;
   }
 
+  // Inject a <script> and resolve/reject on load/error. Shared by every
+  // lazy-loaded module (CDN feature scripts, js/data.js) so there is exactly
+  // one script-injection implementation in the app.
+  function loadScript(src) {
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = src; s.async = true;
+      s.onload = resolve; s.onerror = function () { s.remove(); reject(new Error('load ' + src)); };
+      document.head.appendChild(s);
+    });
+  }
+
   /* ---------- rider identity icons ----------
      Flat-color geometric SVG insignias (solid fills, no stroke). A "key" is a
      small integer (0..7); we coerce anything legacy (an emoji char, undefined)
@@ -368,7 +380,7 @@
     lerp: lerp, lerpPos: lerpPos, lerpAngle: lerpAngle,
     clamp: clamp, rand: rand, randInt: randInt, pick: pick, chance: chance, uid: uid, own: own,
     fmtDist: fmtDist, fmtDur: fmtDur, fmtClock: fmtClock,
-    hexToRgb: hexToRgb, luma: luma, relLuma: relLuma, contrast: contrast, bestInk: bestInk, esc: esc, safePaint: safePaint, safeFinish: safeFinish, el: el, debounce: debounce, deepClone: deepClone,
+    hexToRgb: hexToRgb, luma: luma, relLuma: relLuma, contrast: contrast, bestInk: bestInk, esc: esc, safePaint: safePaint, safeFinish: safeFinish, el: el, loadScript: loadScript, debounce: debounce, deepClone: deepClone,
     sunTimes: sunTimes, isDaylight: isDaylight,
     fetchT: fetchT, FETCH_TIMEOUT: FETCH_TIMEOUT, poll: poll, unpoll: unpoll,
     iconKey: iconKey, riderIcon: riderIcon, convoyFlag: convoyFlag, ICON_COUNT: ICON_PATHS.length

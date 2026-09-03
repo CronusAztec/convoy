@@ -7,6 +7,14 @@
 
   var MAX_MEMBERS = 6;
   var CHAT_MAX = 100; // chat ring ceiling (pushChat)
+  // Same lazy-data fallback as the NPC chat guard below (T1.5a): a rider who
+  // creates an unnamed convoy before js/data.js lands still gets a real name.
+  var FALLBACK_CONVOY_NAMES = ['Midnight Run', 'Coastal Cruise', 'Weekend Run'];
+  function convoyName(name) {
+    if (name && name.trim()) return name.trim();
+    var names = (D.CONVOY_NAMES && D.CONVOY_NAMES.length) ? D.CONVOY_NAMES : FALLBACK_CONVOY_NAMES;
+    return U.pick(names);
+  }
 
   // Live, or the socket is down with the server still holding our seat
   // (js/net.js PARTY_GRACE_MS, server-035): every delegated action below is
@@ -20,12 +28,12 @@
   /* ================= create ================= */
   function create(name, emoji) {
     if (isLive()) {
-      A.net.sendCreate((name && name.trim()) || U.pick(D.CONVOY_NAMES), emoji || 0);
+      A.net.sendCreate(convoyName(name), emoji || 0);
       return;
     }
     S.party = {
       id: U.uid(),
-      name: (name && name.trim()) || U.pick(D.CONVOY_NAMES),
+      name: convoyName(name),
       emoji: (emoji != null && emoji !== '') ? emoji : 0,
       isLeader: true,
       members: [],
@@ -146,7 +154,12 @@
         if (!S.party || S.party.id !== partyId || !S.party.members.length) return;
         var npc = A.sim.getNpc(U.pick(S.party.members));
         if (!npc) return;
-        pushChat({ from: npc.name, emoji: npc.emoji, text: U.pick(D.CHAT_REPLIES), t: Date.now() });
+        // NPC chat fires on a timer, not a user action — it must not wait on
+        // js/data.js (lazy since T1.5a, guardrail 6: never gate an alerting
+        // or realtime path on a lazy script). Fall back to a tiny inline set
+        // on the rare chance this fires before the idle warm has landed.
+        var replies = (D.CHAT_REPLIES && D.CHAT_REPLIES.length) ? D.CHAT_REPLIES : ['Copy that', 'On my way', 'Confirmed'];
+        pushChat({ from: npc.name, emoji: npc.emoji, text: U.pick(replies), t: Date.now() });
       }, U.randInt(900, 3600));
     }
   }

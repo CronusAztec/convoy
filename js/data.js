@@ -1118,7 +1118,11 @@
   var CONVOY_NAMES = ['Midnight Run', 'Coastal Cruise', 'Weekend Run', 'Sunset Drive',
     'Highway Crew', 'The Long Way', 'City Loop', 'Mountain Route'];
 
-  A.data = {
+  // T1.5a: loaded lazily now (js/config.js's A.data.ensure()), so js/ui.js
+  // and js/party.js already hold a captured `var D = A.data;` reference from
+  // parse time. MUTATE the existing object — reassigning A.data here would
+  // leave those captures pointing at an empty, forever-stale object.
+  var DATA = {
     VEHICLES: VEHICLES,
     MAKES: MAKES,
     MAKE_LIST: Object.keys(MAKES),
@@ -1137,4 +1141,7 @@
     CHAT_REPLIES: CHAT_REPLIES,
     CONVOY_NAMES: CONVOY_NAMES
   };
+  A.data = A.data || {};
+  for (var k in DATA) if (Object.prototype.hasOwnProperty.call(DATA, k)) A.data[k] = DATA[k];
+  A.data.loaded = true;
 })();

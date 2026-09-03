@@ -6,6 +6,11 @@
   'use strict';
   var A = (window.App = window.App || {});
 
+  // js/data.js loads lazily now (T1.5a) — js/ui.js and js/party.js capture
+  // `var D = A.data;` at parse time, so this object must exist before they
+  // run and must only ever be FILLED (never reassigned) once data.js lands.
+  A.data = A.data || {};
+
   var cap = window.Capacitor;
   var isNative = !!(cap && typeof cap.isNativePlatform === 'function' && cap.isNativePlatform());
 
@@ -35,5 +40,24 @@
     // so the key never ships in client JS. The client probes /api/route on boot
     // (net.js does this once the socket is live) and only opts in to TomTom when
     // the server confirms it has a key. No client key → automatic OSRM fallback.
+  };
+
+  // T1.5a: js/data.js (car/paint/name/city catalog, ~16 KB gzip) is off the
+  // boot path — every consumer site (js/ui.js, js/party.js) reads it inside
+  // a function, never at parse time. ensure() injects the script once and
+  // caches the promise so repeat callers (idle warm + panel opens) share one
+  // load. The ?v= stamp is read off this very script's own tag rather than
+  // hardcoded, so the next stamp bump can't silently break the fetch.
+  var dataPromise = null;
+  A.data.ensure = function () {
+    if (A.data.loaded) return Promise.resolve(A.data);
+    if (dataPromise) return dataPromise;
+    var tag = document.querySelector('script[src*="config.js?v="]');
+    var i = tag ? tag.src.indexOf('?v=') : -1;
+    var stamp = i >= 0 ? tag.src.slice(i) : '';
+    dataPromise = A.util.loadScript('js/data.js' + stamp).then(function () {
+      return A.data;
+    });
+    return dataPromise;
   };
 })();

@@ -69,4 +69,15 @@
       // NOTE: no A.ota.ready() here on purpose — see the comment above it.
     });
   });
+
+  // T1.5a idle warm: js/data.js (car/paint/name/city catalog) is off the boot
+  // path now. Fetch it once boot is out of the way so it is already sitting
+  // in A.data by the time any human opens the garage or profile panel — same
+  // load+idle shape js/telemetry.js uses for its first flush (reused, not
+  // reinvented). Ignored on purpose: buildProfilePanel()/buildGaragePage()
+  // await A.data.ensure() themselves for the rider who beats this warm.
+  window.addEventListener('load', function () {
+    var ric = window.requestIdleCallback || function (cb) { setTimeout(cb, 1); };
+    ric(function () { if (A.data && A.data.ensure) A.data.ensure().catch(function () {}); });
+  }, { once: true });
 })();

@@ -911,14 +911,7 @@
      load (offline/native WebView), a conservative skin-exposure heuristic
      gates instead — when in doubt the photo is rejected, never auto-approved. */
   var nsfwModel = null, nsfwLoading = null;
-  function loadScript(src) {
-    return new Promise(function (resolve, reject) {
-      var s = document.createElement('script');
-      s.src = src; s.async = true;
-      s.onload = resolve; s.onerror = function () { s.remove(); reject(new Error('load ' + src)); };
-      document.head.appendChild(s);
-    });
-  }
+  var loadScript = U.loadScript; // single implementation now lives in js/util.js
   function loadNsfwModel() {
     if (nsfwModel) return Promise.resolve(nsfwModel);
     if (nsfwLoading) return nsfwLoading;
@@ -1671,8 +1664,19 @@
     var body = document.getElementById('profile-body');
     if (!body) return; // absent panel must not desync openName from the DOM
     body.innerHTML = '';
-    if (profileView === 'garage') buildGaragePage(body);
-    else buildProfileMain(body);
+    // T1.5a: js/data.js is lazy now. The idle warm in js/app.js has usually
+    // already filled A.data by the time a rider gets here, but a rider who
+    // beats it (garage view needs D.MAKE_LIST/D.PAINTS/etc.) must not see an
+    // empty-dropdown panel — wait for the (cached, near-instant once loaded)
+    // ensure() before building the garage page specifically.
+    if (profileView === 'garage') {
+      A.data.ensure().then(function () {
+        if (profileView !== 'garage' || document.getElementById('profile-body') !== body) return;
+        buildGaragePage(body);
+      });
+    } else {
+      buildProfileMain(body);
+    }
   }
 
   /* ---- page 1: the profile ---- */
