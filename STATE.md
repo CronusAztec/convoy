@@ -2,19 +2,26 @@
 
 > Maintained by the implementer after every stage. Planner wrote v1 on 2026-09-03.
 > Mission dir (handoff docs): `/opt/data/forge/missions/20260903-002914-ce0d/`
-> Plan: `stages/0001-c000-plan.md` in that dir — read it before doing anything.
+> Plan v2 (cycle 50 re-plan, current): `stages/0017-c050-plan.md`; plan v1: `stages/0001-c000-plan.md`. Read v2 first.
 > Cycle-0-stage-4 IMPROVE directive amended two plan targets — see "Amended targets" below before
 > trusting the plan's original M6/M-B wording.
 
 ## Mission
-"edit the convoy app to be better in the front end aspect in every way"
+"edit the convoy app to be better in every way, pick a main aspect of the app and work on it, like
+frontend, backend, smoothness, etc, once it is done move on to the next" (MISSION.md; re-planned at
+cycle 50 on 2026-09-03 — plan v2 is `stages/0017-c050-plan.md` in the mission dir, read it first).
 Rules: use graphify; use and learn new skills when needed.
+The loop is now implement → review → improve → **push** (new stage: GitHub + live site + OTA to
+installed APKs, unlimited cycles). The push stage follows `deploy/PUSH-RUNBOOK.md` to the letter.
 
-## Chosen direction
-Refine (not redesign) the existing plain-script front end (`index.html`, `css/styles.css`, `js/*.js`),
-measured by three re-runnable gates. No bundler, no framework, no deploy, no server logic changes
-beyond the static-file branch (compression + caching). Visual identity (cut-corner cyberpunk HUD,
-neutral-slate accent, Chakra Petch / Share Tech Mono) is preserved.
+## Aspect roadmap (v2 — one aspect at a time; an aspect closes only with a shipped release)
+| # | Aspect | Status | Closes when |
+|---|---|---|---|
+| A | Front-end (cycles 0-4, closing in cycle 50) | **current** | `setShellInert` nesting fix + shell-restore invariant test + `#toasts` scoping landed; stamp bumped to `cy117`; review not BROKEN; push stage reports `cy117` served and `/api/ota` current = 1.0.117; livetest green |
+| B | Backend / server (`server/*.js`) | next | BUGS.md server+runtime truth pass (33 entries re-verified against current code, statuses updated, `bugstats` green); every open critical/high server bug fixed **with a regression test**; stamped assets cached `immutable`; shipped via Lane B/A |
+| C | Smoothness (delivery + client runtime) | after B | request count ≤ 30 on first load; reduced-motion/idle-CPU audit (plan v1 M10); reconnect UX (frontend-012/013); measured with the headless Chromium recipe below; shipped |
+| D | Android native (code + compile-check only) | after C | android-002/003/004/009/011/014 fixed; compiles with a user-local JDK/SDK if that lands in 20 min, else code-reviewed; **shipping needs the human's keystore** |
+| E | Front-end round 2 | after D | plan v1 M7 (ui.js split), M8 (states), M9 (responsive), M11 (onboarding) |
 
 ## Amended targets (cycle 0 stage 4, still binding — do not revert to the plan's original wording)
 1. **M6 "detector warnings → 0" is not the real target.** 13 of the 37 detector findings
@@ -450,3 +457,36 @@ whichever suite happens to run last — `frontend.test.js`). `npm run test:front
 `detectorWarnings` 17) — expected: Tasks 1-2 fixed a keyboard-only defect none of those gates can
 see (Finding C in the stage-13 directive). Keep suite count, every per-suite check count, and the 7
 baseline keys from going down.
+
+## Operating contract (cycle 50+, plan v2) — every role reads this; it is the tail of this file on purpose
+1. **One aspect at a time.** Implement works only on the current aspect's next milestone from plan v2
+   (`stages/0017-c050-plan.md` §6) as ordered by the latest IMPROVE directive. Moving to the next
+   aspect requires the current one's "Closes when" row above to be true **and** a shipped release.
+2. **Stamp rule (implementer, last code edit of the stage).** If the stage changed `index.html`,
+   `css/`, `js/` or `legal/`, bump **all 45** stamps by exactly one:
+   `sed -i 's/?v=cy116/?v=cy117/g' index.html && grep -oc '?v=cy117' index.html` (must print 45),
+   then `node scripts/pack-ota.js --offline 2>&1 | tail -6` (must print `version 1.0.117`).
+   Server-only stages do not bump. Never leave a mixed page. The bumped stamp is what the push stage
+   uses to decide Lane A (web + OTA) vs Lane B (site only).
+3. **Push gates** (`deploy/PUSH-RUNBOOK.md`): review verdict BROKEN or any BLOCKER → nothing moves;
+   ACCEPTABLE with a HIGH → GitHub only; otherwise GitHub + `deploy/live-deploy.sh release -- --ota`
+   (or `--no-apk`), then `/api/health`, `/api/ota`, served stamp, `livetest` — one request each.
+4. **Only the push stage deploys.** Implement/review/improve never run `update`/`release`; review may
+   run `deploy/live-deploy.sh diag` once (read-only). `www/` and `ota-out/` are generated, gitignored.
+5. **Every stage:** `graphify query` before editing, `graphify update .` after; `npm test` and
+   `npm run test:frontend` green before ending; suite count (23), per-suite check counts and the 7
+   `test/frontend-baseline.json` keys never go the wrong way; a consistent tree at the end.
+6. **Never:** build or upload an APK (no JDK/SDK/keystore here or on the VPS — verified 2026-09-03);
+   `--force` an OTA; edit `/var/lib/convoy/*` by hand; touch CSP allowlists, auth or the two CDN pins
+   without the milestone saying so and `test/serverpolicy.test.js` passing; add a bundler/framework;
+   rename the product; loop health checks against production (shared IP with live riders).
+
+## Human-only actions (v2 — surface in every review and every push report)
+1. **Android signing keystore** (`android/key.properties` + `convoy-release.keystore`) or running
+   `node release.js` from the PC that has them — the only way a native (`android/`) change ships.
+2. Production `convoy.env` hardening seen in the boot log on 2026-09-03: `ADMIN_TOKEN` is under 24
+   characters, and `SUPABASE_DB_CA` is unset (Postgres TLS verification disabled). Agents must not
+   edit that file; the human should set both.
+3. Product name (Slipstream in UI vs Convoy in repo) — still not an agent's call.
+4. A 60-second look at the live app in a real browser after the first cycle-50 release (ui-021).
+5. Supabase keys in `server/.env` only if live-mode local testing is ever wanted.
