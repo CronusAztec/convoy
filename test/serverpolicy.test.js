@@ -59,7 +59,18 @@
          and demands the ReferenceError, so the group is a detector, not a
          passenger
      X2  a `systemctl restart` that lands mid-boot returns from boot() instead
-         of blaming SUPABASE_DB_URL and exiting 1 (server-033) */
+         of blaming SUPABASE_DB_URL and exiting 1 (server-033)
+
+   Added with the cycle-56 B5 stage (2026-09-03):
+     Y1  the anonymous-credential rate gate is two tiers — a pre-body per-IP
+         flood ceiling and a post-body per-route attempt budget — lifted in
+         three pieces and EXECUTED over a scripted readBody(). One shared
+         `auth:<ip>` bucket used to gate all eleven routes, so 24 fat-fingered
+         logins behind carrier NAT 429'd /api/recover for everyone on that
+         address, and a malformed or oversized body burned a login attempt
+         (server-017). The mutation guard pastes the old gate back in and
+         demands both failures, and AUTH_FLOOD_MAX >= sum(budgets) is pinned
+         so the self-DoS cannot be re-created by nudging one number */
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -546,5 +557,214 @@ const jwksMsgAt = jwksAt >= 0 ? SRC.indexOf('could not load the Supabase JWKS', 
 const jwksGuardAt = jwksAt >= 0 ? SRC.indexOf('if (shuttingDown)', jwksAt) : -1;
 ok('boot(): the JWKS check is guarded the same way — shuttingDown is tested between that await and the "could not load the Supabase JWKS" exit',
   jwksAt > 0 && jwksGuardAt > jwksAt && jwksGuardAt < jwksMsgAt, 'jwks@' + jwksAt + ' guard@' + jwksGuardAt + ' msg@' + jwksMsgAt);
+
+
+/* ---- Y1 — one rider's fat-fingered logins do not take /api/recover away from a carrier NAT (server-017) ----
+   Lift-and-execute, in three pieces this time. The anonymous-credential gate
+   is sliced out of server.js — the budget table, the pre-body flood check and
+   the head of the readBody() callback — and composed into a fake handleApi()
+   over a real, lifted rateOk() and a scripted readBody(): a well-formed body
+   reaches the attempt check, a malformed one 400s, an oversized one 413s
+   inside the data handler and never calls back (that is what readBody does).
+   The markers exist in both the old and the new shape, so the executed checks
+   run against the shipped single-bucket gate too — and fail on BEHAVIOUR:
+   measured 2026-09-03, 24 failed logins from one NAT address 429'd
+   /api/recover for everyone behind it, and 24 malformed bodies burned 24
+   login attempts. `at` in every answer says which piece of the gate spoke. */
+group('Y1 — a rider\'s fat-fingered logins do not take /api/recover away from everyone behind their NAT (server-017)');
+
+const rkOpen = 'function rateOk(key, max, windowMs) {';
+const rkAt = SRC.indexOf(rkOpen);
+const rkEnd = rkAt >= 0 ? SRC.indexOf('\n}\n', rkAt) + 3 : -1;
+const rateOkSrc = (rkAt >= 0 && rkEnd > rkAt) ? SRC.slice(rkAt, rkEnd) : '';
+ok('rateOk() can be lifted (found once, non-trivial)', rateOkSrc.length > 100 && SRC.indexOf(rkOpen, rkAt + 1) === -1, 'len=' + rateOkSrc.length);
+
+// The table: module-scope ANON_AUTH_BUDGET … AUTH_FLOOD_MAX after the fix; the
+// bare ANON_AUTH_ROUTES array literal inside handleApi() before it.
+const handleApiAt = SRC.indexOf('async function handleApi(');
+let tableAt = SRC.indexOf('const ANON_AUTH_BUDGET = ');
+let tableEnd = -1;
+if (tableAt >= 0) {
+  const fm = SRC.indexOf('const AUTH_FLOOD_MAX = ', tableAt);
+  tableEnd = fm >= 0 ? SRC.indexOf('\n', fm) : -1;
+} else {
+  tableAt = SRC.indexOf('const ANON_AUTH_ROUTES = [');
+  tableEnd = tableAt >= 0 ? SRC.indexOf('];', tableAt) + 2 : -1;
+}
+const tableSrc = (tableAt >= 0 && tableEnd > tableAt) ? SRC.slice(tableAt, tableEnd) : '';
+const floodOpen = 'if (ANON_AUTH_ROUTES.indexOf(urlPath) >= 0 && !rateOk(';
+const floodAt = SRC.indexOf(floodOpen);
+const floodEnd = floodAt >= 0 ? SRC.indexOf('\n  }\n', floodAt) + 4 : -1;
+const floodSrc = (floodAt >= 0 && floodEnd > floodAt) ? SRC.slice(floodAt, floodEnd) : '';
+const readBodyAt = floodAt >= 0 ? SRC.indexOf('readBody(req, res, async (body) => {', floodAt) : -1;
+const bodyNullAt = readBodyAt >= 0 ? SRC.indexOf('if (body == null) return json(res, 400', readBodyAt) : -1;
+const attemptEnd = bodyNullAt >= 0 ? SRC.indexOf('\n    try {', bodyNullAt) : -1;
+const attemptSrc = (bodyNullAt >= 0 && attemptEnd > bodyNullAt) ? SRC.slice(bodyNullAt, attemptEnd) : '';
+ok('the gate can be lifted in three pieces: the route table, the pre-body check (found once), and the head of the readBody() callback',
+  tableSrc.length > 0 && floodSrc.length > 0 && attemptSrc.length > 0 && SRC.indexOf(floodOpen, floodAt + 1) === -1,
+  'table=' + tableSrc.length + ' flood=' + floodSrc.length + ' attempt=' + attemptSrc.length);
+
+// What the table says, evaluated — never re-typed. Missing names read as null
+// so the checks below fail with a reason instead of a ReferenceError.
+function evalTable(src) {
+  try {
+    return new Function(src + '\nreturn { routes: ANON_AUTH_ROUTES.slice(),' +
+      ' budget: typeof ANON_AUTH_BUDGET === "undefined" ? null : Object.assign({}, ANON_AUTH_BUDGET),' +
+      ' floodMax: typeof AUTH_FLOOD_MAX === "undefined" ? null : AUTH_FLOOD_MAX };')();
+  } catch (e) { return { routes: [], budget: null, floodMax: null, err: e.message }; }
+}
+const OVERSIZED = { oversized: true };   // readBody's data handler answers 413 itself and never calls back
+const AUTH_429 = { error: 'Too many attempts — wait a few minutes' };
+// A fake handleApi(): the three lifted pieces in the order the server runs
+// them, around a scripted readBody(). `over` swaps a piece for the mutation guard.
+function authWorld(over) {
+  over = over || {};
+  const hits = new Map();
+  const rateOk = new Function('authHits', rateOkSrc + '\nreturn rateOk;')(hits);
+  const entered = { count: 0 };
+  const src = (over.table || tableSrc) + '\n' +
+    'return function handle(ip, urlPath, body) {\n' +
+    '  let at = "flood"; const res = {};\n' +
+    '  const json = (r, code, obj) => ({ code: code, body: obj, at: at });\n' +
+    '  ' + (over.flood || floodSrc) + '\n' +
+    '  at = "readBody"; entered.count++;\n' +
+    '  if (body === OVERSIZED) return { code: 413, body: { error: "Request too large" }, at: at };\n' +
+    '  at = "attempt";\n' +
+    '  ' + (over.attempt || attemptSrc) + '\n' +
+    '  at = "handler";\n' +
+    '  return { code: 200, body: { ok: true }, at: at };\n' +
+    '};';
+  const handle = new Function('rateOk', 'RATE_WINDOW', 'OVERSIZED', 'entered', src)(rateOk, 10 * 60 * 1000, OVERSIZED, entered);
+  return {
+    hits: hits, handle: handle, entered: entered, api: evalTable(over.table || tableSrc),
+    times: (n, ip, route, body) => { const out = []; for (let i = 0; i < n; i++) out.push(handle(ip, route, body)); return out; },
+    bucket: (k) => (hits.get(k) || []).length
+  };
+}
+
+if (rateOkSrc && tableSrc && floodSrc && attemptSrc) {
+  const NAT = '203.0.113.7', OTHER = '198.51.100.9';
+  const LOGIN = { identifier: 'alice', password: 'wrong' };
+
+  // (a) — the self-DoS. 24 wrong passwords from one carrier-NAT address.
+  const w = authWorld();
+  const logins = w.times(24, NAT, '/api/login', LOGIN);
+  const rec = w.handle(NAT, '/api/recover', { username: 'alice', code: 'x', password: 'y' });
+  ok('executed (a): 24 failed /api/login from one NAT address all reach the handler (the 24th is still allowed)',
+    logins.every((r) => r.code === 200 && r.at === 'handler'), 'codes=' + logins.map((r) => r.code).join(','));
+  ok('executed (a): …and /api/recover from the SAME address is still answerable — the route the locked-out rider needs next',
+    rec.code === 200 && rec.at === 'handler', 'recover → ' + JSON.stringify(rec));
+  const login25 = w.handle(NAT, '/api/login', LOGIN);
+  ok('executed: the 25th /api/login from that address is refused with the rider-visible 429 copy — the per-route budget binds',
+    login25.code === 429 && JSON.stringify(login25.body) === JSON.stringify(AUTH_429), JSON.stringify(login25));
+
+  // (b1) — a malformed body. readBody() calls back with undefined → 400.
+  const wm = authWorld();
+  const bad = wm.times(24, NAT, '/api/login', null);
+  const goodAfterBad = wm.handle(NAT, '/api/login', LOGIN);
+  ok('executed (b1): 24 malformed bodies each 400 — and the 25th, well-formed login still reaches the handler: a parse error costs no attempt',
+    bad.every((r) => r.code === 400) && goodAfterBad.code === 200 && goodAfterBad.at === 'handler',
+    '400s=' + bad.filter((r) => r.code === 400).length + ' then ' + JSON.stringify(goodAfterBad));
+  ok('executed (b1): the malformed bodies charged the flood tier only — authflood:<ip> holds 25, auth:/api/login:<ip> holds exactly the one real attempt',
+    wm.bucket('authflood:' + NAT) === 25 && wm.bucket('auth:/api/login:' + NAT) === 1,
+    'buckets: ' + [...wm.hits.keys()].map((k) => k + '=' + wm.bucket(k)).join(' '));
+
+  // (b2) — an oversized body. readBody() 413s in its data handler and never calls back.
+  const wo = authWorld();
+  const big = wo.times(24, NAT, '/api/login', OVERSIZED);
+  const goodAfterBig = wo.handle(NAT, '/api/login', LOGIN);
+  ok('executed (b2): 24 oversized bodies each 413 inside readBody (never calling back) — and the 25th, well-formed login still reaches the handler',
+    big.every((r) => r.code === 413 && r.at === 'readBody') && goodAfterBig.code === 200 && goodAfterBig.at === 'handler',
+    '413s=' + big.filter((r) => r.code === 413).length + ' then ' + JSON.stringify(goodAfterBig));
+  ok('executed (b2): the attempt bucket was never reached by an oversized body — auth:/api/login:<ip> holds exactly the one real attempt',
+    wo.bucket('auth:/api/login:' + NAT) === 1, 'buckets: ' + [...wo.hits.keys()].map((k) => k + '=' + wo.bucket(k)).join(' '));
+
+  // per-route independence
+  const wr = authWorld();
+  wr.times(25, NAT, '/api/login', LOGIN);
+  const others = wr.api.routes.filter((r) => r !== '/api/login').map((r) => [r, wr.handle(NAT, r, { any: 1 }).code]);
+  ok('executed: with /api/login exhausted, every other anonymous credential route from the same address is still answerable (' + others.length + ' routes)',
+    others.length === wr.api.routes.length - 1 && others.length >= 10 && others.every((x) => x[1] === 200), JSON.stringify(others));
+
+  // per-IP isolation (passes today; must keep passing)
+  const otherLogin = wr.handle(OTHER, '/api/login', LOGIN);
+  ok('executed: per-IP isolation is preserved — a different address\'s /api/login is untouched by the exhausted one',
+    otherLogin.code === 200 && otherLogin.at === 'handler', JSON.stringify(otherLogin));
+
+  // the flood tier still fronts the body read
+  const wf = authWorld();
+  const floodMax = wf.api.floodMax;
+  if (typeof floodMax === 'number') {
+    const spread = wf.api.routes;
+    for (let i = 0; i < floodMax; i++) wf.handle(NAT, spread[i % spread.length], null);   // malformed → flood tier only
+    const before = wf.entered.count;
+    const next = wf.handle(NAT, '/api/register', { username: 'x', password: 'y' });
+    ok('executed: AUTH_FLOOD_MAX (' + floodMax + ') requests from one address, then the next is refused BEFORE readBody is entered — a flooder still cannot make this process read bodies',
+      next.code === 429 && next.at === 'flood' && wf.entered.count === before && JSON.stringify(next.body) === JSON.stringify(AUTH_429),
+      JSON.stringify(next) + ' entered ' + before + '→' + wf.entered.count);
+  } else {
+    ok('executed: AUTH_FLOOD_MAX requests from one address, then the next is refused BEFORE readBody is entered', false,
+      'AUTH_FLOOD_MAX is not defined — there is no flood tier');
+  }
+
+  // routes absent from the table are ungated by either tier — exactly as today
+  const wt = authWorld();
+  const free = wt.times(300, NAT, '/api/telemetry', { kind: 'x' }).concat(wt.times(60, NAT, '/api/ota', { platform: 'android' }));
+  ok('executed: routes absent from the table (/api/telemetry ×300, /api/ota ×60 from one address) are ungated by either tier and mint no auth bucket',
+    free.every((r) => r.code === 200 && r.at === 'handler') && wt.hits.size === 0,
+    'codes=' + [...new Set(free.map((r) => r.code))].join(',') + ' buckets=' + wt.hits.size);
+
+  // The mutation guard: the same harness with the shipped single-bucket gate
+  // pasted back in must reproduce both halves of server-017. If this stops
+  // failing, the (a)/(b) checks above have stopped detecting anything.
+  const OLD_GATE = "if (ANON_AUTH_ROUTES.indexOf(urlPath) >= 0 && !rateOk('auth:' + ip, 24, RATE_WINDOW)) {\n" +
+    "    return json(res, 429, { error: 'Too many attempts — wait a few minutes' });\n  }";
+  const OLD_HEAD = "if (body == null) return json(res, 400, { error: 'Bad request' });";
+  const wg = authWorld({ flood: OLD_GATE, attempt: OLD_HEAD });
+  wg.times(24, NAT, '/api/login', LOGIN);
+  const recOld = wg.handle(NAT, '/api/recover', { username: 'alice' });
+  const wg2 = authWorld({ flood: OLD_GATE, attempt: OLD_HEAD });
+  wg2.times(24, NAT, '/api/login', null);
+  const loginOld = wg2.handle(NAT, '/api/login', LOGIN);
+  ok('mutation guard: the same harness with the old single-bucket gate pasted back in 429s /api/recover after 24 logins AND 429s a real login after 24 malformed bodies — so (a) and (b) are a real detector',
+    recOld.code === 429 && recOld.at === 'flood' && loginOld.code === 429 && loginOld.at === 'flood',
+    'recover → ' + JSON.stringify(recOld) + ' login-after-malformed → ' + JSON.stringify(loginOld));
+}
+
+// Structural pins — cheap, and the second of them is the one that keeps the
+// self-DoS from being re-created by nudging a number six months from now.
+const api = evalTable(tableSrc);
+const budgetSum = api.budget ? Object.keys(api.budget).reduce((s, k) => s + api.budget[k], 0) : NaN;
+ok('AUTH_FLOOD_MAX >= the sum of every per-route attempt budget (' + api.floodMax + ' >= ' + budgetSum + ') — the flood tier can only bind on traffic that never produced a well-formed body',
+  typeof api.floodMax === 'number' && !!api.budget && api.floodMax >= budgetSum, api.err || ('floodMax=' + api.floodMax + ' sum=' + budgetSum));
+ok('every per-route budget is a positive integer, and the table is prototype-less (a URL path is the key)',
+  !!api.budget && Object.keys(api.budget).every((k) => Number.isInteger(api.budget[k]) && api.budget[k] > 0) &&
+  /const ANON_AUTH_BUDGET = Object\.assign\(Object\.create\(null\), \{/.test(tableSrc), api.err || tableSrc.slice(0, 60));
+ok('ANON_AUTH_ROUTES is DERIVED — Object.keys(ANON_AUTH_BUDGET) — so the gated list and the budget table cannot drift apart',
+  /^const ANON_AUTH_ROUTES = Object\.keys\(ANON_AUTH_BUDGET\);/m.test(SRC));
+const ROUTES_TODAY = ['/api/register', '/api/login', '/api/recover', '/api/forgot', '/api/reset', '/api/magic', '/api/magic/consume',
+  '/api/email/verify', '/api/email/change/confirm', '/api/oauth/start', '/api/oauth/callback'].sort();
+ok('the gated routes are exactly today\'s eleven — no anonymous credential route dropped out of the gate, none smuggled in',
+  JSON.stringify(api.routes.slice().sort()) === JSON.stringify(ROUTES_TODAY), JSON.stringify(api.routes));
+ok('the table lives at module scope (before handleApi), not rebuilt per request',
+  tableAt >= 0 && handleApiAt > 0 && tableAt < handleApiAt, 'table@' + tableAt + ' handleApi@' + handleApiAt);
+ok('ordering: the flood charge sits inside handleApi() and BEFORE readBody( — the pre-body property is intact',
+  floodAt > handleApiAt && readBodyAt > floodAt, 'handleApi@' + handleApiAt + ' flood@' + floodAt + ' readBody@' + readBodyAt);
+const attemptAt = readBodyAt >= 0 ? SRC.indexOf("rateOk('auth:' + urlPath + ':' + ip", readBodyAt) : -1;
+const firstRouteAt = readBodyAt >= 0 ? SRC.indexOf("if (urlPath === '/api/", readBodyAt) : -1;
+ok('ordering: the attempt charge is the first thing after the `body == null` 400 and before the first route branch inside the callback',
+  attemptAt > bodyNullAt && bodyNullAt > 0 && attemptAt < firstRouteAt, 'bodyNull@' + bodyNullAt + ' attempt@' + attemptAt + ' firstRoute@' + firstRouteAt);
+ok('the old shared key is gone: no `rateOk(\'auth:\' + ip` anywhere — every auth bucket now names its route or its tier',
+  !/rateOk\('auth:' \+ ip\b/.test(SRC));
+ok('the four per-identity buckets are untouched: login:<ident> 10, recover:<name> 10, forgot:<address> 5, magic:<address> 5 — the tight, outcome-aware control',
+  /rateOk\('login:' \+ ident, 10, RATE_WINDOW\)/.test(SRC) && /rateOk\('recover:' \+ rname, 10, RATE_WINDOW\)/.test(SRC) &&
+  /rateOk\('forgot:' \+ address, 5, RATE_WINDOW\)/.test(SRC) && /rateOk\('magic:' \+ address, 5, RATE_WINDOW\)/.test(SRC));
+const copy429 = "{ error: 'Too many attempts — wait a few minutes' }";
+ok('both tiers answer with exactly the rider-visible copy the old gate used — ' + copy429 + ' — twice, unchanged on purpose',
+  (floodSrc + attemptSrc).split(copy429).length - 1 === 2, 'occurrences=' + ((floodSrc + attemptSrc).split(copy429).length - 1));
+ok('RATE_WINDOW is still 10 * 60 * 1000 and both tiers use it',
+  /^const RATE_WINDOW = 10 \* 60 \* 1000;$/m.test(SRC) &&
+  /rateOk\('authflood:' \+ ip, AUTH_FLOOD_MAX, RATE_WINDOW\)/.test(floodSrc) &&
+  /rateOk\('auth:' \+ urlPath \+ ':' \+ ip, attempts, RATE_WINDOW\)/.test(attemptSrc));
 
 process.exit(report());

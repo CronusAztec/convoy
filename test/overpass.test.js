@@ -19,7 +19,9 @@
    Run:  node test/overpass.test.js
 */
 'use strict';
+const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 const H = require('./harness');
 
 const overpass = require(path.join(__dirname, '..', 'server', 'overpass.js'));
@@ -28,6 +30,7 @@ const LA = { minLat: 34.03, minLng: -118.30, maxLat: 34.09, maxLng: -118.20 };
 function box(over) { return Object.assign({}, LA, over || {}); }
 
 (async function main() {
+  reset();   // the cooldown table outlives every group (server-034); start clean
 
   H.group('Only the app\'s own three lookups can be run');
   {
@@ -131,6 +134,9 @@ function box(over) { return Object.assign({}, LA, over || {}); }
   H.group('A failed mirror says which one and why');
   await failedMirrorGroup();
 
+  H.group('A mirror that just failed goes to the back of the try order (server-034)');
+  await cooldownGroup();
+
   process.exit(H.report());
 })();
 
@@ -179,7 +185,9 @@ async function drive(kind, bbox, script) {
 const n0 = (o, k) => (o && o[k]) || 0;
 
 async function failedMirrorGroup() {
+  reset();
   {
+    reset();   // every block starts with nothing cooling — the scripts assume declaration order (server-034)
     // Total failure: the first mirror is out of slots, the second hangs to the
     // deadline. The one line must carry both facts.
     const before = overpass.stats();
@@ -204,6 +212,7 @@ async function failedMirrorGroup() {
       d.hosts.every((h) => n0((after.byMirror || {})[h], 'fail') === n0((before.byMirror || {})[h], 'fail') + 1), JSON.stringify(after.byMirror));
   }
   {
+    reset();
     // Partial failure: the first mirror is unreachable, the second answers.
     // Today this is completely silent — a mirror down 100% of the time is
     // invisible while the other one covers for it.
@@ -226,6 +235,7 @@ async function failedMirrorGroup() {
       n0(after.byMirror[d.hosts[0]], 'fail') === n0(before.byMirror[d.hosts[0]], 'fail') + 1, JSON.stringify(after.byMirror));
   }
   {
+    reset();
     // The normal day: first mirror answers. Nothing is logged, and the same
     // box a second time is a cache hit that costs no fetch and is counted as one.
     const before = overpass.stats();
@@ -239,6 +249,7 @@ async function failedMirrorGroup() {
       'cached ' + before.cached + '->' + after.cached + ', ok ' + before.ok + '->' + after.ok);
   }
   {
+    reset();
     // A 200 that is not the answer: an HTML busy page, then JSON without elements[].
     const d = await drive('road', at(3), [textRes('<html><body>Gateway busy</body></html>', 200), jsonRes({ remark: 'runtime error: query timed out' })]);
     const line = d.errors[0] || '';
@@ -249,6 +260,7 @@ async function failedMirrorGroup() {
       JSON.stringify(overpass.stats().byReason));
   }
   {
+    reset();
     // The shape any future caller (admin page, health line) can rely on, and
     // that reading it cannot corrupt it.
     const s = overpass.stats();
@@ -260,5 +272,151 @@ async function failedMirrorGroup() {
     const s2 = overpass.stats();
     H.ok('a caller mutating what stats() returned does not touch the live counters',
       s2.byReason.timeout !== 999 && (!host || s2.byMirror[host].fail !== 999), JSON.stringify(s2));
+  }
+}
+
+/* ---------------- a mirror that just failed goes to the back ----------------
+   The cycle-55 improve stage drove three consecutive queries with mirror 0
+   timing out on all three: mirror 0 was asked FIRST all three times, at
+   TIMEOUT_MS (30 s) a go, because the loop had no memory (server-034). These
+   checks pin the demotion: a mirror that failed sorts to the back of the try
+   order for COOL_MS, every mirror is still attempted on every query (demote,
+   never skip — with two mirrors a real breaker would take the layer down
+   whenever both were cooling), a success clears it, and with nothing cooling
+   the order is byte-for-byte the declaration order the rest of this file
+   assumes.
+
+   The module keeps its cooldown table for the life of the process and every
+   group in this file shares one module instance, so a failure scripted in
+   one block would reorder the mirrors in the next. _coolReset() exists for
+   exactly that; every block calls it first. */
+function reset(state) { if (typeof overpass._coolReset === 'function') overpass._coolReset(state); }
+
+async function cooldownGroup() {
+  reset();
+  let HOSTS = overpass.MIRROR_HOSTS;
+  if (!Array.isArray(HOSTS)) {
+    // No export yet: the first query with nothing cooling shows the declaration order.
+    HOSTS = (await drive('police', at(9), [() => { throw netErr(); }, () => { throw netErr(); }])).hosts;
+  }
+  const H0 = HOSTS[0], H1 = HOSTS[1];
+  H.ok('the module exports MIRROR_HOSTS (two by default), mirrorOrder(now), COOL_MS and the _coolReset() test seam',
+    Array.isArray(overpass.MIRROR_HOSTS) && overpass.MIRROR_HOSTS.length === 2 && typeof overpass.mirrorOrder === 'function' &&
+    typeof overpass.COOL_MS === 'number' && typeof overpass._coolReset === 'function',
+    'exports = ' + Object.keys(overpass).join(', '));
+  {
+    // 1. RED before the fix: mirror 0 times out, mirror 1 serves → the NEXT query asks mirror 1 first.
+    reset();
+    const d1 = await drive('enforcement', at(10), [() => { throw timeoutErr(); }, jsonRes({ elements: [] })]);
+    const d2 = await drive('enforcement', at(11), [jsonRes({ elements: [] })]);
+    H.ok('a query whose first mirror timed out was served by the second (' + d1.hosts.join(' → ') + ')',
+      d1.hosts.length === 2 && d1.hosts[0] === H0 && d1.hosts[1] === H1 && !!d1.r.body, JSON.stringify(d1.r));
+    H.ok('executed: the NEXT query asks the mirror that just served, not the one that just timed out (asked ' + d2.hosts.join(' → ') + ')',
+      d2.hosts[0] === H1 && !!d2.r.body, 'asked ' + d2.hosts.join(' → ') + ' — expected ' + H1 + ' first');
+    H.ok('and it is served first time, so no warn line and no second attempt', d2.warns.length === 0 && d2.hosts.length === 1,
+      d2.warns.join('\n') || ('asked ' + d2.hosts.length));
+  }
+  {
+    // 2. demote, never skip: with both mirrors cooling, both are still attempted.
+    reset();
+    const d1 = await drive('police', at(12), [() => { throw netErr(); }, () => { throw netErr(); }]);
+    const d2 = await drive('police', at(13), [() => { throw netErr(); }, () => { throw netErr(); }]);
+    H.ok('executed: with every mirror cooling, every mirror is still attempted — demote, never skip (asked ' + d2.hosts.join(' → ') + ')',
+      d1.hosts.length === 2 && d2.hosts.length === overpass.stats().mirrors, 'asked ' + d2.hosts.join(' → '));
+    H.ok('executed: the worst case is exactly today\'s worst case — {error:"upstream"} and one line naming both mirrors',
+      d2.r.error === 'upstream' && d2.errors.length === 1 && d2.hosts.every((h) => d2.errors[0].indexOf(h) >= 0), d2.errors.join('\n'));
+    H.ok('stats().cooling lists both hosts, in declaration order',
+      JSON.stringify(overpass.stats().cooling) === JSON.stringify(HOSTS), JSON.stringify(overpass.stats().cooling));
+  }
+  {
+    // 3. the demoted mirror is still tried when the promoted one fails; 4. a success clears the cooldown.
+    reset();
+    const d1 = await drive('road', at(14), [() => { throw timeoutErr(); }, jsonRes({ elements: [] })]);
+    H.ok('setup: mirror 0 timed out and is the only one cooling', d1.hosts[0] === H0 && JSON.stringify(overpass.stats().cooling) === JSON.stringify([H0]),
+      'cooling=' + JSON.stringify(overpass.stats().cooling));
+    const d2 = await drive('road', at(15), [() => { throw netErr(); }, jsonRes({ elements: [] })]);
+    H.ok('executed: the promoted mirror is asked first and fails; the demoted one is still tried, and serves (asked ' + d2.hosts.join(' → ') + ')',
+      d2.hosts.length === 2 && d2.hosts[0] === H1 && d2.hosts[1] === H0 && !!d2.r.body && d2.r.cached === false,
+      JSON.stringify(d2.r) + ' asked ' + d2.hosts.join(' → '));
+    H.ok('executed: that success CLEARED mirror 0\'s cooldown and the failure charged mirror 1\'s — stats().cooling is exactly [' + H1 + ']',
+      JSON.stringify(overpass.stats().cooling) === JSON.stringify([H1]), JSON.stringify(overpass.stats().cooling));
+    H.ok('the warn line still names the mirror that failed and the one that served',
+      d2.warns.length === 1 && d2.warns[0].indexOf(H1 + ' net:TypeError') >= 0 && d2.warns[0].indexOf('served by ' + H0) >= 0, d2.warns.join('\n'));
+    const d3 = await drive('road', at(16), [jsonRes({ elements: [] })]);
+    H.ok('executed: the following query is back to declaration order — mirror 0 first (asked ' + d3.hosts.join(' → ') + ')',
+      d3.hosts[0] === H0 && d3.hosts.length === 1, 'asked ' + d3.hosts.join(' → '));
+  }
+  if (typeof overpass.mirrorOrder === 'function' && typeof overpass._coolReset === 'function') {
+    // Pure: mirrorOrder(now) over a state installed through the seam. No wall clock.
+    const now = 1000000;
+    const order = (st, t) => { reset(st); return JSON.stringify(overpass.mirrorOrder(t === undefined ? now : t)); };
+    H.ok('pure: nothing cooling → [0,1] — today\'s declaration order, byte for byte', order({}) === '[0,1]', order({}));
+    H.ok('pure: host 0 cooling until now+1 → [1,0]', order({ [H0]: now + 1 }) === '[1,0]', order({ [H0]: now + 1 }));
+    H.ok('pure: the same state evaluated at now+2 → [0,1] — expiry is deterministic', order({ [H0]: now + 1 }, now + 2) === '[0,1]', order({ [H0]: now + 1 }, now + 2));
+    H.ok('pure: a cooldown that ends exactly at `now` is over (strictly greater, not >=)', order({ [H0]: now }) === '[0,1]', order({ [H0]: now }));
+    H.ok('pure: equal cooldowns tie-break on declaration order → [0,1]', order({ [H0]: now + 5, [H1]: now + 5 }) === '[0,1]', order({ [H0]: now + 5, [H1]: now + 5 }));
+    H.ok('pure: both cooling, unequal → the one that expires sooner goes first → [1,0]', order({ [H0]: now + 9, [H1]: now + 5 }) === '[1,0]', order({ [H0]: now + 9, [H1]: now + 5 }));
+    const states = [{}, { [H0]: now + 1 }, { [H1]: now + 1 }, { [H0]: now + 1, [H1]: now + 1 }, { [H0]: now - 1, [H1]: now + 1 }, { [H0]: now + 3, [H1]: now + 2 }];
+    const ident = JSON.stringify(HOSTS.map((_, i) => i));
+    H.ok('pure: never drops or duplicates an index across ' + states.length + ' states',
+      states.every((st) => { reset(st); const o = overpass.mirrorOrder(now); return o.length === HOSTS.length && JSON.stringify(o.slice().sort()) === ident; }));
+    reset();
+  } else {
+    H.ok('pure: mirrorOrder(now) is exported and testable without a wall clock', false, 'mirrorOrder / _coolReset missing');
+  }
+  {
+    // Surface: stats().cooling is a fresh copy and lists only what is cooling now.
+    const now = Date.now();
+    reset({ [H1]: now + 60000 });
+    const s = overpass.stats();
+    H.ok('stats().cooling lists exactly the cooling hosts', JSON.stringify(s.cooling) === JSON.stringify([H1]), JSON.stringify(s.cooling));
+    if (Array.isArray(s.cooling)) s.cooling.push('mutated');
+    H.ok('a caller mutating what stats() returned does not touch the live table',
+      JSON.stringify(overpass.stats().cooling) === JSON.stringify([H1]), JSON.stringify(overpass.stats().cooling));
+    reset({ [H0]: now - 1 });
+    H.ok('an expired cooldown is not listed', Array.isArray(overpass.stats().cooling) && overpass.stats().cooling.length === 0, JSON.stringify(overpass.stats().cooling));
+    reset();
+  }
+  {
+    H.ok('COOL_MS defaults to 120000 — long enough to spare a burst of rider queries a dead mirror, short enough to notice it coming back',
+      overpass.COOL_MS === 120000, String(overpass.COOL_MS));
+    const modPath = path.join(__dirname, '..', 'server', 'overpass.js');
+    const r = spawnSync(process.execPath, ['-e', 'console.log(require(' + JSON.stringify(modPath) + ').COOL_MS)'],
+      { env: Object.assign({}, process.env, { OVERPASS_COOL_MS: '5000' }), encoding: 'utf8' });
+    H.ok('and is overridable through OVERPASS_COOL_MS (a fresh process with OVERPASS_COOL_MS=5000 reports 5000)',
+      r.status === 0 && r.stdout.trim() === '5000', (r.stdout + r.stderr).trim());
+    const env = fs.readFileSync(path.join(__dirname, '..', 'server', '.env.example'), 'utf8');
+    H.ok('OVERPASS_COOL_MS is documented in server/.env.example right after OVERPASS_TIMEOUT_MS',
+      /# OVERPASS_TIMEOUT_MS=30000\n[\s\S]{0,700}# OVERPASS_COOL_MS=120000/.test(env));
+  }
+  {
+    // Source pins: one edit inside failed() charges the cooldown for every reason; success clears it.
+    const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'overpass.js'), 'utf8');
+    const fAt = src.indexOf('const failed = (i, reason, detail, t0) => {');
+    const fEnd = fAt >= 0 ? src.indexOf('\n    };', fAt) : -1;
+    const failedBody = (fAt >= 0 && fEnd > fAt) ? src.slice(fAt, fEnd) : '';
+    H.ok('source: the cooldown is set inside failed(), so every failure reason charges it with one edit',
+      /coolUntil\[MIRROR_HOSTS\[i\]\] = Date\.now\(\) \+ COOL_MS;/.test(failedBody), failedBody.replace(/\s+/g, ' ').slice(0, 160));
+    const loopAt = src.indexOf('for (const i of mirrorOrder(Date.now())) {');
+    const loopEnd = loopAt >= 0 ? src.indexOf('return { body: body, cached: false };', loopAt) : -1;
+    const loopSrc = (loopAt >= 0 && loopEnd > loopAt) ? src.slice(loopAt, loopEnd) : '';
+    const failCalls = (loopSrc.match(/failed\(i, /g) || []).length;
+    const failThenContinue = (loopSrc.match(/failed\(i, [^\n]*\n?\s*continue;/g) || []).length;
+    const reasons = ["'timeout'", "'net:'", "'http:'", "'body'", "'shape'"].filter((r) => loopSrc.indexOf(r) >= 0);
+    H.ok('source: the loop iterates mirrorOrder(Date.now()), every failed( call is followed by continue (' + failCalls + '/' + failThenContinue + '), and all five reasons are still there (' + reasons.length + ')',
+      loopAt > 0 && failCalls === 4 && failThenContinue === 4 && reasons.length === 5, 'loop@' + loopAt + ' calls=' + failCalls + ' continue=' + failThenContinue + ' reasons=' + reasons.join(','));
+    H.ok('source: a success clears the cooldown right where the mirror is credited',
+      /mirrorTally\(MIRROR_HOSTS\[i\]\)\.ok\+\+;\n\s*delete coolUntil\[MIRROR_HOSTS\[i\]\];/.test(src));
+    H.ok('source: the loop that had no memory — `for (let i = 0; i < MIRRORS.length; i++)` — is gone', src.indexOf('for (let i = 0; i < MIRRORS.length; i++)') < 0);
+  }
+  {
+    // Regression pin: with nothing cooling, the all-mirrors-failed line names mirrors in attempt (= declaration) order.
+    reset();
+    const d = await drive('enforcement', at(17), [() => { throw netErr(); }, textRes('busy', 504)]);
+    const line = d.errors[0] || '';
+    H.ok('regression: with nothing cooling the `all mirrors failed` line names the mirrors in declaration order (' + d.hosts.join(' → ') + ')',
+      d.hosts.length === 2 && d.hosts[0] === H0 && d.hosts[1] === H1 && line.indexOf(H0 + ' net:TypeError') >= 0 &&
+      line.indexOf(H1 + ' http:504') > line.indexOf(H0 + ' net:TypeError'), line);
+    reset();
   }
 }

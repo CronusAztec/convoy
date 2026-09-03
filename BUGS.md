@@ -43,7 +43,7 @@ Each bug has:
 ---
 
 ## Frontend
-*Client-side JS (`js/*.js`) — 19 bugs*
+*Client-side JS (`js/*.js`) — 20 bugs*
 
 ### BUG frontend-001
 - **Severity:** high
@@ -197,10 +197,18 @@ Each bug has:
 - **Impact:** 5–7 wasted Overpass queries per app open against a shared community resource (and our IP's budget), and `backoffFail('police', 90 s)` per failure, doubling to the 15-minute cap — the real police/camera layer can stay silent for the first quarter-hour of a ride. (Inferred from code + log timing, not a device trace.)
 - **Fix (applied):** the clamp is a pure `clampBBox(rawBounds, lim)` (exported on `A.ghost` for tests) that returns `null` — "skip this tick", which all four callers already handle — for a view wider than `WIDE_VIEW_FACTOR × lim` (4 × 4° = 16° for aircraft/police/Waze, 320° for hotspots) or for degenerate bounds. A regional 12° view still clamps to 4° and is queried exactly as before. `test/ghostbbox.test.js` (18 checks) pins the world-wrapped view → `null`, the `-2 … 2` signature it kills, and the no-regression band.
 
+### BUG frontend-020
+- **Severity:** medium
+- **File:** `js/ghost.js:336` (the enforcement-layer `fetch(OVERPASS_PROXY, …)`) and `:386` (the `lastPoliceBbox = null` + `backoffFail('police', …)` recovery, which only runs on rejection); also `js/routing.js:835` (the `road` lookup for stops/signals — same call, same missing `signal`); compare `js/routing.js:243-245` (the `police` lookup, which does carry an `AbortController` + `signal`)
+- **Title:** The enforcement-layer fetch (and routing.js's `road` lookup) has no `AbortSignal.timeout()` — a slow or hung proxy leaves the promise pending indefinitely, and the recovery path only runs on rejection
+- **Repro:** code-read, 2026-09-03 (cycle-55 improve stage): `js/ghost.js:336` passes no `signal`; `js/routing.js:245` does (`signal: ctrl.signal`). While the proxy's upstream call was paying a dead first mirror's full 30 s timeout (server-034, fixed server-side in cycle 56) the layer's request sat pending with nothing to cancel it; a proxy that never answers at all (a stalled TCP session) leaves it pending for good.
+- **Impact:** the police / camera layer can silently stop refreshing for the rest of a ride: `lastPoliceBbox` is set BEFORE the fetch, so no retry is scheduled for that view until the promise settles, and the `.catch` that clears it never fires for a promise that never settles.
+- **Fix:** `AbortSignal.timeout(…)` (or an `AbortController`, as routing.js does) on the fetch, with the timeout counted as a failure so `backoffFail('police', …)` still runs. **Scheduled for aspect C (cycle 57, milestone C1)** — a `js/` edit forces a 45-stamp bump and flips the push stage to Lane A + OTA, so it ships with the rest of the smoothness work rather than alone. Not fixed in cycle 56 on purpose.
+
 ---
 
 ## Server
-*Node backend (`server/*.js`) — 28 bugs*
+*Node backend (`server/*.js`) — 31 bugs*
 
 ### BUG server-001
 - **Severity:** high
@@ -340,21 +348,21 @@ Each bug has:
 
 ### BUG server-016
 - **Severity:** medium
-- **Status:** OPEN (re-verified 2026-09-03) — mitigated: `/api/register` is gated only by the shared per-IP bucket `rateOk('auth:' + ip, 24, RATE_WINDOW)` at `server/server.js:726` (10 min); there is a per-identity `login:` bucket (`server/server.js:849`) but no per-username register limit. The XFF-spoofing half is dead (server-008, `server/server.js:305`), so enumeration runs at 24 tries per 10 min per real IP
+- **Status:** OPEN (re-verified 2026-09-03) — mitigated: `/api/register` is gated by its own per-IP attempt budget — `ANON_AUTH_BUDGET['/api/register']` = 12/10 min (`server/server.js:92`, charged after `readBody()`, cycle 56 / server-017) under the 240/10 min `authflood:` ceiling; there is a per-identity `login:` bucket (`server/server.js:893`) but no per-username register limit. The XFF-spoofing half is dead (server-008, `server/server.js:305`), so enumeration runs at 12 tries per 10 min per real IP
 - **File:** `server/server.js:317-328`
 - **Title:** `/api/register` has no per-username rate limit; the shared 14/10-min auth cap is generous and XFF-spoofable
 - **Repro:** Hammer `/api/register` from spoofed IPs → enumeration / mass-registration.
 - **Impact:** Account enumeration / mass-registration abuse.
 - **Fix:** Lower the auth rate cap; lock per-username after N failures.
 
-### BUG server-017
+### BUG server-017 — FIXED (cycle 56 stage 42, 2026-09-03)
 - **Severity:** high
-- **Status:** OPEN (re-verified 2026-09-03) — mitigated, partly by design: per-action buckets now exist (`server/server.js:849` `login:` per identity 10/10 min, `server/server.js:866` `recover:` per name, `server/server.js:1090` `forgot:` per address), but the shared `auth:` + ip bucket at `server/server.js:726` (24/10 min, was 14) still fronts every anonymous auth route, so 24 failed logins from one NAT still 429 `/api/recover`; and it is consumed before `readBody()` runs (`server/server.js:730`), so an oversized body still burns an attempt. **SCHEDULED as milestone B5, cycle 55** (cycle-54 directive) — see the Decision line below
+- **Status:** FIXED (re-verified 2026-09-03) — two tiers: the module-scope table `ANON_AUTH_BUDGET` (`server/server.js:90-104`; `ANON_AUTH_ROUTES` is derived from it, `AUTH_FLOOD_MAX` 240 ≥ the 204 sum), a pre-body per-IP `authflood:<ip>` ceiling (`server/server.js:761`) and a per-route, per-IP `auth:<route>:<ip>` attempt budget charged only once `readBody()` produced a well-formed body (`server/server.js:772-775`); executed and mutation-guarded in `test/serverpolicy.test.js` group Y1. The four per-identity buckets (`login:`/`recover:`/`forgot:`/`magic:`) were left alone
 - **File:** `server/server.js:308-311, 277`
 - **Title:** Single shared `'auth:'+ip` bucket gates register/login/recover — fat-fingering login 14× also locks out `/api/recover`; oversized body still burns an attempt
 - **Repro:** From one NAT IP, fail login 14×; 15th request to `/api/recover` returns 429.
 - **Impact:** Self-DoS of password recovery; legitimate lockout behind NAT.
-- **Fix:** Separate buckets for login vs recover; only count after body parses successfully.
+- **Fix (applied, cycle 56):** two tiers, not a moved charge. The pre-body gate keeps its job — a flooder still cannot make the process read bodies — but it now counts against `authflood:<ip>` (240/10 min across all eleven routes, ≥ the sum of the per-route budgets by construction, so honest use never reaches it). The attempt budget moved inside the `readBody()` callback, right after the `body == null` → 400 check, keyed `auth:<route>:<ip>` from `ANON_AUTH_BUDGET` (`/api/login` 24 — unchanged; `register`/`recover`/`forgot`/`reset`/`magic` 12; the token/OAuth routes 24). A 400 or a 413 costs nothing; 24 failed logins leave `/api/recover` answerable; routes absent from the table are ungated by this tier exactly as before. `test/serverpolicy.test.js` Y1 (25 checks): the gate lifted in three pieces and executed over a scripted `readBody()` — RED 15/105 against the shared bucket, GREEN 120/120 after; the mutation guard pastes the old gate back and demands both failures; `AUTH_FLOOD_MAX >= sum(budgets)` is pinned so the self-DoS cannot be re-created by nudging one number.
 - **Decision 2026-09-03 (cycle-54 directive, recorded by the implementer): SCHEDULED, not folded in.** The shared `auth:`+ip bucket (`server/server.js:726`) is a real self-DoS — 24 failed logins from one NAT 429s `/api/recover` for everyone behind it — and the fix (per-route buckets; only charge the bucket after `readBody()` succeeds) touches the auth path, which the operating contract (rule 6) says may only be changed by a milestone that names it. It also inverts a deliberate ordering — today the bucket is consumed *before* the body is read, which is what stops a flooder from making the server read bodies — so it needs its own cycle with its own tests, not a ride-along in a caching cycle. Milestone **B5**, cycle 55.
 
 ### BUG server-018
@@ -473,6 +481,15 @@ Each bug has:
 - **Repro:** production journal 2026-09-03 08:41Z (the cycle-53 push's restart): `[shutdown] SIGTERM received — draining…` → `[boot] could not reach the Supabase database: Cannot use a pool after calling end on the pool` → `[boot] Check SUPABASE_DB_URL in server/.env.` → `convoy.service: Main process exited, code=exited, status=1/FAILURE` → systemd `Restart=` brought it back about a second later. `shutdown()` ends the pool under `boot()`'s pending `await store.init()`; the rejection that produces is indistinguishable from a dead database unless the catch asks first.
 - **Impact:** no rider impact (systemd recovers). The cost is the diagnostic: an operator reading the log is sent hunting for a config bug that does not exist, and `Failed with result 'exit-code'` shows up in exactly the post-deploy log read the runbook now asks for (cycle 55), so it would be a false finding every time a restart is fast.
 - **Fix (applied):** `if (shuttingDown) { console.log('[boot] aborted — shutting down before the database was ready'); return; }` as the first statement of the catch — `return`, not `exit(1)`; the existing message and `exit(1)` stay for the genuine case. The JWKS check gets the same guard. `shuttingDown` is the flag the shutdown section already declares (about 190 lines below `boot()` — safe because the catch runs after an await, commented in place; no second flag). `test/serverpolicy.test.js` X2: the catch body is lifted and executed with the flag set (returns, no exit, no blame) and clear (exits 1 naming the cause), plus static pins on the flag's first-statement assignment and the JWKS guard.
+
+### BUG server-034 — FIXED (cycle 56 stage 42, 2026-09-03)
+- **Severity:** medium
+- **Status:** FIXED (re-verified 2026-09-03) — `server/overpass.js`: `mirrorOrder(now)` sorts a mirror that just failed to the back of the try order for `COOL_MS` (default 120 s, `OVERPASS_COOL_MS`), set inside `failed()` for all five reasons, cleared on success, listed by `stats().cooling`; executed in `test/overpass.test.js` ("A mirror that just failed goes to the back of the try order")
+- **File:** `server/overpass.js:226` before the fix — `for (let i = 0; i < MIRRORS.length; i++)`, strict declaration order with no memory of the previous outcome — and `TIMEOUT_MS` 30 s at `:58`
+- **Title:** A failed Overpass mirror is still tried first on the very next query — with `TIMEOUT_MS` 30 s, a dead first mirror costs every uncached rider lookup the full timeout, indefinitely
+- **Repro:** cycle-55 improve stage, 2026-09-03, `global.fetch` scripted (the `test/overpass.test.js` harness) so mirror 0 always times out and mirror 1 always serves — three consecutive queries: `overpass-api.de -> overpass.kumi.systems` ×3; `stats().byMirror = {"overpass-api.de":{"ok":0,"fail":3},"overpass.kumi.systems":{"ok":3,"fail":0}}`. A mirror with a 0 % success rate got first refusal three times out of three. Now pinned: after one timeout the next query asks the other mirror first (RED 18/72 before the fix, GREEN after; the original 66 checks unchanged).
+- **Impact:** `/api/overpass` (`server/server.js:1724`) `await`s `overpass.query()` inside the request, so every uncached enforcement / police / road lookup waited the full 30 s before the healthy mirror was even asked, for as long as the first mirror stayed down — and public Overpass instances go down and rate-limit routinely. `js/ghost.js:336` fetches the layer with no `AbortSignal`, so the client just sat there (filed as frontend-020, aspect C).
+- **Fix (applied):** demote, never skip. `mirrorOrder(now)` returns the mirror indices sorted by cooldown expiry — healthy first, ties in declaration order — and the loop iterates it; `failed()` sets `coolUntil[host] = Date.now() + COOL_MS` (one edit covers `timeout`, `net:*`, `http:*`, `body`, `shape`); a success deletes it. With two mirrors an open/closed breaker would take the layer down whenever both were cooling, so nothing is ever skipped: the worst case is exactly the old worst case. `stats()` gains `cooling` (a fresh array); `_coolReset()` is a documented test seam because the suite's groups share one module instance. `server/police-finder.js:265` has the same in-order loop on a slow sweep cadence, not a rider path — noted, left alone.
 
 ---
 
@@ -1128,14 +1145,14 @@ this table ever drifts from what's actually here.
 
 | Area | critical | high | medium | low | total |
 |---|---:|---:|---:|---:|---:|
-| Frontend | 0 | 5 | 13 | 1 | 19 | (frontend-001/002/003/008/009 are the highs; frontend-019 fixed) |
-| Server | 5 | 10 | 14 | 1 | 30 | (server-003/006/008/011/032 critical — 003/008/032 FIXED, 006 STALE, 011 OPEN-latent; 6 OPEN / 21 FIXED / 3 STALE after the 2026-09-03 re-verification, the cycle-54 B3b fixes of 002 + 020 and the cycle-55 fixes of 032 + 033, roll-up below) |
+| Frontend | 0 | 5 | 14 | 1 | 20 | (frontend-001/002/003/008/009 are the highs; frontend-019 fixed; frontend-020 open — aspect C, cycle 57) |
+| Server | 5 | 10 | 15 | 1 | 31 | (server-003/006/008/011/032 critical — 003/008/032 FIXED, 006 STALE, 011 OPEN-latent; 5 OPEN / 23 FIXED / 3 STALE after the 2026-09-03 re-verification, the cycle-54 B3b fixes of 002 + 020, the cycle-55 fixes of 032 + 033 and the cycle-56 fixes of 017 + 034, roll-up below) |
 | Android | 3 | 8 | 8 | 1 | 20 | (android-001/002/003 critical) |
 | UI/UX | 1 | 5 | 10 | 6 | 22 | (ui-001/004/006/013/014/015/016/017/018/019/003/003b fixed; ui-020/021 visual-verification-pending, unresolved without a browser) |
 | Runtime | 0 | 2 | 3 | 1 | 6 | (runtime-001 STALE, the other five FIXED — re-verified 2026-09-03) |
 | Add | 0 | 1 | 1 | 2 | 4 | |
 | Perf | 0 | 0 | 1 | 0 | 1 | |
-| **Total** | **9** | **31** | **50** | **12** | **102** |
+| **Total** | **9** | **31** | **52** | **12** | **104** |
 
 ### Open-status roll-up (Server + Runtime only — re-verified 2026-09-03)
 
@@ -1146,8 +1163,8 @@ OPEN entries marked *latent* describe a real risk whose premise production has n
 
 | Area | OPEN | FIXED | STALE | total |
 |---|---:|---:|---:|---:|
-| Server | 6 | 21 | 3 | 30 |
+| Server | 5 | 23 | 3 | 31 |
 | Runtime | 0 | 5 | 1 | 6 |
-| **Total** | **6** | **26** | **4** | **36** |
+| **Total** | **5** | **28** | **4** | **37** |
 
-Open after the pass (updated cycle 55 — `server-032` critical and `server-033` low were filed from the production journal and fixed the same cycle with executed tests; cycle 54 fixed `server-002` and `server-020`): `server-009`, `server-011` (latent, **deferred with a trigger**), `server-014` (latent), `server-015`, `server-016`, `server-017` (**scheduled B5, cycle 56**).
+Open after the pass (updated cycle 56 — `server-017` high FIXED as milestone B5 and `server-034` medium filed and fixed as milestone B4, both with executed tests; cycle 55 fixed `server-032` and `server-033`; cycle 54 fixed `server-002` and `server-020`): `server-009`, `server-011` (latent, **deferred with a trigger**), `server-014` (latent), `server-015`, `server-016`. No open HIGH or CRITICAL remains in the Server/Runtime ledger other than the deferred `server-011`.

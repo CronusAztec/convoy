@@ -65,6 +65,44 @@ const TICK_MS = 1000;            // full sync/broadcast cadence (everyone in sco
 const FAST_MS = 350;            // fast-lane cadence for the closest riders
 const NEAR_FAST = parseInt(process.env.NEAR_FAST || '6', 10); // riders refreshed at fast-lane rate
 
+/* ---- anonymous credential routes: two tiers, on purpose (server-017) ----
+   One shared per-IP bucket used to gate all eleven routes, so 24 fat-fingered
+   logins from one carrier-NAT address took /api/recover away from everyone
+   behind it — the exact route the locked-out rider needs next. It was also
+   charged BEFORE readBody(), so a malformed or oversized body burned a login
+   attempt.
+
+   Splitting it, rather than moving the charge, keeps the property that made
+   the pre-body ordering right in the first place: a flooder still cannot make
+   this process read bodies. The flood tier is per IP across all eleven routes
+   and is sized ABOVE the sum of the attempt budgets by construction (asserted
+   in test/serverpolicy.test.js group Y1), so it can only ever bind on traffic
+   that never produced a well-formed body — which is the only thing it is for.
+
+   Null prototype: the lookup key is a URL path, so no inherited key is
+   reachable — but a table with nothing to inherit needs no argument.
+
+   Charged per well-formed attempt, not per failure: reading the handler's
+   outcome would mean threading it back out of eleven code paths, and an
+   unbounded stream of SUCCESSFUL anonymous auth calls is not a thing we
+   want either. The per-identity buckets (login:<ident> &c., in the route
+   handlers) are the tight, outcome-aware control and are untouched. */
+const ANON_AUTH_BUDGET = Object.assign(Object.create(null), {
+  '/api/login': 24,                  // unchanged from the old shared limit — the route people actually mistype
+  '/api/register': 12,
+  '/api/recover': 12,
+  '/api/forgot': 12,
+  '/api/reset': 12,
+  '/api/magic': 12,
+  '/api/magic/consume': 24,
+  '/api/email/verify': 24,
+  '/api/email/change/confirm': 24,
+  '/api/oauth/start': 24,
+  '/api/oauth/callback': 24
+});
+const ANON_AUTH_ROUTES = Object.keys(ANON_AUTH_BUDGET);   // derived: the two cannot drift
+const AUTH_FLOOD_MAX = 240;          // >= sum of the table (204); see test/serverpolicy.test.js Y1 check 8
+
 /* ================= crash reporting + analytics ================= */
 // Diagnostics are ON by default: shipping a beta with no crash reporter means
 // learning about launch-day crashes from the review section, days late, with no
@@ -714,22 +752,27 @@ async function handleApi(req, res, urlPath) {
 
   if (req.method !== 'POST') return json(res, 404, { error: 'not found' });
 
-  // Every anonymous credential-shaped endpoint shares the per-IP auth budget.
-  // The email routes belong in it for the same reason the originals do: each one
-  // either checks a secret or spends an outbound email, and both are things an
-  // attacker would otherwise get for free.
-  const ANON_AUTH_ROUTES = [
-    '/api/register', '/api/login', '/api/recover',
-    '/api/forgot', '/api/reset', '/api/magic', '/api/magic/consume',
-    '/api/email/verify', '/api/email/change/confirm',
-    '/api/oauth/start', '/api/oauth/callback'
-  ];
-  if (ANON_AUTH_ROUTES.indexOf(urlPath) >= 0 && !rateOk('auth:' + ip, 24, RATE_WINDOW)) {
+  // Flood tier (server-017): every anonymous credential-shaped endpoint —
+  // each one either checks a secret or spends an outbound email — shares one
+  // generous per-IP ceiling, charged BEFORE the body is read so a flooder
+  // cannot make this process read bodies. Honest use never reaches it: it is
+  // sized above the sum of the per-route attempt budgets, which are charged
+  // inside the readBody() callback below, once a well-formed body exists.
+  if (ANON_AUTH_ROUTES.indexOf(urlPath) >= 0 && !rateOk('authflood:' + ip, AUTH_FLOOD_MAX, RATE_WINDOW)) {
     return json(res, 429, { error: 'Too many attempts — wait a few minutes' });
   }
 
   readBody(req, res, async (body) => {
     if (body == null) return json(res, 400, { error: 'Bad request' }); // parse error / socket error
+    // Per-route, per-IP attempt budget — charged only once a well-formed body
+    // exists, so a 400 or a 413 costs a rider nothing (server-017). Routes
+    // absent from the table (/api/telemetry, /api/ota, every authenticated
+    // route below) read undefined here and are ungated by this tier, exactly
+    // as before.
+    const attempts = ANON_AUTH_BUDGET[urlPath];
+    if (attempts !== undefined && !rateOk('auth:' + urlPath + ':' + ip, attempts, RATE_WINDOW)) {
+      return json(res, 429, { error: 'Too many attempts — wait a few minutes' });
+    }
     try {
       /* ---- crash reports + core-loop analytics ----
          Unauthenticated on purpose: the crash we most need to see is the one

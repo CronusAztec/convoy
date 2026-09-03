@@ -56,6 +56,37 @@ function mirrorTally(host) { return byMirror[host] || (byMirror[host] = { ok: 0,
 function oneLine(e) { return String((e && e.message) || e).replace(/\s+/g, ' ').slice(0, 80); }
 
 const TIMEOUT_MS = parseInt(process.env.OVERPASS_TIMEOUT_MS || '30000', 10);
+
+/* ---------------- a mirror that just failed goes to the back ----------------
+   The loop below tried MIRRORS in declaration order with no memory: a mirror
+   with a 0% success rate still got first refusal on the next query, and
+   TIMEOUT_MS is 30s, so every uncached rider lookup paid it. Measured
+   2026-09-03: three consecutive queries, mirror 0 timing out on all three,
+   asked mirror 0 first all three times (BUGS.md server-034).
+
+   This demotes rather than skips. With two mirrors an open/closed breaker
+   would take enforcement, police and road lookups down entirely whenever both
+   were cooling; here every mirror is still tried on every query, just in a
+   better order, so the worst case is exactly today's worst case. */
+const COOL_MS = parseInt(process.env.OVERPASS_COOL_MS || '120000', 10);
+const coolUntil = {};             // host -> epoch ms; absent or past = healthy
+
+// Pure and exported so expiry is testable without a wall clock. Stable: with
+// nothing cooling this returns [0, 1, ...] — byte-for-byte the declaration
+// order; equal cooldowns keep it too.
+function mirrorOrder(now) {
+  const cool = (i) => { const t = coolUntil[MIRROR_HOSTS[i]] || 0; return t > now ? t : 0; };
+  return MIRRORS.map((_, i) => i).sort((a, b) => cool(a) - cool(b) || a - b);
+}
+
+// Test seam. The suite's groups share one module instance, and a failure
+// scripted in one group would otherwise reorder the mirrors in the next.
+// Clears the table; an optional { host: untilMs } installs a state for the
+// pure mirrorOrder() checks. Not used by the server.
+function _coolReset(state) {
+  for (const h of Object.keys(coolUntil)) delete coolUntil[h];
+  if (state) Object.assign(coolUntil, state);
+}
 // Static POIs. Half an hour is short enough that a newly mapped camera shows up
 // the same day and long enough that a busy area costs one upstream call.
 const TTL_MS = parseInt(process.env.OVERPASS_TTL_MS || '1800000', 10);
@@ -133,11 +164,13 @@ function toCache(key, body) {
 // The first two keys predate the counters; the rest are copies so a caller
 // cannot mutate the live tallies through what it was handed.
 function stats() {
+  const now = Date.now();
   return {
     entries: cache.size, mirrors: MIRRORS.length,
     ok: counters.ok, fail: counters.fail, cached: counters.cached,
     byMirror: JSON.parse(JSON.stringify(byMirror)),
-    byReason: Object.assign({}, byReason)
+    byReason: Object.assign({}, byReason),
+    cooling: MIRROR_HOSTS.filter((h) => (coolUntil[h] || 0) > now)   // fresh array, like the copies above
   };
 }
 
@@ -221,9 +254,10 @@ async function query(kind, bbox) {
     const failed = (i, reason, detail, t0) => {
       mirrorTally(MIRROR_HOSTS[i]).fail++;
       byReason[reason] = (byReason[reason] || 0) + 1;
+      coolUntil[MIRROR_HOSTS[i]] = Date.now() + COOL_MS;   // one edit charges every reason (server-034)
       tried.push(MIRROR_HOSTS[i] + ' ' + reason + (detail ? ':' + detail : '') + ' ' + (Date.now() - t0) + 'ms');
     };
-    for (let i = 0; i < MIRRORS.length; i++) {
+    for (const i of mirrorOrder(Date.now())) {
       const t0 = Date.now();
       let res;
       try {
@@ -254,6 +288,7 @@ async function query(kind, bbox) {
       toCache(key, body);
       counters.ok++;
       mirrorTally(MIRROR_HOSTS[i]).ok++;
+      delete coolUntil[MIRROR_HOSTS[i]];   // back to its declared place in the order
       // A mirror that is down 100% of the time while the other covers for it
       // used to be invisible. Still at most one line per query.
       if (tried.length) {
@@ -276,4 +311,4 @@ async function query(kind, bbox) {
   return job;
 }
 
-module.exports = { query, hasKind, stats, KINDS, parseBbox, MAX_SPAN_DEG };
+module.exports = { query, hasKind, stats, KINDS, parseBbox, MAX_SPAN_DEG, mirrorOrder, MIRROR_HOSTS, COOL_MS, _coolReset };
