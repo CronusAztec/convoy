@@ -29,6 +29,13 @@
       var open = p.dataset.panel === name;
       p.classList.toggle('open', open);
       p.setAttribute('aria-hidden', open ? 'false' : 'true');
+      // Closed panels are translated off-screen at opacity:0, but opacity does not
+      // remove a subtree from sequential focus navigation and pointer-events:none
+      // only stops the mouse. Because panels are built lazily and never torn down,
+      // a user who has opened all three leaves 133 invisible controls on the Tab
+      // path between the dock and the map. inert removes them for keyboard and AT
+      // alike; browsers without inert keep exactly today's behaviour.
+      if (open) p.removeAttribute('inert'); else p.setAttribute('inert', '');
     });
     document.querySelectorAll('.dock-btn').forEach(function (b) {
       var active = b.dataset.dock === (name || 'map');
@@ -97,9 +104,34 @@
     document.querySelectorAll('.panel-close').forEach(function (b) {
       b.addEventListener('click', closePanels);
     });
+    // Backdrop click: a click landing on #onboarding itself (not a descendant
+    // card) closes it — but only when the current occupant opted in via
+    // overlayDismissable. The auth gate and the other blocking screens never do.
+    var onboardingRoot = document.getElementById('onboarding');
+    if (onboardingRoot) {
+      onboardingRoot.addEventListener('click', function (e) {
+        if (e.target === onboardingRoot && !onboardingRoot.hidden && overlayDismissable) closeOverlay();
+      });
+    }
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') { closePanels(); A.mapview.closePopup(); }
-      if (e.key === '/' && document.activeElement &&
+      var ob = document.getElementById('onboarding');
+      var modalUp = ob && !ob.hidden;
+      if (e.key === 'Tab' && modalUp) {
+        var items = [].filter.call(ob.querySelectorAll(MODAL_FOCUSABLE), function (el) { return !el.disabled; });
+        if (!items.length) { e.preventDefault(); return; }
+        var first = items[0], last = items[items.length - 1];
+        var cur = document.activeElement;
+        if (!ob.contains(cur)) { e.preventDefault(); first.focus(); return; }
+        if (e.shiftKey && cur === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && cur === last) { e.preventDefault(); first.focus(); }
+        return;
+      }
+      if (e.key === 'Escape') {
+        if (modalUp) { if (overlayDismissable) closeOverlay(); return; }
+        closePanels(); A.mapview.closePopup();
+        return;
+      }
+      if (e.key === '/' && !modalUp && document.activeElement &&
         !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) {
         e.preventDefault();
         document.getElementById('search-input').focus();
@@ -2963,9 +2995,51 @@
   /* ============================== auth + onboarding ============================== */
   var authOnDone = null;
 
+  // ui-003: while #onboarding is up, the rest of the shell must be
+  // unreachable by keyboard/AT (a trap needs both "can't tab out" and "can't
+  // tab into something invisible behind the modal"), and Tab must wrap inside
+  // it instead of walking off the end into the page. inert (below) delivers
+  // the first two; the keydown handler in wireDock delivers the wrap.
+  // overlayDismissable tracks whether Escape/backdrop-click may close what's
+  // currently showing: false for every gate screen (auth, re-consent,
+  // password reset, OAuth setup — closing those mid-flight strands the rider
+  // with no session), true by default for openOverlay's user-initiated cards.
+  var overlayDismissable = true;
+  var modalLastFocus = null; // element focused before the modal opened, restored on close
+  var shellInerted = [];     // exactly what setShellInert(true) touched, so (false)
+                              // restores only that — never openPanel's own inert state
+  function setShellInert(on) {
+    if (on) {
+      shellInerted = [].filter.call(document.body.children, function (el) {
+        return el.id !== 'onboarding' && el.id !== 'toasts' &&
+          el.tagName !== 'SCRIPT' && el.tagName !== 'NOSCRIPT' &&
+          !el.hasAttribute('inert'); // leave openPanel's closed panels alone
+      });
+      shellInerted.forEach(function (el) { el.setAttribute('inert', ''); });
+    } else {
+      shellInerted.forEach(function (el) { el.removeAttribute('inert'); });
+      shellInerted = [];
+    }
+  }
+  var MODAL_FOCUSABLE = 'a[href],button,input,select,textarea,[tabindex]:not([tabindex="-1"])';
+  function focusFirstIn(root) {
+    var f = root.querySelector(MODAL_FOCUSABLE);
+    if (f) { try { f.focus(); } catch (e) {} }
+  }
+  // Shared open bookkeeping for every non-dismissable gate screen (showAuth,
+  // showConsentGate, showResetPassword, showOAuthSetup): trap the shell and
+  // force dismissal off, regardless of what the *previous* #onboarding guest
+  // (a dismissable openOverlay card) last left overlayDismissable at.
+  function beginModalGate() {
+    overlayDismissable = false;
+    if (!modalLastFocus) modalLastFocus = document.activeElement;
+    setShellInert(true);
+  }
+
   function showAuth(onDone) {
     authOnDone = onDone || function () { };
     var root = document.getElementById('onboarding');
+    beginModalGate();
     root.hidden = false;
     root.classList.remove('closing');
     renderAuth('welcome');
@@ -2984,6 +3058,8 @@
     // resumes there after sign-in). An unguarded timer would blank it mid-flight.
     cancelOverlayClose();
     root.classList.add('closing');
+    setShellInert(false);
+    if (modalLastFocus) { try { modalLastFocus.focus(); } catch (e) {} modalLastFocus = null; }
     overlayCloseTimer = setTimeout(function () {
       overlayCloseTimer = null;
       root.hidden = true; root.innerHTML = '';
@@ -3267,12 +3343,14 @@
     });
     card.appendChild(out);
 
+    beginModalGate();
     root.hidden = false;
     root.classList.remove('closing');
     root.innerHTML = '';
     root.appendChild(card);
     root.scrollTop = 0;
     requestAnimationFrame(function () { root.classList.add('show'); });
+    focusFirstIn(root);
   }
 
   /* ----- generic overlay (reuses the modal backdrop while logged in) ----- */
@@ -3291,19 +3369,25 @@
     if (overlayCloseTimer) { clearTimeout(overlayCloseTimer); overlayCloseTimer = null; }
   }
 
-  function openOverlay(card) {
+  function openOverlay(card, opts) {
     var root = document.getElementById('onboarding');
     cancelOverlayClose();
+    overlayDismissable = !opts || opts.dismissable !== false;
+    if (!modalLastFocus) modalLastFocus = document.activeElement;
+    setShellInert(true);
     root.hidden = false;
     root.classList.remove('closing');
     root.innerHTML = '';
     root.appendChild(card);
     requestAnimationFrame(function () { root.classList.add('show'); });
+    focusFirstIn(root);
   }
   function closeOverlay() {
     var root = document.getElementById('onboarding');
     cancelOverlayClose();
     root.classList.add('closing');
+    setShellInert(false);
+    if (modalLastFocus) { try { modalLastFocus.focus(); } catch (e) {} modalLastFocus = null; }
     overlayCloseTimer = setTimeout(function () {
       overlayCloseTimer = null;
       root.hidden = true; root.innerHTML = '';
@@ -3374,16 +3458,19 @@
           'You\'re in. Save your recovery code',
           'Providers go down and accounts get locked. This is your way back in that doesn\'t depend on one.'));
         root.scrollTop = 0;
+        focusFirstIn(root);
       });
     });
     card.appendChild(btn);
 
+    beginModalGate();
     root.hidden = false;
     root.classList.remove('closing');
     root.innerHTML = '';
     root.appendChild(card);
     root.scrollTop = 0;
     requestAnimationFrame(function () { root.classList.add('show'); });
+    focusFirstIn(root);
   }
 
   // Landing screen for a password-reset link. The token has already been pulled
@@ -3419,12 +3506,14 @@
     back.addEventListener('click', function () { renderAuth('login'); });
     card.appendChild(back);
 
+    beginModalGate();
     root.hidden = false;
     root.classList.remove('closing');
     root.innerHTML = '';
     root.appendChild(card);
     root.scrollTop = 0;
     requestAnimationFrame(function () { root.classList.add('show'); });
+    focusFirstIn(root);
   }
 
   function buildRecoveryCard(code, continueLabel, onContinue, title, subtitle) {
@@ -3689,7 +3778,7 @@
       if (!pw.value) { showErr(err, 'Enter your password'); return; }
       btn.disabled = true; btn.textContent = 'Generating…';
       A.auth.regenRecovery(pw.value).then(function (r) {
-        if (r.ok) openOverlay(buildRecoveryCard(r.recoveryCode, 'Done', closeOverlay, 'Your new recovery code'));
+        if (r.ok) openOverlay(buildRecoveryCard(r.recoveryCode, 'Done', closeOverlay, 'Your new recovery code'), { dismissable: false });
         else { showErr(err, r.error); btn.disabled = false; btn.textContent = 'Generate new code'; }
       });
     });
@@ -4094,6 +4183,7 @@
     root.innerHTML = '';
     root.appendChild(card);
     root.scrollTop = 0;
+    focusFirstIn(root);
   }
 
   function renderAccount() {
@@ -4328,6 +4418,11 @@
 
   A.ui = {
     init: init,
+    // Exposed so tests can wire the dock/panel/modal keyboard and backdrop
+    // handlers (Tab-wrap, Escape, backdrop click) without running the rest of
+    // init() — wireSearch/wireChips/wireWalkieTalkie touch audio and live
+    // state that a jsdom harness has no reason to boot for a keyboard test.
+    wireDock: wireDock,
     toast: toast,
     inviteToast: inviteToast,
     showAuth: showAuth,

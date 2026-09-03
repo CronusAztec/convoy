@@ -602,13 +602,48 @@ Each bug has:
 - **Impact:** Dropped/hidden chat messages; users think messages were never sent.
 - **Fix:** Cache the chat log element reference, or have `renderConvoy` preserve the existing `#chat-log` node rather than wiping `body.innerHTML`.
 
-### BUG ui-003
+### BUG ui-003 — FIXED (cycle 3 stage 14, 2026-09-03)
 - **Severity:** high
-- **File:** `index.html:275` (was `:249`; cross-ref `js/ui.js:97-104`)
-- **Title:** `#onboarding` modal has no Escape handler, no backdrop-click close, no focus trap, body scroll not locked
-- **Repro:** Open the auth screen; press Escape (nothing); click the dimmed backdrop (nothing); Tab repeatedly — focus leaks into the map behind.
-- **Impact:** Modal is a keyboard/focus dead-end; fails WAI-ARIA modal dialog requirements.
-- **Fix:** Add Escape + click-on-backdrop handlers in `openOverlay`/`showAuth`; confine focus within the dialog.
+- **File:** `index.html:275` (cross-ref `js/ui.js` — `setShellInert`/`beginModalGate`, `openPanel`'s
+  keydown handler in `wireDock`, `showAuth`/`showConsentGate`/`showResetPassword`/`showOAuthSetup`,
+  `openOverlay`/`closeOverlay`)
+- **Title:** `#onboarding` modal had no Escape handler, no backdrop-click close, no focus trap, body scroll not locked
+- **Status:** Three of the four original sub-claims were real; the fourth was not. "Body scroll not
+  locked" does not apply — `css/styles.css:100-101` already sets `html, body { overflow: hidden }`
+  globally, so there was nothing to lock. The other three are fixed:
+  - **Focus trap:** every `#onboarding`-filling function (the auth gate, re-consent, password
+    reset, OAuth setup, and every `openOverlay` card) now calls `setShellInert(true)`, which
+    applies `inert` to every body child except `#onboarding` and `#toasts` (toasts stay live so
+    `aria-live` announcements still reach AT while a modal is up). Tab wraps inside the dialog via
+    a handler in `wireDock`'s global keydown listener instead of walking off the end into the page.
+  - **Escape / backdrop-click:** `openOverlay(card, opts)` gained an `opts.dismissable` flag
+    (default `true`); Escape and a click landing on `#onboarding` itself (not a descendant) now
+    close a dismissable overlay. The one exception is the recovery-code card
+    (`js/ui.js` — `showRegenRecovery`), which opts out with `{dismissable: false}` since losing it
+    to a stray Escape is real data loss.
+  - **The gate itself never dismisses.** `showAuth` and the other three blocking screens
+    (`showConsentGate`, `showResetPassword`, `showOAuthSetup` — all four were bypassing
+    `openOverlay` entirely and manipulating `#onboarding` directly, a wider set than the bug
+    report named, but the same underlying defect) force `overlayDismissable = false`, so
+    Escape/backdrop-click on any of them is a no-op. Closing those mid-flight would strand the
+    rider with no session, or — for re-consent — let them keep using the app under terms they
+    never confirmed.
+  - **A latent adjacent bug, found while fixing this one:** the pre-fix global keydown handler
+    (`js/ui.js`, in `wireDock`) didn't check whether the modal was up at all — pressing Escape
+    while the auth gate was showing silently closed the side panel *behind* it, and pressing `/`
+    yanked focus out of the modal into the map's search box. Both are the same root cause (the
+    handler never checked modal state) and are fixed by the same `modalUp` guard added here; not
+    logged as a separate BUG entry since it's the identical code path and fix as this one.
+  - **Composition guard:** closing the modal only removes `inert` from what `setShellInert(true)`
+    itself added — it does not touch panels [[BUG ui-013]] already made inert for being closed, so
+    the two fixes don't fight each other. Asserted directly in
+    `test/frontend.test.js`'s `testModalFocusTrap()`.
+- **Verified:** `test/frontend.test.js` → `testModalFocusTrap()` — 10 assertions, jsdom-checkable
+  (jsdom implements neither `inert` focus-blocking nor real Tab-order navigation, so this drives
+  the real `openPanel`/`openOverlay`/`showAuth` API and asserts DOM state — `inert` attributes,
+  `root.hidden`, the `closing` class — rather than simulated keyboard traversal). Each assertion
+  was proven to fail first (keydown wrap reverted, backdrop listener removed, `setShellInert`
+  blanket-un-inert injected) before being trusted; see the cycle-3-stage-14 implementer report.
 
 ### BUG ui-004 — FIXED (verified cycle 0 stage 5, not this stage's work)
 - **Severity:** medium
@@ -683,13 +718,32 @@ Each bug has:
 - **Impact:** Form errors not programmatically associated; pledge-required state invisible to AT.
 - **Fix:** `aria-describedby` each input at the error region; `aria-invalid` on failure; `aria-required` on the pledge.
 
-### BUG ui-013
+### BUG ui-013 — FIXED (cycle 3 stage 14, 2026-09-03)
 - **Severity:** low
-- **File:** `css/styles.css:482-524` (cross-ref `index.html:146-170`, was `:124-147`)
+- **File:** `css/styles.css:482-524` (cross-ref `index.html:146-170`; fix in `js/ui.js` — `openPanel`)
 - **Title:** Closed panels translate off-screen but are not `inert`/`aria-hidden` initially → off-screen focusable tab stops
-- **Repro:** Boot the app, Tab repeatedly — focus lands on invisible off-screen panel controls (settings gear, close).
-- **Impact:** Off-screen focusable elements confuse keyboard users; fails WCAG 2.4.3.
-- **Fix:** Add `inert` (or `aria-hidden="true"` + `tabindex="-1"` on focusable children) to closed panels, or use `visibility:hidden`.
+- **Magnitude (measured, not the ~4 originally assumed):** panels are built lazily by
+  `renderNearby`/`renderConvoy`/`buildProfilePanel` and never torn down, so the count grows with
+  use: 4 stray tab stops at boot, 127 after a rider has opened Profile once, **133** after
+  visiting all three panels and returning to the map. `aria-hidden="true"` was already set on
+  closed panels, which made this *worse*, not better — `aria-hidden` + focusable is the
+  `aria-hidden-focus` WCAG failure (a screen-reader user tabs to a control the reader refuses to
+  announce), and `aria-hidden` alone never removes anything from sequential focus navigation in
+  the first place.
+- **Status:** `openPanel`'s existing `.panel` loop (already toggling `aria-hidden`) now also sets
+  `inert` on every panel that isn't the one being opened, and removes it from the one that is.
+  `inert` blocks both mouse and keyboard/AT reach for a subtree, unlike `opacity:0` +
+  `pointer-events:none` (mouse only) or `aria-hidden` (AT hint only, no focus effect). No new
+  dependency; `inert` is Baseline-available (Chrome 102+, Firefox 112+, Safari 15.5+) and degrades
+  to exactly today's behaviour on anything older.
+- **Verified:** `test/frontend.test.js` → `testClosedPanelsInert()`. jsdom 30.0.1 implements no
+  `inert` IDL property and does not block `.focus()` on an inert subtree, so a behavioural test
+  ("focus() a button inside an inert panel, assert focus didn't move") would fail even against a
+  *correct* fix — the test instead enumerates the browser's real tab-order rule directly
+  (`[inert]`/`[hidden]`-excluding, `aria-hidden`-inclusive) and asserts against the real
+  `openPanel` API. The pre-fix regression (all three panels reverted to their original state) was
+  run and reproduced **exactly 133** tabbable elements before the fix was restored — see the
+  cycle-3-stage-14 implementer report.
 
 ### BUG ui-014 — FIXED (found and fixed cycle 0 stage 5, 2026-09-03)
 - **Severity:** high
@@ -938,11 +992,17 @@ Convoy server → http://localhost:5173  (ws: /ws, bots: 0, nearby: 30km)
 
 ## Stats
 
+Regenerated from the file itself (`### BUG` headers paired 1:1 with the `Severity` line that
+follows each one) — see `test/bugstats.test.js`, which parses this file and fails the build if
+this table ever drifts from what's actually here.
+
 | Area | critical | high | medium | low | total |
 |---|---:|---:|---:|---:|---:|
-| Frontend | 0 | 4 | 10 | 1 | 15 | (note: frontend-002/003/008/009 are the highs; row total corrected cycle 2 stage 8, was mis-added as 18) |
-| Server | 4 | 9 | 11 | 0 | 24 | (server-003/006/008/011 critical; row total corrected cycle 2 stage 8, was mis-added as 27) |
-| Android | 4 | 8 | 7 | 1 | 20 | (android-001/002/003 + ui-014-class) |
-| UI/UX | 0 | 5 | 10 | 6 | 21 | (ui-001/004/006/014/015/016/017/018/019 fixed; ui-015..019 added cycle 2 stage 8 — #radar-dock landmark, toggle/field/color-swatch/icon-picker accessible names; ui-020/021 added cycle 2 stage 10 — visual-verification-pending items from the typography floor + progress-bar transform work, neither fixed nor broken, just unverified without a browser) |
+| Frontend | 0 | 5 | 12 | 1 | 18 | (frontend-001/002/003/008/009 are the highs) |
+| Server | 4 | 10 | 13 | 0 | 27 | (server-003/006/008/011 critical) |
+| Android | 3 | 8 | 8 | 1 | 20 | (android-001/002/003 critical) |
+| UI/UX | 0 | 5 | 10 | 6 | 21 | (ui-001/004/006/013/014/015/016/017/018/019/003 fixed; ui-020/021 visual-verification-pending, unresolved without a browser) |
 | Runtime | 0 | 2 | 3 | 1 | 6 | |
-| **Total** | **8** | **28** | **41** | **9** | **86** |
+| Add | 0 | 1 | 1 | 2 | 4 | |
+| Perf | 0 | 0 | 1 | 0 | 1 | |
+| **Total** | **7** | **31** | **48** | **11** | **97** |

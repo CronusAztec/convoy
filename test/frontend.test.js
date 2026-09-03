@@ -228,6 +228,143 @@ function testGeneratedIdsUnique() {
   A.ui.openPanel(null);
 }
 
+/* ---------------- 2c. ui-013: closed panels are inert (no phantom tab stops) ----------------
+   jsdom does not implement `inert` — no IDL property, no focus-blocking (verified directly:
+   `p.inert` is undefined and `.focus()` on a button inside an inert subtree still moves focus
+   in jsdom 30.0.1). A behavioural test ("focus() it, assert focus didn't move") would therefore
+   fail even against a CORRECT implementation. This models the browser's real tab-order rule
+   instead: [inert] and [hidden] subtrees and disabled controls are excluded from sequential
+   focus navigation. aria-hidden is deliberately NOT part of that rule — aria-hidden alone never
+   removed anything from the tab order, which is exactly why it was never a fix for ui-013. */
+const FOCUSABLE = 'a[href],button,input,select,textarea,[tabindex]:not([tabindex="-1"])';
+function tabbable(doc) {
+  return Array.from(doc.querySelectorAll(FOCUSABLE)).filter((el) =>
+    !el.disabled && !el.closest('[inert]') && !el.closest('[hidden]'));
+}
+
+function testClosedPanelsInert() {
+  H.group('js/ui.js — openPanel(): closed panels are inert, not just aria-hidden (ui-013)');
+  const dom = buildWindow();
+  const win = dom.window;
+  installAsGlobals(win);
+  const A = loadModules(win);
+  const doc = win.document;
+
+  // Visit all three panels (this is what grows the bug: panels are built lazily
+  // and never torn down, so a user who has looked at everything once leaves the
+  // most stray controls behind), then return to the map.
+  A.ui.openPanel('nearby');
+  A.ui.openPanel('convoy');
+  A.ui.openPanel('profile');
+  A.ui.openPanel(null);
+
+  const inClosedPanels = tabbable(doc).filter((el) => el.closest('.panel'));
+  H.ok('no tabbable elements remain inside any panel once all are closed (pre-fix: 133)',
+    inClosedPanels.length === 0,
+    'found ' + inClosedPanels.length + (inClosedPanels.length ? ': ' + inClosedPanels.slice(0, 5).map((e) => e.tagName).join(', ') : ''));
+
+  // Regression guard: prove the fix didn't just make everything inert.
+  A.ui.openPanel('profile');
+  const inOpenPanel = tabbable(doc).filter((el) => el.closest('.panel.open'));
+  H.ok('the OPEN panel is still fully reachable by keyboard (not everything went inert)',
+    inOpenPanel.length > 0, 'found ' + inOpenPanel.length + ' tabbable elements');
+
+  const panels = Array.from(doc.querySelectorAll('.panel'));
+  H.ok('every closed panel carries [inert]; the open one does not',
+    panels.every((p) => p.classList.contains('open') ? !p.hasAttribute('inert') : p.hasAttribute('inert')),
+    panels.map((p) => p.dataset.panel + ':' + (p.classList.contains('open') ? 'open' : 'closed') +
+      (p.hasAttribute('inert') ? '+inert' : '')).join(', '));
+  A.ui.openPanel(null);
+}
+
+/* ---------------- 2d. ui-003: #onboarding is a real focus trap ----------------
+   showAuth (and the other blocking gates it shares code with — re-consent, password
+   reset, OAuth setup) must not be dismissable by Escape or a backdrop click: closing
+   those mid-flight strands the rider with no session, or in the re-consent case,
+   leaves them using the app under terms they never confirmed. openOverlay's
+   user-initiated cards are dismissable by default, with one documented exception
+   (the recovery-code card, where a stray Escape would be real data loss). */
+async function testModalFocusTrap() {
+  H.group('js/ui.js — #onboarding is a focus trap (ui-003)');
+  const dom = buildWindow();
+  const win = dom.window;
+  installAsGlobals(win);
+  const A = loadModules(win);
+  A.ui.wireDock(); // installs the Tab-wrap / Escape / backdrop-click handlers under test
+  const doc = win.document;
+  const root = doc.getElementById('onboarding');
+
+  // 1. showAuth(): the shell is inerted; only #onboarding stays tabbable.
+  A.ui.showAuth(function () {});
+  await new Promise((r) => setTimeout(r, 0)); // let buildAuth()'s config().then(...) settle
+  H.ok('showAuth(): #onboarding is not hidden', root.hidden === false);
+  const shellChildren = Array.from(doc.body.children).filter((el) =>
+    el.id !== 'onboarding' && el.id !== 'toasts' && el.tagName !== 'SCRIPT' && el.tagName !== 'NOSCRIPT');
+  H.ok('showAuth(): every other body child is inert',
+    shellChildren.length > 0 && shellChildren.every((el) => el.hasAttribute('inert')),
+    shellChildren.filter((el) => !el.hasAttribute('inert')).map((el) => el.id || el.className).join(', ') || 'n/a');
+  const outside = tabbable(doc).filter((el) => !root.contains(el));
+  H.ok('showAuth(): no tabbable element remains outside #onboarding',
+    outside.length === 0, 'found ' + outside.length + ': ' + outside.slice(0, 5).map((e) => e.tagName).join(', '));
+
+  // 2. Escape must NOT dismiss the gate — the single most important assertion here.
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  H.ok('showAuth(): Escape does not close the gate (root.hidden stays false)', root.hidden === false);
+
+  // Reset to a clean closed state before the openOverlay cases (closeOverlay alone
+  // is enough here — it clears shell-inert + starts hiding #onboarding, which is
+  // all this test needs; the full closeAuthEnter side effects are irrelevant to it).
+  A.ui.closeOverlay();
+  await new Promise((r) => setTimeout(r, 400));
+
+  // 3. openOverlay (dismissable by default): Escape starts the close animation.
+  //    closeOverlay defers hidden=true by 380ms — assert the synchronous 'closing'
+  //    class instead of sleeping past a real timer (a timer race is not deterministic).
+  function mkCard() {
+    const card = doc.createElement('div');
+    const btn = doc.createElement('button'); btn.textContent = 'ok';
+    card.appendChild(btn);
+    return card;
+  }
+  A.ui.openOverlayRaw(mkCard());
+  await new Promise((r) => setTimeout(r, 0));
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  H.ok('openOverlay() + Escape: dismissal begins (root gets "closing")', root.classList.contains('closing'));
+  await new Promise((r) => setTimeout(r, 400));
+
+  // 4. openOverlay(card, {dismissable:false}) — the recovery-code exception: Escape does nothing.
+  A.ui.openOverlayRaw(mkCard(), { dismissable: false });
+  await new Promise((r) => setTimeout(r, 0));
+  doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  H.ok('openOverlay(card, {dismissable:false}) + Escape: "closing" is NOT set', !root.classList.contains('closing'));
+  A.ui.closeOverlay();
+  await new Promise((r) => setTimeout(r, 400));
+
+  // 5. Backdrop click closes; a click on the card itself does not.
+  const card3 = mkCard();
+  A.ui.openOverlayRaw(card3);
+  await new Promise((r) => setTimeout(r, 0));
+  card3.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  H.ok('a click on the card does not close the overlay', !root.classList.contains('closing'));
+  root.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  H.ok('a click on the backdrop (#onboarding itself) closes the overlay', root.classList.contains('closing'));
+  await new Promise((r) => setTimeout(r, 400));
+
+  // 6. Composition guard: a naive "un-inert every body child on close" would
+  //    silently revert Task 1 (ui-013) here, with every assertion above still green.
+  A.ui.openPanel('nearby');
+  A.ui.openPanel(null);
+  const closedPanel = doc.querySelector('.panel[data-panel="nearby"]');
+  H.ok('composition guard setup: the closed panel is inert before any modal opens',
+    closedPanel.hasAttribute('inert'));
+  A.ui.openOverlayRaw(mkCard());
+  await new Promise((r) => setTimeout(r, 0));
+  A.ui.closeOverlay();
+  await new Promise((r) => setTimeout(r, 400));
+  H.ok('composition guard: the closed panel is still inert after an unrelated modal open/close cycle',
+    closedPanel.hasAttribute('inert'));
+}
+
 /* ---------------- 0. baseline ratchet guard: a stage may only LOWER the
    committed caps by fixing a real issue, never raise one to make a red run
    green. Compares the working-tree baseline file against the version last
@@ -332,6 +469,8 @@ function testDetector() {
   testDocumentStructure();
   await testSurfaces();
   testGeneratedIdsUnique();
+  testClosedPanelsInert();
+  await testModalFocusTrap();
   testThemes();
   testStamps();
   testFontSizeFloor();

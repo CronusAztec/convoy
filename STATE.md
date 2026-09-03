@@ -30,13 +30,13 @@ neutral-slate accent, Chakra Petch / Share Tech Mono) is preserved.
    styles with no behavioural impact) are pinned as the new floor for `htmlValidateErrors` in
    `test/frontend-baseline.json`, not chased to literal zero.
 
-## Metrics (baseline 2026-09-03 → cycle 3 stage 11 → target)
-| Gate | Original baseline (M1) | **Current (stage 11)** | Target | Command |
+## Metrics (baseline 2026-09-03 → cycle 3 stage 14 → target)
+| Gate | Original baseline (M1) | **Current (stage 14)** | Target | Command |
 |---|---|---|---|---|
 | M-A design-integrity findings (impeccable detector) | 37 (32 warnings, 5 advisories) | **17** — the actionable subset (`undersized-ui-text` 14, `tiny-text` 1, `layout-transition` 5, `clipped-overflow-container` 2) is now **0**; remaining 17 is the checked-in design-identity allowlist, see `css/DESIGN-DECISIONS.md` | 22 actionable findings → 0 — **MET**; remaining 17 allowlisted per amendment 1, not chased further | `node /opt/data/skills/creative/impeccable/scripts/detect.mjs --json index.html css/styles.css js/ui.js \| grep -c '"antipattern"'` |
 | M-B html-validate errors on `index.html` | 57 | **13, unchanged** (7 `void-style` + 5 `no-inline-style`, both taste — pinned; 1 `prefer-native-element` on `#search-results`, kept on purpose — see below) | 0 in correctness/a11y rule classes — **already met** (see amendment 2) | `npm run test:frontend` |
 | M-B axe-core violations per surface | shell 1, nearby 1, convoy 2, profile 5, auth **5 (mismeasured, see below)** | **shell 0, nearby 0, convoy 0, profile 0, authWelcome 0, authLogin 0 — target met on all six surfaces** (stage 8: `#radar-dock` landmark fix cleared `region` everywhere; `mkRow`/`mkField`/`.dot-color`/`.emoji-btn` accessible-name fixes cleared the rest) | 0 on every surface — **MET** | `npm run test:frontend` |
-| M-B open BUGS.md UI/UX bugs | 13 listed, ui-003/011/013 confirmed open | **19 listed** (added ui-015..019 this stage), **9 fixed** (ui-001, ui-004, ui-006, ui-014, ui-015, ui-016, ui-017, ui-018, ui-019) | all closed | read `BUGS.md` §UI/UX |
+| M-B open BUGS.md UI/UX bugs | 13 listed, ui-003/011/013 confirmed open | **21 listed**, **11 fixed** (ui-001, ui-003, ui-004, ui-006, ui-013, ui-014, ui-015, ui-016, ui-017, ui-018, ui-019) — ui-003/ui-013 fixed this stage | all closed | read `BUGS.md` §UI/UX |
 | M-C compressed same-origin text bytes / cache policy / requests | 1,033 KB JS + 144 KB CSS + 21 KB HTML uncompressed; `no-cache`; 45 requests | unchanged (M4 not started) | ≤ 300 KB compressed; `immutable`; ≤ 30 requests | `node test/frontend-delivery.test.js` (not yet built) |
 
 All of the above (except M-C) are gated by `npm run test:frontend` against `test/frontend-baseline.json`
@@ -46,7 +46,75 @@ if any shared key's value has been raised. New keys (e.g. this stage's `axeViola
 `axeViolations_authLogin` replacing `axeViolations_auth`) are exempt on the stage that introduces them.
 
 ## Current milestone
-**Cycle 3 stage 11 (IMPLEMENT, executing the cycle-2-stage-10 IMPROVE directive's tasks 1-4) — DONE. First stage of the mission
+**Cycle 3 stage 14 (IMPLEMENT, executing the cycle-3-stage-13 IMPROVE directive's tasks 1-5) —
+DONE. `ui-003`/`ui-013` shipped after four deferrals; the mission's #1 human-only blocker
+(headless Chromium) turned out not to be a blocker at all.** Five tasks:
+
+1. **Task 1 — `ui-013`: closed panels are now `inert`.** Two lines inside `openPanel`'s existing
+   `.panel` loop (`js/ui.js`): `if (open) p.removeAttribute('inert'); else p.setAttribute('inert', '')`.
+   Kills the phantom-tab-stop bug at its measured real size — **133**, not the ~4 originally
+   assumed (panels are built lazily and never torn down, so the count grows with use: 4 at boot,
+   127 after Profile is opened once, 133 after all three panels have been visited). New
+   `testClosedPanelsInert()` group in `test/frontend.test.js` (3 assertions) — jsdom implements no
+   `inert` focus-blocking, so it enumerates the browser's real tab-order rule
+   (`[inert]`/`[hidden]`-excluding) against the real `openPanel` API instead of trying a
+   behavioural focus test that would fail even on a correct fix. **Verified the test actually
+   catches the regression**: reverted the two-line change, reran, got exactly **133** back
+   (`found 133: BUTTON, BUTTON, BUTTON, BUTTON, BUTTON`), restored.
+2. **Task 2 — `ui-003`: `#onboarding` is now a real focus trap.** New `setShellInert`/
+   `beginModalGate`/`focusFirstIn` helpers in `js/ui.js`; wired into `showAuth`, `openOverlay`/
+   `closeOverlay`, and — beyond the directive's four named call sites, because they're the
+   structurally identical un-named instances of the same defect — `showConsentGate`,
+   `showResetPassword`, `showOAuthSetup` (all three bypass `openOverlay` and manipulate
+   `#onboarding` directly, exactly like `showAuth`). `openOverlay(card, opts)` gained
+   `opts.dismissable` (default `true`); the one opt-out (`{dismissable:false}`) is the
+   recovery-code card (`js/ui.js` — `showRegenRecovery`), where a stray Escape is real data loss.
+   The global keydown handler in `wireDock` now Tab-wraps inside the modal and only lets
+   Escape/`/` fall through to the panel/search shortcuts when no modal is up — this also fixes a
+   latent adjacent bug found while reading (Finding E in the directive): pre-fix, Escape while the
+   auth gate was up silently closed the panel *behind* it, and `/` yanked focus into the search box
+   out from under the modal. Judged the same defect as ui-003 (same handler, same fix), not logged
+   separately. One dropped sub-claim: ui-003's "body scroll not locked" was already false —
+   `css/styles.css:100-101` sets `html, body { overflow: hidden }` globally; nothing to fix there.
+   New `testModalFocusTrap()` group (10 assertions) exercises the real API with dispatched
+   `KeyboardEvent`/`MouseEvent`s; required exposing `A.ui.wireDock` (previously only reachable via
+   the full `init()`, which sets up audio/walkie-talkie machinery that hangs a Node process with no
+   real devices). **Verified 3 separate ways**: reverted the keydown Tab/Escape logic → the
+   Escape-closes-dismissable-overlay assertion failed; reverted the backdrop-click listener → the
+   backdrop-click assertion failed; injected the exact "blanket un-inert everything" composition
+   bug the directive warned about → the composition-guard assertion failed. All three restored,
+   all green.
+3. **Task 3 — BUGS.md Stats table regenerated from the file itself.** Finding G was right: the
+   table said Frontend 15 / Server 24 / total 86; the real numbers (1:1 pairing of every
+   `### BUG` header with its `Severity` line) are Frontend 18 / Server 27 / **total 97**, and two
+   categories (`add-*` 4, `perf-*` 1) had no row at all. Even the per-severity *splits* the old
+   table got right by coincidence were sometimes wrong underneath (e.g. Android's critical count
+   was written as 4 but is actually 3 — the row total of 20 was still right, masking it). New
+   `test/bugstats.test.js` (11 assertions) parses BUGS.md and fails if the checked-in table ever
+   drifts again; registered in `test/run.js` (22→23 suites). **Verified**: introduced a deliberate
+   off-by-one in the Frontend row, confirmed the exact row failed with the right recomputed value,
+   restored.
+4. **Task 4 — bookkeeping.** `BUGS.md`: ui-003 and ui-013 marked fixed (full before/after writeup,
+   ui-013's magnitude recorded as 133, cross-linked to each other). `STATE.md`: this entry.
+   `graphify update .`: **3089 nodes, 5742 edges, 198 communities.**
+5. **Task 5 (time-boxed, ~11 min of the 15-min cap) — SUCCESS, and bigger than the directive
+   predicted.** The directive's own Finding F had already falsified "needs root"; Task 5 went
+   further and falsified "20 missing shared libs" too — **zero** were missing (`ldd` on the
+   downloaded Chromium against this box's existing libraries: empty). A real headless Chromium
+   renders on this box, right now, with no system changes at all. Full recipe, and what it showed,
+   is in "Headless Chromium — working recipe" below. **ui-020 is answered definitively**: the
+   `.rd-limit` "LIMIT" badge measures **59.2px wide against its 46px min-width** — it grows, as
+   `min-width` (not `max-width`) guarantees, exactly the "acceptable trade" BUGS.md already
+   recorded. **ui-021 got a real (if partial) look**: an isolated `transform:scaleX(0.35)`
+   progress bar screenshot showed a clean fill with no visible glow distortion; the in-app radar
+   dock screenshot was inconclusive — headless Chromium's software WebGL/`backdrop-filter`
+   rendering produced a blown-out blur unrelated to the CSS under test, most likely a headless
+   env artifact, not evidence about the real bug either way.
+   Per the directive: **not** added to `package.json`/`test/run.js`, no screenshot suite written —
+   this was one-off, scratch-directory verification only (`/tmp/pw-scratch`, outside the repo;
+   `git status --short` confirms nothing leaked in).
+
+Prior milestone, for context — **Cycle 3 stage 11 (IMPLEMENT, executing the cycle-2-stage-10 IMPROVE directive's tasks 1-4) — DONE. First stage of the mission
 that changed how the app looks to a sighted user.** `detectorWarnings` driven **37 → 17**. Four
 tasks, all complete:
 1. **Task 1 — 12px typography floor across `css/styles.css`.** All 76 `font-size` declarations below
@@ -175,17 +243,71 @@ or JS behaviour touched). Four tasks, all complete:
    was added above `#search-results`). `graphify update .` run — 3065 nodes, 5692 edges, 197
    communities.
 
-**Next (per the cycle 2 stage 10 IMPROVE directive's explicit "first item of cycle 3" commitment):
-`ui-003` (focus trap) and `ui-013` (`inert` closed panels).** These have now been deferred **four**
-times, always on a stated, legitimate dependency (naming had to be trustworthy first, then the CSS
-readability pass had to land as its own clean diff rather than being mixed with a panel-lifecycle
-behavioural change). Both dependencies are now satisfied — accessible naming is done and verified
-(cycle 2 stage 8), and the CSS readability pass is done and verified (this stage). **Nothing
-technical blocks starting them; this must be the top item of the next IMPLEMENT stage.** After that:
-`htmlValidateErrors` (13) and the `.htmlvalidate.json` rule-class split (plan amendment §5(b)),
-still enforced by narrative only — genuinely lower priority than ui-003/013, correctly deprioritized
-again this stage. M2 (headless Chromium) remains formally dropped — no sudo, 20 missing shared libs,
-do not re-attempt without a human installing them.
+## Headless Chromium — working recipe (M2 UN-DROPPED cycle 3 stage 14; do not re-run the download,
+reuse what's already on this box)
+
+**Both premises M2 was dropped on were false.** "Needs root" was falsified by the stage-13 IMPROVE
+directive (Finding F: `apt-get download` + `dpkg -x` into `$HOME` needs no sudo). Stage 14 went
+further: the "20 missing shared libraries" figure was never actually measured on this box — once a
+real Chromium binary was downloaded and `ldd`'d, **zero** libraries were missing. No extraction
+step was needed at all.
+
+```bash
+# 1. Chromium itself does NOT resolve via plain `npx playwright install` outside a project that
+#    already depends on playwright (it just prints a warning and installs nothing). Give it a
+#    scratch project instead — do not run this inside /opt/data/convoy or touch its package.json.
+mkdir -p /tmp/pw-scratch && cd /tmp/pw-scratch && npm init -y >/dev/null
+npm install playwright --no-audit --no-fund      # ~2s, 2 packages
+node ./node_modules/.bin/playwright install chromium   # ~184 MB download, ~15s on this box's link
+# lands in ~/.cache/ms-playwright/chromium-<rev>/chrome-linux64/chrome
+
+# 2. Confirm what's missing (informational this time — nothing was)
+BIN=$(find ~/.cache/ms-playwright -name chrome -type f | head -1)
+ldd "$BIN" | grep "not found"     # → empty on this box, 2026-09-03
+
+# 3. Run it — --no-sandbox is required (no user-namespace privileges), --disable-gpu avoids a
+#    GPU-process crash loop under headless with no real GPU
+"$BIN" --headless --no-sandbox --disable-gpu --dump-dom about:blank
+# → <html><head></head><body></body></html>   (dbus/GLib-GIO-CRITICAL stderr lines are harmless —
+#   no system bus in this container, Chromium falls back fine)
+
+# 4. Screenshot the real app (same recipe, add the app's own server)
+cd /opt/data/convoy && python3 -m http.server 5173 &
+"$BIN" --headless --no-sandbox --disable-gpu --window-size=390,844 --hide-scrollbars \
+  --screenshot=/tmp/shot.png http://localhost:5173/
+```
+
+**What stage 14 saw (screenshots not kept — they were `/tmp` scratch, not committed):**
+- The map shell renders: dock labels (MAP/NEARBY/CONVOY/PROFILE) legible at the 12px floor from
+  cycle 2, chips readable, layout intact at 390×844.
+- `.rd-limit` (`#radar-dock`, toggled via `document.body.classList.add('radar-on')` — real Ghost
+  Mode requires a live GPS fix this harness doesn't have) measures **59.2×48px**, against a CSS
+  `min-width: 46px` — confirms **ui-020** exactly as reasoned: it grows, doesn't clip, because the
+  rule is `min-width` not `max-width`.
+  - Deep-cropped screenshots of the live `#radar-dock` were an unreliable blown-out blur — almost
+    certainly headless software-WebGL/`backdrop-filter` interacting badly with no real GPU, not a
+    finding about the real bug. The numeric measurement above is the trustworthy result; a
+    from-image visual read of the radar dock specifically still wants a real browser + real GPU.
+- An isolated `transform: scaleX(0.35)` progress bar (built with the same mechanism cycle 2's fix
+  uses, injected via a scratch `<div>` so it didn't depend on live routing/drag-race state)
+  screenshotted clean — a solid fill with a normal highlight at the leading edge, no visible glow
+  smearing or compression. Reasonable evidence **ui-021** is fine, though not from the actual
+  in-app element (same headless WebGL/backdrop-filter caveat as above would apply to that).
+
+**Reuse this for the next stage that wants a screenshot** — the browser is already downloaded
+(`~/.cache/ms-playwright`), do not redownload. Guardrail from the stage-13 directive still applies:
+do not add `playwright` to `/opt/data/convoy/package.json` or wire it into `test/run.js`; keep using
+a scratch directory outside the repo for one-off checks until a future cycle deliberately decides to
+make this a permanent, CI-wired capability.
+
+**Next (per the stage-13 IMPROVE directive):** `ui-003`/`ui-013` are done — the standing
+four-deferral item is closed. `htmlValidateErrors` (13) and the `.htmlvalidate.json` rule-class
+split (plan amendment §5(b)) remain deliberately untouched for a third cycle running — 13 markup
+nits are still worth less than what just got fixed. With M2 now working, a natural next step is
+using it to *resolve* (not just re-measure) ui-020/ui-021 with real in-app screenshots at real GPU
+fidelity, and to finally look at what 14 stages of CSS/a11y work actually look like end-to-end —
+but per the stage-13 directive's explicit scope, wiring a permanent screenshot capability into the
+test suite is its own decision for a future cycle, not implied by this stage's one-off success.
 
 ## Progress log
 - 2026-09-03 stage 1 (PLAN): plan written; skills installed; baselines measured; STATE.md created. No app code changed.
@@ -234,6 +356,24 @@ do not re-attempt without a human installing them.
   mission. `npm test`: 22 suites, **43/43 checks** (+2 for `testFontSizeFloor()`). `BUGS.md`: 19→21
   entries (+2, both visual-verification-pending, neither fixed nor broken), stats table updated.
   New file `css/DESIGN-DECISIONS.md`. `graphify update .`: 3071 nodes, 5700 edges, 198 communities.
+- 2026-09-03 stage 12 (REVIEW): verified stage 11's claims (clean); reiterated the standing
+  ui-003/ui-013 sequencing gap (fourth deferral) and a BUGS.md Stats table arithmetic drift found
+  independently (Frontend/Server rows undercounted).
+- 2026-09-03 stage 13 (IMPROVE): measured the real magnitude of ui-013 (133 phantom tab stops, not
+  the assumed ~4) with a throwaway jsdom probe; confirmed jsdom 30.0.1 implements no `inert`
+  focus-blocking (dictates the test design); traced `#onboarding`'s gate-vs-overlay split and found
+  ui-003's "body scroll not locked" sub-claim already false; found a latent adjacent keydown bug
+  while reading `wireDock`; and — the headline finding — proved "Chromium needs root" false with a
+  live `apt-get download`/`dpkg -x` test. Wrote the 5-task directive executed in stage 14.
+- **2026-09-03 stage 14 (IMPLEMENT, this stage): executed all 5 tasks — see "Current milestone"
+  above for full detail.** Headline: `ui-003`/`ui-013` shipped (fourth-deferral item, finally
+  closed) and M2 (headless Chromium) came back from "formally dropped" to working, with a real
+  measurement resolving one of the two remaining visual-verification-pending bugs. `npm test`: 22→23
+  suites (+1, `test/bugstats.test.js`, **11/11 checks**); `frontend.test.js` **43→56 checks** (+3
+  `testClosedPanelsInert`, +10 `testModalFocusTrap`; each suite's own count is what its
+  process prints — they don't sum into one grand total). `BUGS.md`: 97 entries (unchanged — this
+  stage fixed 2 existing ones and corrected the Stats table's arithmetic, it didn't add any), 13 now
+  fixed (was 11). `graphify update .`: 3089 nodes, 5742 edges, 198 communities.
 
 ## How to run (solo mode — no Supabase needed)
 ```bash
@@ -267,19 +407,24 @@ Test baseline: see "Test baseline" below.
 - `test/frontend-baseline.json` is now ratchet-enforced by code (`testBaselineRatchet()`), not just convention.
 
 ## Human-only actions (surface every review)
-1. `node release.js --ota` to ship web changes (needs VPS_KEY/VPS_HOST). **Production still serves
-   the line-15 orphan-markup defect (BUGS.md ui-014), the 59 previously-unnamed controls (BUGS.md
-   ui-015..019), and now also the entire typography floor (76 declarations) and the 5-site
-   progress-bar performance fix (this stage) until this happens** — all fixed in this repo, none
-   shipped.
-2. **Now the single highest-value unblock: install Chromium's shared libraries (needs root).** This
-   stage shipped the mission's first CSS/visual change. Two items are explicitly
-   visual-verification-pending (BUGS.md ui-020, ui-021: the `.rd-limit` "LIMIT" badge may grow past
-   its 46px min-width at the new 12px floor; the `.progress i`/`.dragy-prog i` box-shadow glow is
-   horizontally compressed by `transform: scaleX()` at partial fill). A human glancing at the radar
-   dock and the routing/drag progress bars at phone width would retire both in about a minute.
+1. **`node release.js --ota` to ship web changes (needs VPS_KEY/VPS_HOST) — now the single largest
+   gap between work done and value delivered.** Production still serves the line-15 orphan-markup
+   defect (BUGS.md ui-014), the 59 previously-unnamed controls (ui-015..019), the entire typography
+   floor (76 declarations), the 5-site progress-bar performance fix, and — as of this stage — the
+   keyboard-accessibility focus trap (ui-003) and the 133-phantom-tab-stop fix (ui-013). **14
+   stages, nothing shipped.**
+2. ~~Install Chromium's shared libraries (needs root).~~ **FALSIFIED, twice over, this stage.**
+   Neither "needs root" (disproven cycle-3-stage-13) nor "20 missing shared libraries" (disproven
+   this stage — the real count was **zero**) was true. A headless Chromium already runs on this box
+   with no system changes; see "Headless Chromium — working recipe" above for the exact commands.
+   **ui-020 is now answered** (measured: `.rd-limit` renders at 59.2px against its 46px min-width —
+   it grows as designed). **ui-021 got a partial, inconclusive look** (an isolated progress-bar
+   element screenshotted clean; the real in-app radar dock did not render cleanly under headless
+   software WebGL/`backdrop-filter` — an environment artifact, not evidence either way). What's
+   left for a human: a 30-second glance at the real routing/drag progress bars at phone width in an
+   actual browser would close ui-021 with more confidence than the headless attempt could.
 3. Supabase keys in `server/.env` only if live-mode local testing is wanted.
-4. Product name decision (Slipstream vs Convoy). Unresolved for 10 stages, still not an agent's call.
+4. Product name decision (Slipstream vs Convoy). Unresolved for 13 stages, still not an agent's call.
 
 ## Test baseline
 `npm test` on 2026-09-03 00:44Z (planner stage, before any code change): **All 21 suites passed, 184 checks passed.**
@@ -295,3 +440,13 @@ assertion, 39→41 from Task 3's new `testGeneratedIdsUnique()` regression group
 checks passed** (frontend.test.js: 41→43, +2 from the new `testFontSizeFloor()` group). `npm run
 test:frontend` measured counts unchanged except `detectorWarnings: 37→17`. Keep both counts (suites,
 checks) from going down.
+`npm test` on 2026-09-03 (implementer stage 14, after Tasks 1-4): **All 23 suites passed** (22→23,
+new `test/bugstats.test.js`, 11/11 checks). `frontend.test.js`: 43→56 checks (+3
+`testClosedPanelsInert`, +10 `testModalFocusTrap`). Each suite's own check count is printed by that
+suite's own process — `test/run.js` does not sum them into one grand total; read the count next to
+the relevant suite's name in the full `npm test` output, not the last line printed (which is
+whichever suite happens to run last — `frontend.test.js`). `npm run test:frontend` measured counts
+**unchanged** on all 7 baseline keys (`htmlValidateErrors` 13, all `axeViolations_*` 0,
+`detectorWarnings` 17) — expected: Tasks 1-2 fixed a keyboard-only defect none of those gates can
+see (Finding C in the stage-13 directive). Keep suite count, every per-suite check count, and the 7
+baseline keys from going down.
