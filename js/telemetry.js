@@ -76,6 +76,12 @@
   var started = false;          // init() ran
   var flushTimer = null;
   var ended = false;
+  // Held until window 'load' + idle so the FIRST flush never competes with the
+  // boot path for a connection; every flush after that is on its own timer as
+  // before. armWhenSettled() flips this once, then re-arms if events queued up
+  // while it was waiting. error events bypass this entirely (push() flushes
+  // them immediately, see below).
+  var bootSettled = (typeof window === 'undefined');
 
   function now() { return Date.now(); }
   function since() { return now() - bootAt; }
@@ -224,8 +230,24 @@
   }
 
   function arm() {
-    if (flushTimer || !queue.length) return;
+    if (!bootSettled || flushTimer || !queue.length) return;
     flushTimer = setTimeout(function () { flushTimer = null; flush(); }, FLUSH_MS);
+  }
+
+  // Boot pays nothing for the FIRST batch: wait for 'load', then an idle tick
+  // (requestIdleCallback, or a setTimeout fallback for WebViews without it),
+  // before letting arm() schedule anything. Runs once; re-arms whatever queued
+  // up while it waited.
+  function armWhenSettled() {
+    var ric = (typeof window !== 'undefined' && window.requestIdleCallback) || function (cb) { setTimeout(cb, 1); };
+    function settle() { bootSettled = true; arm(); }
+    if (typeof document !== 'undefined' && document.readyState === 'complete') {
+      ric(settle);
+    } else if (typeof window !== 'undefined') {
+      window.addEventListener('load', function () { ric(settle); }, { once: true });
+    } else {
+      settle();
+    }
   }
 
   /* ---------------- capture ---------------- */
@@ -545,6 +567,7 @@
       if (A.state && A.state.settings && A.state.settings.diagnostics === false) optedOut = true;
     } catch (e) { }
     if (!on()) { queue.length = 0; return; }
+    armWhenSettled();
 
     push({
       k: 'session',

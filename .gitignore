@@ -41,6 +41,12 @@ skills-lock.json
 # local scratch output from flick/testing
 flick-output/
 
+# test/perf-bench.js's local MapLibre cache (--fetch-maplibre): a gitignored,
+# refillable copy of the two CDN files index.html loads, so `--idle` can boot
+# a real map instead of crashing out of the boot chain. Refill any time with
+# `node test/perf-bench.js --fetch-maplibre`.
+test/.cache/
+
 # Capacitor / Android build artifacts (the android/ source IS tracked; build outputs are not)
 www/
 # OTA hotfix bundles (scripts/pack-ota.js output — reproducible from www/, never commit)

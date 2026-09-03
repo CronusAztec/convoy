@@ -179,6 +179,46 @@ T.end('again');
 ok('the summary is sent exactly once', sends.length === 0);
 
 /* ================================================================== */
+group('client — the first flush waits for load + idle, not the boot path (T1.4)');
+
+{
+  // Same idiom test/visibility.test.js uses for setInterval: record timer
+  // calls instead of letting them really fire, so "waits for load+idle" is
+  // provable without a real 5s sleep. fire() runs a recorded callback on
+  // demand, in whatever order the assertions need.
+  const realSetTimeout = global.setTimeout;
+  const pending = [];
+  global.setTimeout = function (fn, ms) { const e = { fn: fn, ms: ms }; pending.push(e); return e; };
+  function fire(e) { pending.splice(pending.indexOf(e), 1); e.fn(); }
+
+  delete win.requestIdleCallback; // exercise the setTimeout(…,1) fallback, not a native rIC
+
+  T = loadTelemetry();
+  sends.length = 0;
+  T.init();
+
+  ok('init() queues the session event but posts nothing before load',
+    sends.length === 0 && T.snapshot().queued >= 1,
+    'sends=' + sends.length + ' queued=' + T.snapshot().queued);
+  ok('...and no flush timer is armed yet — arm() is held until settle()',
+    !pending.some(function (e) { return e.ms === 5000; }), JSON.stringify(pending.map(function (e) { return e.ms; })));
+
+  win.dispatchEvent({ type: 'load' });
+  const idleTimer = pending.find(function (e) { return e.ms === 1; });
+  ok('the \'load\' event schedules the idle-fallback tick', !!idleTimer, JSON.stringify(pending.map(function (e) { return e.ms; })));
+  if (idleTimer) fire(idleTimer);
+
+  const flushTimer = pending.find(function (e) { return e.ms === 5000; });
+  ok('settling arms the real FLUSH_MS timer — the batch is scheduled, not dropped', !!flushTimer,
+    JSON.stringify(pending.map(function (e) { return e.ms; })));
+  ok('...but still nothing has posted — the timer has not fired yet', sends.length === 0);
+  if (flushTimer) fire(flushTimer);
+  ok('once that timer fires, the batch posts', sends.length === 1, 'sends=' + sends.length);
+
+  global.setTimeout = realSetTimeout;
+}
+
+/* ================================================================== */
 group('client — Sentry envelope, when a DSN is configured');
 
 T = loadTelemetry({ sentryDsn: 'https://abc123@o42.ingest.sentry.io/1337' });

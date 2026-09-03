@@ -521,7 +521,14 @@
     if (speech) try { speech.cancel(); } catch (e) { }
     if (navAudio) try { navAudio.pause(); } catch (e) { }
   }
-  probeTts(); // detect self-hosted neural TTS once at load
+  // Was: probeTts() at parse time — an /api/tts/health round-trip on the boot
+  // path for an answer nothing needs until the first maneuver cue. Probe on the
+  // first route instead: that is minutes ahead of any cue, so Piper still wins
+  // the race, and boot pays nothing.
+  var ttsProbed = false;
+  if (A.store && A.store.on) A.store.on('route', function (r) {
+    if (r && !ttsProbed) { ttsProbed = true; probeTts(); }
+  });
 
   function cumulative(coords) {
     var cum = new Array(coords.length);

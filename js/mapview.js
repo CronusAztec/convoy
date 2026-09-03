@@ -79,7 +79,17 @@
   }
 
   /* =================== init =================== */
+  // MapLibre arrives from a CDN <script>; when that script never lands,
+  // `maplibregl` is an undeclared global and initMap()'s body below throws
+  // SYNCHRONOUSLY — before any Promise exists to reject. js/app.js's .catch()
+  // is attached to our return value, so it would never see a throw that
+  // happens producing that value. Convert the sync throw into a rejection so
+  // the one handler that knows what to do about a dead map actually runs.
   function init() {
+    try { return initMap(); } catch (e) { return Promise.reject(e); }
+  }
+
+  function initMap() {
     // Globe boot intro: no location is ever persisted, so until the user shares
     // a real position (⌖ button or a live GPS fix) we boot fully zoomed out on a
     // 3D globe; the first fix flies down to street level (landIntro). Needs

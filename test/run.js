@@ -8,7 +8,7 @@ const suites = ['physics.test.js', 'behaviour.test.js', 'boundary.test.js',
   'mailer.test.js', 'oauth.test.js', 'overpass.test.js',
   'serverpolicy.test.js', 'httpcache.test.js', 'globals.test.js', 'hotspots.test.js', 'net.test.js',
   'routegeo.test.js', 'voice.test.js', 'aircraft.test.js', 'riderarrows.test.js', 'telemetry.test.js', 'deletion.test.js',
-  'sdk-inventory.test.js', 'ota.test.js', 'admin.test.js', 'bugstats.test.js', 'browser.test.js', 'ghostbbox.test.js', 'fetchtimeout.test.js', 'partyresume.test.js', 'visibility.test.js', 'domids.test.js', 'chatlog.test.js', 'frontend.test.js', 'perf-bench.js'];
+  'sdk-inventory.test.js', 'ota.test.js', 'admin.test.js', 'bugstats.test.js', 'browser.test.js', 'ghostbbox.test.js', 'fetchtimeout.test.js', 'partyresume.test.js', 'visibility.test.js', 'domids.test.js', 'chatlog.test.js', 'frontend.test.js', 'mapboot.test.js', 'perf-bench.js'];
 let failed = 0;
 
 for (const s of suites) {

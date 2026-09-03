@@ -50,6 +50,37 @@ const { spawn } = require('child_process');
 const H = require('./harness');
 
 const ROOT = H.ROOT;
+const FETCH_MAPLIBRE = process.argv.includes('--fetch-maplibre');
+
+/* test/.cache/ — a gitignored, refillable local copy of the two MapLibre
+   files index.html loads from jsdelivr, so `--idle` can boot a REAL map
+   instead of crashing out of ~90% of js/app.js's boot chain the moment
+   `maplibregl` 404s (see the header note above and the reviewer finding this
+   fixes). Populated once via `--fetch-maplibre` (one fetch per file, never
+   implicit, never retried — COMMON RULES #8, shared production IP); absent by
+   default on a fresh checkout, which is fine — see startServer() below. */
+const CACHE_DIR = path.join(ROOT, 'test', '.cache');
+const MAPLIBRE_JS = 'maplibre-gl-5.24.0.min.js';
+const MAPLIBRE_CSS = 'maplibre-gl-5.24.0.min.css';
+const MAPLIBRE_CDN_JS = 'https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.min.js';
+const MAPLIBRE_CDN_CSS = 'https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.min.css';
+
+async function fetchMaplibreCache() {
+  fs.mkdirSync(CACHE_DIR, { recursive: true });
+  for (const [url, name] of [[MAPLIBRE_CDN_JS, MAPLIBRE_JS], [MAPLIBRE_CDN_CSS, MAPLIBRE_CSS]]) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('fetch failed (' + res.status + ') for ' + url);
+    const buf = Buffer.from(await res.arrayBuffer());
+    fs.writeFileSync(path.join(CACHE_DIR, name), buf);
+    console.log(name + ': ' + buf.length + ' bytes cached');
+  }
+}
+
+function mapLibreCachePaths() {
+  const js = path.join(CACHE_DIR, MAPLIBRE_JS);
+  const css = path.join(CACHE_DIR, MAPLIBRE_CSS);
+  return (fs.existsSync(js) && fs.existsSync(css)) ? { js, css } : null;
+}
 
 function findChromium() {
   const override = process.env.CONVOY_CHROMIUM;
@@ -65,7 +96,7 @@ function findChromium() {
 }
 
 const BIN = findChromium();
-if (!BIN) {
+if (!FETCH_MAPLIBRE && !BIN) {
   console.log('SKIP test/perf-bench.js — no headless Chromium under ~/.cache/ms-playwright/chromium_headless_shell-*/ ' +
     '(STATE.md "Headless Chromium — working recipe"); nothing measured, exit 0.');
   process.exit(0);
@@ -76,10 +107,20 @@ const MIME = {
   '.png': 'image/png', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json', '.ico': 'image/x-icon'
 };
 
-/* window.__lt/__iv/__to/__raf are cumulative counters from page-load, not deltas —
-   fine for a one-shot boot measurement, and exactly what --idle wants (a count
-   over its whole virtual-time window, which IS the idle window since nothing
-   else happens on this fixture before it). */
+/* window.__lt/__iv/__to/__raf are cumulative counters from page-load, not
+   deltas — fine for a one-shot boot measurement (COUNTERS below, used as-is
+   in boot mode). --idle needs a different starting line: with a real MapLibre
+   (mapLib:"local"), the whole boot chain (A.sim.start()'s rAF loop, HUD
+   cards, …) only starts once js/mapview.js's init() resolves, which can be
+   several seconds into the page's life — counting from page load would mix
+   real boot cost into the "idle" number. idleCounters() below gates every
+   counter behind window.__idleStarted, which flips true the moment
+   A.telemetry.step('map_ready') is observed (monkey-patched on) or after a
+   7 s fallback (1 s past js/mapview.js's own 6 s "boot must always continue"
+   timeout) — whichever comes first. Same gate whether mapLib is local or
+   absent: with it absent, js/mapview.js's init() rejects (Task 1's fix) and
+   'map_ready' is never stepped, so idle counting always starts at the 7 s
+   fallback there — a consistent, comparable cutoff either way. */
 const COUNTERS = '<script>\n' +
   'window.__iv=0;window.__to=0;window.__raf=0;window.__lt=0;\n' +
   'var _si=window.setInterval;window.setInterval=function(){window.__iv++;return _si.apply(window,arguments)};\n' +
@@ -88,7 +129,36 @@ const COUNTERS = '<script>\n' +
   'try{new PerformanceObserver(function(l){window.__lt+=l.getEntries().length}).observe({type:"longtask",buffered:true})}catch(e){}\n' +
   '</script>';
 
-function probeScript(delayMs, idle) {
+const IDLE_COUNTERS = '<script>\n' +
+  'window.__iv=0;window.__to=0;window.__raf=0;window.__lt=0;\n' +
+  'window.__idleStarted=false;window.__mapReadyMs=null;\n' +
+  'var _si=window.setInterval;window.setInterval=function(){if(window.__idleStarted)window.__iv++;return _si.apply(window,arguments)};\n' +
+  'var _st=window.setTimeout;window.setTimeout=function(){if(window.__idleStarted)window.__to++;return _st.apply(window,arguments)};\n' +
+  'var _rq=window.requestAnimationFrame;window.requestAnimationFrame=function(){if(window.__idleStarted)window.__raf++;return _rq.apply(window,arguments)};\n' +
+  'try{new PerformanceObserver(function(l){if(window.__idleStarted)window.__lt+=l.getEntries().length}).observe({type:"longtask",buffered:true})}catch(e){}\n' +
+  '(function(){\n' +
+  '  var waited=0;\n' +
+  '  function tryWrap(){\n' +
+  '    if(window.App&&window.App.telemetry&&!window.App.telemetry.__benchWrapped){\n' +
+  '      var orig=window.App.telemetry.step;\n' +
+  '      window.App.telemetry.step=function(name){\n' +
+  '        if(name==="map_ready"&&window.__mapReadyMs===null)window.__mapReadyMs=performance.now();\n' +
+  '        return orig.apply(this,arguments);\n' +
+  '      };\n' +
+  '      window.App.telemetry.__benchWrapped=true;\n' +
+  '    }\n' +
+  '  }\n' +
+  '  function poll(){\n' +
+  '    tryWrap();\n' +
+  '    waited+=50;\n' +
+  '    if(window.__mapReadyMs!==null||waited>=7000){window.__idleStarted=true;return;}\n' +
+  '    setTimeout(poll,50);\n' +
+  '  }\n' +
+  '  poll();\n' +
+  '})();\n' +
+  '</script>';
+
+function probeScript(delayMs) {
   return '<script>\n' +
     'window.addEventListener("load",function(){setTimeout(function(){\n' +
     '  var nav=performance.getEntriesByType("navigation")[0]||{};\n' +
@@ -99,7 +169,7 @@ function probeScript(delayMs, idle) {
     '    rafArmed:window.__raf||0,\n' +
     '    intervalsArmed:window.__iv||0,\n' +
     '    timeoutsArmed:window.__to||0,\n' +
-    '    idle:' + (idle ? 'true' : 'false') + '\n' +
+    '    idle:false\n' +
     '  };\n' +
     '  var p=document.createElement("pre");p.id="__probe";p.hidden=true;p.textContent=JSON.stringify(out);\n' +
     '  document.body.appendChild(p);\n' +
@@ -107,11 +177,41 @@ function probeScript(delayMs, idle) {
     '</script>';
 }
 
+// Idle probe: wait for window.__idleStarted (map_ready or the 7s fallback,
+// set by IDLE_COUNTERS above), THEN measure a further 30s window — not 30s
+// from page load, which is the fixture bug Task 2 exists to fix.
+function idleProbeScript(windowMs) {
+  return '<script>\n' +
+    'window.addEventListener("load",function(){\n' +
+    '  function waitStart(){\n' +
+    '    if(!window.__idleStarted){setTimeout(waitStart,50);return;}\n' +
+    '    setTimeout(function(){\n' +
+    '      var nav=performance.getEntriesByType("navigation")[0]||{};\n' +
+    '      var out={\n' +
+    '        dcl:Math.round(nav.domContentLoadedEventEnd||0),\n' +
+    '        load:Math.round(nav.loadEventEnd||0),\n' +
+    '        longTasks:window.__lt||0,\n' +
+    '        rafArmed:window.__raf||0,\n' +
+    '        intervalsArmed:window.__iv||0,\n' +
+    '        timeoutsArmed:window.__to||0,\n' +
+    '        idle:true,\n' +
+    '        mapReady:window.__mapReadyMs!==null,\n' +
+    '        mapReadyMs:window.__mapReadyMs===null?null:Math.round(window.__mapReadyMs)\n' +
+    '      };\n' +
+    '      var p=document.createElement("pre");p.id="__probe";p.hidden=true;p.textContent=JSON.stringify(out);\n' +
+    '      document.body.appendChild(p);\n' +
+    '    },' + windowMs + ');\n' +
+    '  }\n' +
+    '  waitStart();\n' +
+    '});\n' +
+    '</script>';
+}
+
 /* In-process server on an OS-assigned port. Every request is logged so the
    bench can report requests/gzipBytes/apiCalls without trusting the browser's
    own (CSP-stripped, non-production) Resource Timing entries for byte counts —
    we already have the real bytes on the way out. */
-function startServer(delayMs, idle) {
+function startServer(delayMs, idle, mapLibLocal) {
   const requests = [];
   const server = http.createServer((req, res) => {
     const p = decodeURIComponent(req.url.split('?')[0]);
@@ -130,8 +230,12 @@ function startServer(delayMs, idle) {
     if (p === '/') {
       let html = body.toString('utf8');
       html = html.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>\s*/i, '');
-      html = html.replace('<head>', '<head>\n' + COUNTERS);
-      html = html.replace('</body>', probeScript(delayMs, idle) + '\n</body>');
+      html = html.replace('<head>', '<head>\n' + (idle ? IDLE_COUNTERS : COUNTERS));
+      html = html.replace('</body>', (idle ? idleProbeScript(delayMs) : probeScript(delayMs)) + '\n</body>');
+      if (mapLibLocal) {
+        html = html.replace(MAPLIBRE_CDN_JS, '/test/.cache/' + MAPLIBRE_JS);
+        html = html.replace(MAPLIBRE_CDN_CSS, '/test/.cache/' + MAPLIBRE_CSS);
+      }
       body = Buffer.from(html);
     }
     const gz = zlib.gzipSync(body, { level: 9 }).length;
@@ -174,11 +278,17 @@ function parseProbe(dom) {
   return JSON.parse(m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'));
 }
 
-/* One run: fresh server (so its request log starts empty) + one navigation. */
-async function oneRun(idle) {
+/* One run: fresh server (so its request log starts empty) + one navigation.
+   mapLib: null (cache cold, unchanged legacy behaviour) or the cache paths
+   from mapLibreCachePaths() (splice in a real MapLibre, --idle only). */
+async function oneRun(idle, mapLib) {
   const delayMs = idle ? 30000 : 300;
-  const virtualTimeBudget = idle ? 32000 : 1500;
-  const { server, requests, port } = await startServer(delayMs, idle);
+  // Idle's window no longer starts at page load (see IDLE_COUNTERS/
+  // idleProbeScript above) — it starts at map_ready or a 7s fallback, THEN
+  // runs 30s. Budget covers worst case: ~8s of navigation/boot + 7s fallback
+  // + 30s window, with room to spare.
+  const virtualTimeBudget = idle ? 45000 : 1500;
+  const { server, requests, port } = await startServer(delayMs, idle, !!mapLib);
   let probe = null;
   let failure = null;
   try {
@@ -202,7 +312,8 @@ async function oneRun(idle) {
   return {
     dcl: probe.dcl, load: probe.load, longTasks: probe.longTasks,
     requests: assets.length, gzipBytes, apiCalls,
-    rafArmed: probe.rafArmed, intervalsArmed: probe.intervalsArmed, timeoutsArmed: probe.timeoutsArmed
+    rafArmed: probe.rafArmed, intervalsArmed: probe.intervalsArmed, timeoutsArmed: probe.timeoutsArmed,
+    mapReady: probe.mapReady === true, mapReadyMs: typeof probe.mapReadyMs === 'number' ? probe.mapReadyMs : null
   };
 }
 
@@ -216,17 +327,18 @@ function medianOf(runs, key) {
   return median(runs.map((r) => r[key]));
 }
 
-async function bench(idle, runCount) {
+async function bench(idle, runCount, mapLib) {
   const runs = [];
   for (let i = 0; i < runCount; i++) {
-    const r = await oneRun(idle);
+    const r = await oneRun(idle, mapLib);
     if (r.failure) throw new Error('run ' + (i + 1) + '/' + runCount + ' failed: ' + r.failure);
     runs.push(r);
   }
   if (idle) {
     return {
-      mode: 'idle', cspStripped: true, runs: runCount,
+      mode: 'idle', cspStripped: true, runs: runCount, mapLib: mapLib ? 'local' : 'absent',
       idle: {
+        mapReady: runs.every((r) => r.mapReady), mapReadyMs: medianOf(runs, 'mapReadyMs'),
         rafPerSec: Math.round((medianOf(runs, 'rafArmed') / 30) * 100) / 100,
         longTasks30s: medianOf(runs, 'longTasks')
       }
@@ -249,11 +361,16 @@ async function main() {
     console.log('NOTE: --cpu (DevTools Emulation.setCPUThrottlingRate) is not implemented — ' +
       'it has no CLI flag, only the CDP protocol; STATE.md handoff files it as stretch. Running at cpu=1.');
   }
+  // mapLib is only relevant to --idle: boot mode's own metrics (requests,
+  // gzipBytes, apiCalls) must keep meaning "same-origin only", which a local
+  // MapLibre script would change. Cold checkouts (no test/.cache/) get
+  // mapLib:"absent" here and always did — see mapLibreCachePaths().
+  const mapLib = idle ? mapLibreCachePaths() : null;
 
   H.group('perf-bench — lab boot cost, real Chromium, same-origin only (' + BIN + ')');
   let result;
   try {
-    result = await bench(idle, runCount);
+    result = await bench(idle, runCount, mapLib);
   } catch (e) {
     H.ok('bench completed ' + runCount + ' navigation(s) and parsed a probe from each', false, e.message);
     process.exit(H.report());
@@ -262,9 +379,11 @@ async function main() {
   console.log(JSON.stringify(result));
 
   if (idle) {
-    H.ok('idle bench (30 s virtual time on the map shell) produced rafPerSec + longTasks30s',
+    H.ok('idle bench (30 s virtual time on the map shell, gated on map_ready/7s fallback) produced rafPerSec + longTasks30s',
       typeof result.idle.rafPerSec === 'number' && typeof result.idle.longTasks30s === 'number',
       JSON.stringify(result.idle));
+    H.ok('mapLib is reported (' + result.mapLib + ') so the number is never read without its fixture',
+      result.mapLib === 'local' || result.mapLib === 'absent', result.mapLib);
   } else {
     H.ok('boot bench produced a positive DOMContentLoaded time', result.dcl > 0, 'dcl=' + result.dcl);
     H.ok('boot bench counted same-origin asset requests', result.requests > 0, 'requests=' + result.requests);
@@ -273,4 +392,8 @@ async function main() {
   process.exit(H.report());
 }
 
-main();
+if (FETCH_MAPLIBRE) {
+  fetchMaplibreCache().then(() => process.exit(0)).catch((e) => { console.error('--fetch-maplibre failed: ' + e.message); process.exit(1); });
+} else {
+  main();
+}
