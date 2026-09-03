@@ -24,13 +24,15 @@ Each bug has:
 
 **Severity legend:** `critical` = security hole / data loss / hard crash · `high` = broken feature / resource leak · `medium` = degraded UX / latent bug · `low` = polish / a11y.
 
-**Jump to a section:** [Frontend (23)](#frontend) · [Server (30)](#server) · [Android (20)](#android) · [UI/UX (22)](#uiux) · [Runtime (6)](#runtime)
+**Jump to a section:** [Frontend (23)](#frontend) · [Server (30)](#server) · [Android (20)](#android) · [UI/UX (23)](#uiux) · [Runtime (6)](#runtime)
 
-### Top priorities (fix first — Server/Runtime rows re-verified 2026-09-03 and the whole Frontend ledger re-verified 2026-09-03 (cycle 60), see each entry's `- **Status:**` line; Android rows not yet re-verified)
+### Top priorities (fix first — Server/Runtime rows re-verified 2026-09-03, the whole Frontend ledger re-verified 2026-09-03 (cycle 60) and the whole UI/UX ledger re-verified 2026-09-03 (cycle 61), see each entry's `- **Status:**` line; Android rows not yet re-verified)
 
 | ID | Why |
 |---|---|
 | `frontend-001` … `frontend-023` | **Frontend ledger re-verified 2026-09-03 (cycle 60, C4a): 0 OPEN / 21 FIXED / 2 STALE — nothing in Frontend is open.** All six "high" entries (001/002/003/008/009/022) are FIXED: 001/008/009/010's null guards were already in the tree and the ids they dereference are executed by `test/domids.test.js` (31st suite, group D4); 003's unreachable solo physics was deleted this cycle (−1622 B gzip); 005 and 014 are STALE (premises that cannot occur). Residual for C4b: 015's `pollClose` timer on chained profile opens |
+| `ui-002` | Convoy chat log **froze at message 100** — the incremental render was keyed on a length the 100-entry ring buffer holds constant, so every later line was delivered, stored and never drawn until a roster change rebuilt the panel; only the inbound site trimmed. — **FIXED 2026-09-03 (cycle 61)**, `test/chatlog.test.js` (32nd suite, RED 22/13 first) |
+| `ui-001` … `ui-022` | **UI/UX ledger re-verified 2026-09-03 (cycle 61, C4b): 5 OPEN / 17 FIXED / 1 STALE.** 002 re-filed and fixed (above); 008/011/012 fixed with an executed group in `test/frontend.test.js`; 009/010 were dead (STALE / already fixed); 005 and 007 are real but phone-only layout calls, routed to the human's browser look; 020/021 visual-verification-pending; 022 filed (chat scroll yank, low) |
 | `server-032` | Convoy chat was **never delivered in live mode** — the fan-out envelope's timestamp was an undefined name (`now`), the handler threw before its first `send()`, and the dispatcher's catch swallowed it on every message since the initial commit. — **FIXED 2026-09-03 (cycle 55)**, with a class gate (`test/globals.test.js`) |
 | `server-008` | `X-Forwarded-For` is trusted blindly → defeats **every** per-IP rate limit and connection ceiling. Trivial DoS. — **FIXED 2026-09-03** |
 | `runtime-001` / `runtime-002` | Concurrent `/api/register` and `/api/recover` create duplicate accounts / burn one code 5×. Auth data integrity. — **STALE / FIXED 2026-09-03** (the local-JSON store is gone; the recovery burn is a conditional DELETE) |
@@ -716,13 +718,14 @@ Each bug has:
 ---
 
 ## UI/UX
-*HTML + CSS + DOM wiring — 14 bugs (4 fixed: ui-001, ui-004, ui-006, ui-014)*
+*HTML + CSS + DOM wiring — 23 entries, re-verified 2026-09-03 (cycle 61, aspect C milestone C4b): **5 OPEN / 17 FIXED / 1 STALE** — see each entry's `- **Status:**` line (machine-checked by `test/bugstats.test.js`) and the roll-up under Stats. OPEN: ui-005 / ui-007 (real, phone-only layout calls — routed to the human's browser look), ui-020 / ui-021 (visual-verification-pending), ui-022 (filed this cycle, low). ui-002 was re-filed: its premise was stale but the same site hid the chat-log freeze fixed this cycle. Older prose `- **Resolution:**` lines are the pre-C4b notes, kept as history*
 
 ### BUG ui-001 — FIXED (verified cycle 0 stage 5, 2026-09-03)
 - **Severity:** high
+- **Status:** FIXED (re-verified 2026-09-03) — the `.m-player .m-dot` rule in `css/styles.css` still reads clean (three shadow layers, no orphan token); unchanged since the cycle-0 check
 - **File:** `css/styles.css:1810` (was `:1467-1473` when filed; line numbers drift as the file grows — re-verify before trusting any BUGS.md line number)
 - **Title:** Stray duplicate line in `.m-player .m-dot` `box-shadow` corrupts the rule (orphan token after the `;`)
-- **Status:** Already fixed by the time this was re-checked; the rule reads clean:
+- **Resolution:** Already fixed by the time this was re-checked; the rule reads clean:
   ```
   .m-player .m-dot {
     box-shadow:
@@ -733,21 +736,23 @@ Each bug has:
   ```
   No orphan line, no duplicate. Left in the file as a record that this was checked, not assumed.
 
-### BUG ui-002
+### BUG ui-002 — FIXED (cycle 61 stage 63, 2026-09-03) — re-filed: the null-guard premise was stale, the freeze at the same site was real
 - **Severity:** high
-- **File:** `js/ui.js:2488` (cross-ref `index.html:153`)
-- **Title:** `getElementById('chat-log')` returns null after `renderConvoy` wipes `body.innerHTML` → incoming chat messages dropped from the live log until the panel is reopened
-- **Repro:** Open the Convoy panel; receive a chat message while another `'party'` event fires in the same frame. Message doesn't appear until close/reopen.
-- **Impact:** Dropped/hidden chat messages; users think messages were never sent.
-- **Fix:** Cache the chat log element reference, or have `renderConvoy` preserve the existing `#chat-log` node rather than wiping `body.innerHTML`.
+- **Status:** FIXED (re-verified 2026-09-03) — re-filed against the real defect at the same site: `js/ui.js:809` `renderChatInto()` keyed its incremental render on `chat.length` alone, and the 100-entry ring trim (then in `js/net.js`) holds the length constant once full, so every line from #101 on was delivered, stored in `S.party.chat` and never drawn until a roster change rebuilt the panel. Now keyed on entry identity (`log._last`, O(shifted) removal from the top, a replaced array rebuilds) and every push site — inbound `js/net.js:457`, own / system / NPC lines — trims through `js/party.js:125` `pushChat()` with the one exported ceiling `A.party.CHAT_MAX`; executed by `test/chatlog.test.js` (32nd suite, 35 checks, **RED 22 failed / 13 passed** against `67ee0bb`, the last DOM line stuck at "msg 100"). The filed premise (a null `#chat-log` after `renderConvoy`) was already stale: the listener's `if (log)` guard exists and a missed event self-heals on the next render
+- **File:** `js/ui.js:809` (`renderChatInto`; cross-ref `js/net.js:457` chat handler, `js/party.js:125` `pushChat`)
+- **Title:** Convoy chat log froze at message 100 — the incremental render was keyed on `chat.length`, which the 100-entry ring buffer holds constant once full, so every later message was delivered, stored and never drawn (originally filed as "`#chat-log` is null after `renderConvoy`", a premise that no longer held)
+- **Repro (pre-fix):** two clients in one convoy, 101 messages — or `node test/chatlog.test.js` against `67ee0bb`: after five more lines the log's last line is still "msg 100" while state holds 6…105; any `'party'` event (join / leave / lost signal / reconnect) rebuilds the panel and the backlog appears all at once. Only the inbound site trimmed, so your own lines and system lines grew the array without bound and crossed the freeze threshold through a path the cap was meant to cover.
+- **Impact:** chat goes silent in exactly the stable convoys people talk in — intermittent and unreportable ("it works, then stops, then five lines show up at once"); the symptom of the cycle-55 server outage, reproduced client-side. A slow memory leak per long convoy.
+- **Fix (shipped):** `renderChatInto` remembers the entry it drew last and resyncs by identity — k shifted entries → k lines removed from the top, new lines appended, never a repaint; `A.party.pushChat(entry)` is the single push + trim + emit for all four sites, `CHAT_MAX` (100, ≥ the server's own backlog cap, pinned) the single ceiling. Scroll behaviour deliberately untouched → [[BUG ui-022]].
 
 ### BUG ui-003 — FIXED (cycle 3 stage 14, 2026-09-03)
 - **Severity:** high
+- **Status:** FIXED (re-verified 2026-09-03) — `js/ui.js` `setShellInert` / `openOverlay` / `beginModalGate` still carry the trap, the `dismissable` opt-out and the never-dismissing gate; executed by `test/frontend.test.js` `testModalFocusTrap()`, green this cycle
 - **File:** `index.html:275` (cross-ref `js/ui.js` — `setShellInert`/`beginModalGate`, `openPanel`'s
   keydown handler in `wireDock`, `showAuth`/`showConsentGate`/`showResetPassword`/`showOAuthSetup`,
   `openOverlay`/`closeOverlay`)
 - **Title:** `#onboarding` modal had no Escape handler, no backdrop-click close, no focus trap, body scroll not locked
-- **Status:** Three of the four original sub-claims were real; the fourth was not. "Body scroll not
+- **Resolution:** Three of the four original sub-claims were real; the fourth was not. "Body scroll not
   locked" does not apply — `css/styles.css:100-101` already sets `html, body { overflow: hidden }`
   globally, so there was nothing to lock. The other three are fixed:
   - **Focus trap:** every `#onboarding`-filling function (the auth gate, re-consent, password
@@ -789,6 +794,7 @@ Each bug has:
 
 ### BUG ui-003b — FIXED (cycle 50 stage 18, 2026-09-03) — regression introduced by the ui-003 fix
 - **Severity:** critical
+- **Status:** FIXED (re-verified 2026-09-03) — `js/ui.js` `shellTrapped` boolean + `setInviteToastsInert`; executed by `test/frontend.test.js` `testShellRestoreInvariant()` (rows a–k) and, in a real Chromium when one is present, `test/browser.test.js` (SKIP-not-fail otherwise)
 - **File:** `js/ui.js` — `setShellInert` (cross-ref `openOverlay`/`closeOverlay`/`beginModalGate`,
   `js/race.js` `renderLobby`, `inviteToast`)
 - **Title:** A second `openOverlay()` with no `closeOverlay()` between left every shell child `inert`
@@ -845,12 +851,14 @@ Each bug has:
 
 ### BUG ui-004 — FIXED (verified cycle 0 stage 5, not this stage's work)
 - **Severity:** medium
+- **Status:** FIXED (re-verified 2026-09-03) — `index.html:58-60` `#search-input` carries `role="combobox" aria-expanded aria-controls aria-autocomplete aria-label`, and `js/ui.js` toggles `aria-expanded` with the results list
 - **File:** `index.html:58-60` (was `:50-54`)
 - **Title:** Search input behaves as a combobox but lacks `role="combobox"`, `aria-expanded`, `aria-controls`
-- **Status:** `#search-input` carries `role="combobox" aria-expanded="false" aria-controls="search-results" aria-autocomplete="list" aria-label="Search a destination"`, and `js/ui.js:2789` toggles `aria-expanded` on the input whenever the results list's `hidden` state changes (the surrounding comment there notes this was itself a prior fix — "bare `results.hidden = x` left aria-expanded stuck"). Both the markup and the runtime behaviour match the fix this bug asked for.
+- **Resolution:** `#search-input` carries `role="combobox" aria-expanded="false" aria-controls="search-results" aria-autocomplete="list" aria-label="Search a destination"`, and `js/ui.js:2789` toggles `aria-expanded` on the input whenever the results list's `hidden` state changes (the surrounding comment there notes this was itself a prior fix — "bare `results.hidden = x` left aria-expanded stuck"). Both the markup and the runtime behaviour match the fix this bug asked for.
 
 ### BUG ui-005
 - **Severity:** medium
+- **Status:** OPEN (re-verified 2026-09-03) — half real: `css/styles.css:312` `#search-clear` is `width: 30px; height: 30px` (below the 44×44 WCAG 2.5.5 minimum). The "no keyboard equivalent" half is stale — it is a real `<button type="button">` with `aria-label="Clear search"` (`index.html:61`), tab-reachable once revealed. Not fixed blind: growing a hit area inside the tight search bar can overlap the input's text — routed to the human's browser look (STATE.md human-only item 4)
 - **File:** `index.html:61-63` (was `:51-53`)
 - **Title:** `#search-clear` is a 30×30 px tap target (below the 44×44 minimum) with no keyboard equivalent
 - **Repro:** On mobile, type in search; the × button is hard to tap; no keyboard shortcut to clear.
@@ -859,9 +867,10 @@ Each bug has:
 
 ### BUG ui-006 — FIXED (cycle 0 stage 5, 2026-09-03)
 - **Severity:** medium
+- **Status:** FIXED (re-verified 2026-09-03) — `index.html` `#radar-alerts` is a `<section aria-live="polite" aria-label="Radar alerts">`: a landmark and a live region
 - **File:** `index.html:218` (was `:192`)
 - **Title:** `#radar-alerts` has no `role`/`aria-live`; radar alerts never announced to AT (safety-critical)
-- **Status:** `aria-live="polite"` was already present when re-checked this stage. The element was still a
+- **Resolution:** `aria-live="polite"` was already present when re-checked this stage. The element was still a
   `<div>`, which html-validate's `prefer-native-element` rule flagged (no explicit `role` was set at the
   time, so it also had no landmark role at all for non-live-region purposes) — converted to
   `<section id="radar-alerts" aria-live="polite" aria-label="Radar alerts">`, which carries the implicit
@@ -870,6 +879,7 @@ Each bug has:
 
 ### BUG ui-007
 - **Severity:** medium
+- **Status:** OPEN (re-verified 2026-09-03) — a real tie: `#wt-overlay` (`css/styles.css:2022`) and `.maplibregl-popup` (`css/styles.css:1895`) both sit at `z-index: 6`, with four more rules at 6 (lines 1235, 2600, 3123, 3263), so paint order decides whether PTT is tappable under a popup. Not fixed blind: a stacking-order change needs eyes on a phone — routed to the human's browser look (STATE.md human-only item 4)
 - **File:** `css/styles.css:1671-1680` (cross-ref `index.html:177-187`)
 - **Title:** `#wt-overlay` shares z-index 6 with ETA card and popups → PTT button can become un-tappable
 - **Repro:** On a phone, start navigating and join a convoy — eta card, wt-overlay, and popups share z-index 6; paint order decides what's on top.
@@ -878,6 +888,7 @@ Each bug has:
 
 ### BUG ui-008
 - **Severity:** medium
+- **Status:** FIXED (re-verified 2026-09-03) — the `aria-pressed` half was already fixed at runtime before this mission (`js/ui.js:2954` `syncGlobalChip()` mirrors `S.settings.showGlobal`, commit effee44 — the cycle-61 directive grepped only `index.html`) and only the static markup lacked it: `index.html:85` now declares `aria-pressed="false"` at parse time; executed by `test/frontend.test.js` `testAriaState()` (the state flipped both ways through the real sync, the `'global'` listener wiring pinned by source, no other chip claims the attribute). The chips-over-search overlap half is a phone-only layout claim — added to the human's browser look (STATE.md human-only item 4)
 - **File:** `index.html:64-77` (cross-ref `js/ui.js:2011-2013`)
 - **Title:** Toggling chips never sets `aria-pressed`; chips can collide with the search bar on small screens
 - **Repro:** On a ~360 px phone with the keyboard up, the chips row wraps over map controls; toggling Global gives no `aria-pressed` feedback.
@@ -886,6 +897,7 @@ Each bug has:
 
 ### BUG ui-009
 - **Severity:** medium
+- **Status:** STALE (re-verified 2026-09-03) — the premise is gone: the id `logoShine` is absent from `index.html` and `js/ui.js`; `authHeader()` (`js/ui.js:3138`) clones `.brand-logo`, whose SVG carries no `<defs>` and no id, so there is nothing to duplicate
 - **File:** `index.html:28-44, 2093-2097`
 - **Title:** `authHeader()` clones the brand SVG, duplicating `<linearGradient id="logoShine">` in the DOM
 - **Repro:** Open the auth screen; inspect the DOM — two `#logoShine` elements.
@@ -894,6 +906,7 @@ Each bug has:
 
 ### BUG ui-010
 - **Severity:** medium
+- **Status:** FIXED (re-verified 2026-09-03) — `js/state.js:315` sets `--accent-ink` from `U.bestInk(hex)` (`js/util.js:133`, a real luminance / contrast pick) and every `.ctl-accent`-family rule in `css/styles.css` reads `var(--accent-ink, #02101a)`; the literal is only the pre-JS fallback
 - **File:** `css/styles.css:398, 598-604`
 - **Title:** `.ctl-accent` hardcodes `color:#02101a` on user-recolorable `--accent`; dark accents (Electric Violet, etc.) fail contrast
 - **Repro:** Set accent to Electric Violet (#9b4dff); recenter/primary buttons show dark text on violet — ratio ~3.5:1 (below AA 4.5:1).
@@ -902,6 +915,7 @@ Each bug has:
 
 ### BUG ui-011
 - **Severity:** low
+- **Status:** FIXED (re-verified 2026-09-03) — `js/ui.js:44` `openPanel()` sets `aria-current="page"` on the active dock button and removes it from the rest — Map when no panel is open (pinned: never cleared); `index.html:180` declares it on Map at parse time; `aria-expanded` kept alongside. Executed by `test/frontend.test.js` `testAriaState()` (nearby → profile → null, exactly one at a time)
 - **File:** `index.html:179-197` (was `:156-174`)
 - **Title:** Dock `aria-expanded` is wrong semantics for nav tabs; "Map" never marked `aria-current`
 - **Repro:** With a screen reader, navigate the dock — no tab announced as the current page.
@@ -910,6 +924,7 @@ Each bug has:
 
 ### BUG ui-012
 - **Severity:** low
+- **Status:** FIXED (re-verified 2026-09-03) — `js/ui.js:3341` the three consent boxes carry `aria-required="true"` (register and guest forms); `showErr()` (`js/ui.js:3221`) gives the error node an id and marks the input(s) at fault `aria-invalid="true"` + `aria-describedby` → that node; the register form now validates username / password (6+, pinned equal to the rule in `server/server.js`) / email client-side so the field at fault is known. Executed by `test/frontend.test.js` `testAriaState()` (submit empty → the links resolve, the innocent field is not blamed, a fixed field is cleared)
 - **File:** `index.html:275` (was `:249`; cross-ref `js/ui.js:2366-2407`)
 - **Title:** Register/guest form: pledge checkbox has no `aria-required`; errors not `aria-describedby`/`aria-invalid` linked to inputs
 - **Repro:** Open Create account, leave fields empty, check pledge, click Create — error appears but inputs aren't marked invalid for AT.
@@ -918,6 +933,7 @@ Each bug has:
 
 ### BUG ui-013 — FIXED (cycle 3 stage 14, 2026-09-03)
 - **Severity:** low
+- **Status:** FIXED (re-verified 2026-09-03) — `js/ui.js:27` `openPanel()` sets `inert` on every closed `.panel`; executed by `test/frontend.test.js` `testClosedPanelsInert()`
 - **File:** `css/styles.css:482-524` (cross-ref `index.html:146-170`; fix in `js/ui.js` — `openPanel`)
 - **Title:** Closed panels translate off-screen but are not `inert`/`aria-hidden` initially → off-screen focusable tab stops
 - **Magnitude (measured, not the ~4 originally assumed):** panels are built lazily by
@@ -928,7 +944,7 @@ Each bug has:
   `aria-hidden-focus` WCAG failure (a screen-reader user tabs to a control the reader refuses to
   announce), and `aria-hidden` alone never removes anything from sequential focus navigation in
   the first place.
-- **Status:** `openPanel`'s existing `.panel` loop (already toggling `aria-hidden`) now also sets
+- **Resolution:** `openPanel`'s existing `.panel` loop (already toggling `aria-hidden`) now also sets
   `inert` on every panel that isn't the one being opened, and removes it from the one that is.
   `inert` blocks both mouse and keyboard/AT reach for a subtree, unlike `opacity:0` +
   `pointer-events:none` (mouse only) or `aria-hidden` (AT hint only, no focus effect). No new
@@ -945,6 +961,7 @@ Each bug has:
 
 ### BUG ui-014 — FIXED (found and fixed cycle 0 stage 5, 2026-09-03)
 - **Severity:** high
+- **Status:** FIXED (re-verified 2026-09-03) — `index.html` `<head>` ends at the real favicon; `test/frontend.test.js` `testDocumentStructure()` pins body.firstChild, the stylesheet inside `<head>` and no top-level `<path>`
 - **File:** `index.html:15` (single line)
 - **Title:** Orphan SVG-favicon fragment terminates `<head>` early, pushing every stylesheet/script into `<body>`
 - **Found by:** `test/frontend.test.js` (Milestone 1's jsdom harness) surfaced this indirectly via inflated
@@ -969,6 +986,7 @@ Each bug has:
 
 ### BUG ui-015 — FIXED (cycle 2 stage 8, 2026-09-03)
 - **Severity:** low
+- **Status:** FIXED (re-verified 2026-09-03) — `index.html` `#radar-dock` is a `<section aria-label="Radar controls">`; axe `region` is 0 on all six surfaces (`test/frontend-baseline.json`)
 - **File:** `index.html:241` (was `<div id="radar-dock" role="group" ...>`)
 - **Title:** `#radar-dock` sat outside every ARIA landmark → axe `region` violation on all six tested surfaces
 - **Found by:** cycle-1 IMPROVE stage ran axe directly (the harness only prints violation detail on
@@ -984,6 +1002,7 @@ Each bug has:
 
 ### BUG ui-016 — FIXED (cycle 2 stage 8, 2026-09-03)
 - **Severity:** high
+- **Status:** FIXED (re-verified 2026-09-03) — `js/ui.js` `mkRow()` names every toggle through `aria-labelledby` with a never-reused id counter; `axeViolations_profile` 0 in `test/frontend-baseline.json`, uniqueness pinned by `test/frontend.test.js` `testGeneratedIdsUnique()`
 - **File:** `js/ui.js` — `mkToggle()` (~line 199) via `mkRow()` (~line 2417), 42 call sites
 - **Title:** Every settings toggle switch had no accessible name — axe `button-name`, 43 nodes on
   the profile panel alone
@@ -998,6 +1017,7 @@ Each bug has:
 
 ### BUG ui-017 — FIXED (cycle 2 stage 8, 2026-09-03)
 - **Severity:** medium
+- **Status:** FIXED (re-verified 2026-09-03) — `js/ui.js` `mkField()` pairs a real `<label for>` with its control; `axeViolations_profile` 0 in `test/frontend-baseline.json`
 - **File:** `js/ui.js:111` (`mkField()`), 66 call sites
 - **Title:** Form fields rendered a visible `<label>` that was never associated with its control —
   axe `label` (3 nodes, range sliders) + `select-name` (2 nodes)
@@ -1011,6 +1031,7 @@ Each bug has:
 
 ### BUG ui-018 — FIXED (cycle 2 stage 8, 2026-09-03)
 - **Severity:** medium
+- **Status:** FIXED (re-verified 2026-09-03) — `js/ui.js` `.dot-color` swatch inputs carry `aria-label`; `axeViolations_profile` 0 in `test/frontend-baseline.json`
 - **File:** `js/ui.js` — custom-theme color inputs (~line 2022) and map-dot color inputs (~line 2070)
 - **Title:** `.dot-color` swatch inputs relied on `title` alone for a name — axe `label-title-only`,
   11 nodes
@@ -1022,6 +1043,7 @@ Each bug has:
 
 ### BUG ui-019 — FIXED (cycle 2 stage 8, 2026-09-03)
 - **Severity:** medium
+- **Status:** FIXED (re-verified 2026-09-03) — `js/ui.js` `mkIconGrid()` and the convoy flag row carry `aria-label` + `aria-pressed`; `axeViolations_convoy` 0 in `test/frontend-baseline.json`
 - **File:** `js/ui.js` — `mkIconGrid()` (~line 270, rider insignia picker) and the convoy flag row
   (~line 592)
 - **Title:** Icon-picker buttons had no accessible name at all — axe `button-name`, 3 nodes on the
@@ -1035,6 +1057,7 @@ Each bug has:
 
 ### BUG ui-020 — visual-verification-pending (cycle 2 stage 10, 2026-09-03)
 - **Severity:** low
+- **Status:** OPEN (re-verified 2026-09-03) — visual-verification-pending — needs the human's browser look (a headless run measured `.rd-limit` at 59.2 px against its 46 px min-width, STATE.md; a phone glance at the radar dock closes it either way)
 - **File:** `css/styles.css:2463` (`.rd-limit span`)
 - **Title:** speed-limit-sign "LIMIT" caption grew 8px→12px (typography floor) and may widen the
   badge past its 46px `min-width`
@@ -1051,6 +1074,7 @@ Each bug has:
 
 ### BUG ui-021 — visual-verification-pending (cycle 2 stage 10, 2026-09-03)
 - **Severity:** low
+- **Status:** OPEN (re-verified 2026-09-03) — visual-verification-pending — needs the human's browser look (the routing / drag progress-bar glow at partial fill; the headless attempt was inconclusive, STATE.md)
 - **File:** `css/styles.css:1256` (`.progress i`) and `css/styles.css:2818` (`.dragy-prog i`)
 - **Title:** progress-bar fill glow (`box-shadow: 0 0 8px` / `0 0 10px`) is horizontally compressed
   by the new `transform: scaleX()` fill technique at partial fill
@@ -1067,6 +1091,15 @@ Each bug has:
   here.
 - **Ships to users when:** `node release.js --ota` (not done by any agent this mission — applies to
   both ui-020 and ui-021, and to the rest of this stage's changes).
+
+### BUG ui-022 — filed cycle 61 stage 63, 2026-09-03 (found by the cycle-61 improve stage while re-verifying ui-002)
+- **Severity:** low
+- **Status:** OPEN (re-verified 2026-09-03) — deliberately left alone in the cycle that fixed ui-002: it is a behaviour change that needs an "am I already at the bottom?" heuristic and its own RED/GREEN story, and bundling it with a correctness fix would have made that story unreadable
+- **File:** `js/ui.js:809` (`renderChatInto`, the closing `log.scrollTop = log.scrollHeight`)
+- **Title:** Every incoming chat line yanks the log to the bottom, even when the rider has scrolled up to read the backlog
+- **Repro:** open the Convoy panel in a talkative convoy, scroll up a screen or two, wait for the next line — the view jumps to the newest message.
+- **Impact:** the backlog is unreadable while the convoy is active; minor, but it is the convoys people talk in.
+- **Fix:** pin to the bottom only when the log was already at (or within a line of) the bottom before the append — compare `scrollTop + clientHeight` with `scrollHeight` before the new lines land, otherwise leave `scrollTop` alone (optionally a "new messages ↓" affordance).
 
 ---
 
@@ -1205,15 +1238,15 @@ this table ever drifts from what's actually here.
 | Frontend | 0 | 6 | 16 | 1 | 23 | (all six highs — 001/002/003/008/009/022 — FIXED; **0 OPEN / 21 FIXED / 2 STALE** after the 2026-09-03 cycle-60 re-verification of every entry: 001/002/004/006/007/008/009/010/011/016/018 were phantoms fixed in earlier cycles and never re-statused, 003 deleted in cycle 60, 005/014 STALE, 015 FIXED as re-scoped with a residual for C4b, 012/013/017 re-statused cycle 58, 019 cycle 52, 020 cycle 57, 021 cycle 59, 022/023 cycle 58; roll-up below) |
 | Server | 5 | 11 | 15 | 1 | 32 | (server-003/006/008/011/032 critical — 003/008/032 FIXED, 006 STALE, 011 OPEN-latent; 5 OPEN / 24 FIXED / 3 STALE after the 2026-09-03 re-verification, the cycle-54 B3b fixes of 002 + 020, the cycle-55 fixes of 032 + 033, the cycle-56 fixes of 017 + 034 and the cycle-58 seat hold 035, roll-up below) |
 | Android | 3 | 8 | 8 | 1 | 20 | (android-001/002/003 critical) |
-| UI/UX | 1 | 5 | 10 | 6 | 22 | (ui-001/004/006/013/014/015/016/017/018/019/003/003b fixed; ui-020/021 visual-verification-pending, unresolved without a browser) |
+| UI/UX | 1 | 5 | 10 | 7 | 23 | (**5 OPEN / 17 FIXED / 1 STALE** after the 2026-09-03 cycle-61 re-verification of every entry: 002 re-filed and FIXED — the chat log froze at message 100 — with `test/chatlog.test.js`; 008/011/012 FIXED with `testAriaState()`; 010 was already fixed, 009 STALE; 005/007 OPEN as phone-only layout calls, 020/021 visual-verification-pending, 022 filed; roll-up below) |
 | Runtime | 0 | 2 | 3 | 1 | 6 | (runtime-001 STALE, the other five FIXED — re-verified 2026-09-03) |
 | Add | 0 | 1 | 1 | 2 | 4 | |
 | Perf | 0 | 0 | 1 | 0 | 1 | |
-| **Total** | **9** | **33** | **54** | **12** | **108** |
+| **Total** | **9** | **33** | **54** | **13** | **109** |
 
-### Open-status roll-up (Server + Runtime + Frontend — re-verified 2026-09-03)
+### Open-status roll-up (Server + Runtime + Frontend + UI/UX — re-verified 2026-09-03)
 
-Computed from the per-entry `- **Status:**` lines added by the cycle-53 B3 truth pass (Server + Runtime) and the cycle-60 C4a pass (Frontend). `test/bugstats.test.js`
+Computed from the per-entry `- **Status:**` lines added by the cycle-53 B3 truth pass (Server + Runtime), the cycle-60 C4a pass (Frontend) and the cycle-61 C4b pass (UI/UX). `test/bugstats.test.js`
 recomputes these numbers from the entries and checks every FIXED/STALE evidence path against the tree, so a
 cited file that disappears (or a "no longer exists" file that comes back) fails `npm test` with the bug's ID.
 OPEN entries marked *latent* describe a real risk whose premise production has never met.
@@ -1223,8 +1256,11 @@ OPEN entries marked *latent* describe a real risk whose premise production has n
 | Frontend | 0 | 21 | 2 | 23 |
 | Server | 5 | 24 | 3 | 32 |
 | Runtime | 0 | 5 | 1 | 6 |
-| **Total** | **5** | **50** | **6** | **61** |
+| UI/UX | 5 | 17 | 1 | 23 |
+| **Total** | **10** | **67** | **7** | **84** |
 
 Open after the pass (updated cycle 56 — `server-017` high FIXED as milestone B5 and `server-034` medium filed and fixed as milestone B4, both with executed tests; cycle 55 fixed `server-032` and `server-033`; cycle 54 fixed `server-002` and `server-020`): `server-009`, `server-011` (latent, **deferred with a trigger**), `server-014` (latent), `server-015`, `server-016`. No open HIGH or CRITICAL remains in the Server/Runtime ledger other than the deferred `server-011`.
 
 Frontend (cycle 60, C4a): **nothing OPEN**. `frontend-005` and `frontend-014` are STALE (their premises cannot occur in the tree — `isLoggedIn()` implies a token; the scanner audio element is created once). Residual handed to C4b (cycle 61): `frontend-015`'s 250 ms `pollClose` timer keeps ticking until the overlay closes when profile A → B are chained. The four "no null check" entries (001/008/009/010) are kept true by `test/domids.test.js`: every id the client looks up by literal must resolve on the shipped page.
+
+UI/UX (cycle 61, C4b): **5 OPEN** — `ui-005` (30×30 px clear button) and `ui-007` (`z-index: 6` tie) are real but phone-only layout calls, routed to the human's browser look rather than fixed blind; `ui-020` / `ui-021` stay visual-verification-pending; `ui-022` (chat scroll yank, low) was filed this cycle and deliberately not bundled with the `ui-002` correctness fix. The ledger drifted in both directions here for the first time: 009/010 were dead, and 002 understated a live high-severity freeze at the very site it named — `test/chatlog.test.js` executes that one now, `test/frontend.test.js` `testAriaState()` executes 008/011/012.

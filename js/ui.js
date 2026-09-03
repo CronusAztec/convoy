@@ -41,6 +41,7 @@
       var active = b.dataset.dock === (name || 'map');
       b.classList.toggle('active', active);
       b.setAttribute('aria-expanded', active && !!name ? 'true' : 'false');
+      if (active) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
     });
     // Focus management: move focus into the panel header's close button on open
     // (a safe, always-present focus target), and restore the previous focus on close.
@@ -806,13 +807,19 @@
   }
 
   function renderChatInto(log) {
-    if (!S.party) { log.innerHTML = ''; log._n = 0; return; }
+    if (!S.party) { log.innerHTML = ''; log._n = 0; log._last = null; return; }
     var chat = S.party.chat;
-    // Incremental render: if the log already shows the first N messages, only
-    // append the new ones instead of clearing and rebuilding every line on each
-    // 'chat' event. (Re-opens reset via _n being out of sync → full rebuild.)
+    // Incremental render keyed on the entry drawn last (_last), not on length:
+    // the chat is a ring of A.party.CHAT_MAX, so past the cap every new line
+    // lands with the length unchanged (ui-002; test/chatlog.test.js).
     var n = log._n || 0;
-    if (n > chat.length) { log.innerHTML = ''; n = 0; } // chat was trimmed/replaced
+    var at = n > 0 ? chat.lastIndexOf(log._last) : -1;
+    if (n > 0 && at === -1) { log.innerHTML = ''; n = 0; } // snapshot, or rotated past us
+    else if (at !== -1 && at !== n - 1) {                   // k shifted off the front
+      var drop = n - 1 - at;
+      while (drop-- > 0 && log.firstChild) log.removeChild(log.firstChild);
+      n = at + 1;
+    }
     for (var i = n; i < chat.length; i++) {
       var m = chat[i], el;
       if (m.sys) {
@@ -831,6 +838,7 @@
       log.appendChild(el);
     }
     log._n = chat.length;
+    log._last = chat[chat.length - 1] || null;
     log.scrollTop = log.scrollHeight;
   }
 
@@ -3209,10 +3217,14 @@
     A.auth.config().then(function (cfg) { authCfg = cfg; authCfgLoaded = true; fn(cfg); });
   }
 
-  function showErr(el, msg) {
+  var errSeq = 0;
+  function showErr(el, msg, bad) {
     if (!el) return;
     el.textContent = msg || 'Something went wrong';
     el.hidden = false;
+    if (!bad) return; // ui-012: the input(s) at fault say so and point AT at this line
+    if (!el.id) el.id = 'auth-err-' + (++errSeq);
+    bad.forEach(function (i) { i.setAttribute('aria-invalid', 'true'); i.setAttribute('aria-describedby', el.id); });
   }
 
   function mkPassword(placeholder) {
@@ -3326,7 +3338,7 @@
 
     function row(html) {
       var l = U.el('label', 'consent-row');
-      l.innerHTML = '<input type="checkbox"/><span>' + html + '</span>';
+      l.innerHTML = '<input type="checkbox" aria-required="true"/><span>' + html + '</span>';
       box.appendChild(l);
       return l.querySelector('input');
     }
@@ -4215,13 +4227,13 @@
           closeAuthEnter('Welcome aboard, ' + profile.name + '. Riders are live around you');
           return;
         }
-        if (errEl) errEl.hidden = true;
+        errEl.hidden = true;
+        [uInput, pInput, eInput].forEach(function (i) { if (i) i.removeAttribute('aria-invalid'); });
         var addr = eInput ? eInput.value.trim() : '';
-        if (eInput && !addr) {
-          showErr(errEl, 'Enter your email address');
-          rbtn.disabled = false;
-          return;
-        }
+        var bad = !uInput.value.trim() ? [uInput, 'Pick a username']
+          : pInput.value.length < 6 ? [pInput, 'Password needs 6+ characters']
+          : eInput && !addr ? [eInput, 'Enter your email address'] : null;
+        if (bad) { showErr(errEl, bad[1], [bad[0]]); return; }
         rbtn.disabled = true; rbtn.textContent = 'Creating…';
         A.auth.register(uInput.value.trim(), pInput.value, profile, addr).then(function (r) {
           if (r.ok) {
@@ -4484,6 +4496,7 @@
     // init() — wireSearch/wireChips/wireWalkieTalkie touch audio and live
     // state that a jsdom harness has no reason to boot for a keyboard test.
     wireDock: wireDock,
+    syncGlobalChip: syncGlobalChip,
     toast: toast,
     inviteToast: inviteToast,
     showAuth: showAuth,

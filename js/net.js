@@ -454,9 +454,7 @@
     chat: function (m) {
       if (!S.party) return;
       if (m.from && ST.isBlockedRider(m.from)) return;
-      S.party.chat.push(mapChatEntry({ from: m.from, sys: m.sys, text: m.text, t: m.t2 }));
-      if (S.party.chat.length > 100) S.party.chat.shift();
-      ST.emit('chat');
+      A.party.pushChat(mapChatEntry({ from: m.from, sys: m.sys, text: m.text, t: m.t2 }));
     },
 
     wave: function (m) {

@@ -116,9 +116,11 @@ function testBugStatsTableMatchesFile() {
    comes back — turns npm test red with the bug's ID in the message. Scoped to
    ## Server and ## Runtime by the B3 pass, ## Frontend added by the cycle-60
    C4a pass (23 entries; test/domids.test.js executes the four "no null check"
-   entries); ## UI/UX is C4b and ## Android is aspect D — each inherits these
-   checks by being added to STATUS_SECTIONS. */
-const STATUS_SECTIONS = ['Server', 'Runtime', 'Frontend'];
+   entries), ## UI/UX by the cycle-61 C4b pass (23 entries; test/chatlog.test.js
+   executes ui-002, test/frontend.test.js testAriaState() executes 008/011/012);
+   only ## Android (aspect D) is left — it inherits these checks by being added
+   to STATUS_SECTIONS. */
+const STATUS_SECTIONS = ['Server', 'Runtime', 'Frontend', 'UI/UX'];
 const STATUS_RE = /^- \*\*Status:\*\* (OPEN|FIXED|STALE) \(re-verified (\d{4}-\d{2}-\d{2})\)( — (.+))?$/;
 const GONE_RE = /no longer exists|does not exist|was removed/;
 // `server/server.js:3054` → server/server.js · `js/net.js:222-230` → js/net.js · `users.json` → users.json
@@ -172,15 +174,15 @@ function parseRollup(text) {
 }
 
 function testStatusLedger() {
-  H.group('BUGS.md — ' + STATUS_SECTIONS.join(' + ') + ' "Status" lines are present, well-formed and not rotten (B3 + C4a)');
+  H.group('BUGS.md — ' + STATUS_SECTIONS.join(' + ') + ' "Status" lines are present, well-formed and not rotten (B3 + C4a + C4b)');
   const text = fs.readFileSync(BUGS_PATH, 'utf8');
   const entries = parseStatuses(text);
   const ids = (arr) => arr.map((e) => e.id).join(', ') || 'none';
 
   const wrongCount = entries.filter((e) => e.statuses.length !== 1);
   H.ok('every ' + STATUS_SECTIONS.join('/') + ' entry (' + entries.length + ') carries exactly one "- **Status:**" line',
-    entries.length >= 57 && wrongCount.length === 0,
-    'entries with 0 or 2+ Status lines: ' + ids(wrongCount) + (entries.length < 57 ? ' (only ' + entries.length + ' entries parsed — 32 Server + 6 Runtime + 23 Frontend expected)' : ''));
+    entries.length >= 84 && wrongCount.length === 0,
+    'entries with 0 or 2+ Status lines: ' + ids(wrongCount) + (entries.length < 84 ? ' (only ' + entries.length + ' entries parsed — 32 Server + 6 Runtime + 23 Frontend + 23 UI/UX expected)' : ''));
 
   const misplaced = entries.filter((e) => e.statuses.length &&
     (e.sevLine === null || e.sevLine > e.line + 5 || e.statuses[0].line <= e.sevLine));

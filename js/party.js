@@ -6,6 +6,7 @@
   var U = A.util, S = A.state, ST = A.store, D = A.data;
 
   var MAX_MEMBERS = 6;
+  var CHAT_MAX = 100; // chat ring ceiling (pushChat)
 
   // Live, or the socket is down with the server still holding our seat
   // (js/net.js PARTY_GRACE_MS, server-035): every delegated action below is
@@ -119,27 +120,33 @@
   }
 
   /* ================= chat ================= */
+  // Every chat line lands here (js/net.js inbound, solo me/sys/NPC lines), so
+  // the ring has one ceiling and the renderer's cursor stays honest (ui-002).
+  function pushChat(entry) {
+    if (!S.party) return;
+    S.party.chat.push(entry);
+    while (S.party.chat.length > CHAT_MAX) S.party.chat.shift();
+    ST.emit('chat');
+  }
+
   function systemMsg(text) {
     if (!S.party) return;
     if (isLive()) { A.net.sendPartySys(text); return; } // server mints the sys line
-    S.party.chat.push({ from: null, sys: true, text: text, t: Date.now() });
-    ST.emit('chat');
+    pushChat({ from: null, sys: true, text: text, t: Date.now() });
   }
 
   function sendChat(text) {
     if (!S.party || !text.trim()) return;
     if (isLive()) { A.net.sendChat(text.trim()); return; }
 
-    S.party.chat.push({ from: 'me', text: text.trim(), t: Date.now() });
-    ST.emit('chat');
+    pushChat({ from: 'me', text: text.trim(), t: Date.now() });
     if (S.party.members.length && U.chance(0.75)) {
       var partyId = S.party.id;
       setTimeout(function () {
         if (!S.party || S.party.id !== partyId || !S.party.members.length) return;
         var npc = A.sim.getNpc(U.pick(S.party.members));
         if (!npc) return;
-        S.party.chat.push({ from: npc.name, emoji: npc.emoji, text: U.pick(D.CHAT_REPLIES), t: Date.now() });
-        ST.emit('chat');
+        pushChat({ from: npc.name, emoji: npc.emoji, text: U.pick(D.CHAT_REPLIES), t: Date.now() });
       }, U.randInt(900, 3600));
     }
   }
@@ -195,6 +202,8 @@
     setMode: setMode,
     joinByCode: joinByCode,
     sendChat: sendChat,
+    pushChat: pushChat,
+    CHAT_MAX: CHAT_MAX,
     systemMsg: systemMsg,
     setRally: setRally,
     clearRally: clearRally

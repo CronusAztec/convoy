@@ -547,6 +547,98 @@ function testBaselineRatchet() {
   }
 }
 
+/* ---------------- 2f. state-reflecting ARIA (ui-008 / ui-011 / ui-012) — executed, not eyeballed ----------------
+   Three UI/UX ledger entries that are pure state→attribute mirrors, so a jsdom
+   test can drive the real state and read the attribute back. The parse-time
+   half (what the markup says before any script runs) is asserted on a fresh
+   window; the runtime half through the real A.ui / A.store API. */
+async function testAriaState() {
+  H.group('js/ui.js + index.html — state-reflecting ARIA: aria-pressed (ui-008), aria-current (ui-011), aria-required/-invalid/-describedby (ui-012)');
+  const dom = buildWindow();
+  const win = dom.window;
+  const doc = win.document;
+  const tick = (ms) => new Promise((r) => setTimeout(r, ms || 0));
+  const current = () => Array.from(doc.querySelectorAll('#dock [aria-current="page"]')).map((b) => b.dataset.dock);
+  const describedBy = (input) => doc.getElementById(input.getAttribute('aria-describedby') || '');
+
+  // parse-time: the toggle and the current page are declared in the markup itself
+  H.ok('ui-008: #chip-global is declared a toggle in the markup (aria-pressed="false" before any JS runs)',
+    doc.getElementById('chip-global').getAttribute('aria-pressed') === 'false');
+  H.ok('ui-008: no other chip claims aria-pressed (#chip-live/#chip-scan/#chip-dragy open panels — buttons, not toggles)',
+    ['chip-live', 'chip-scan', 'chip-dragy'].every((id) => !doc.getElementById(id).hasAttribute('aria-pressed')));
+  H.ok('ui-011: the Map dock button is aria-current="page" in the markup, and it is the only one (' + current().join(',') + ')',
+    current().length === 1 && current()[0] === 'map');
+
+  installAsGlobals(win);
+  const A = loadModules(win);
+  const ST = A.store;
+  const chip = doc.getElementById('chip-global');
+  ST.setShowGlobal(false); A.ui.syncGlobalChip();
+  H.ok('ui-008: ST.setShowGlobal(false) + the real syncGlobalChip() → aria-pressed="false" and .chip-off',
+    chip.getAttribute('aria-pressed') === 'false' && chip.classList.contains('chip-off'));
+  ST.setShowGlobal(true); A.ui.syncGlobalChip();
+  H.ok('ui-008: … and back to true → aria-pressed="true", .chip-off gone',
+    chip.getAttribute('aria-pressed') === 'true' && !chip.classList.contains('chip-off'));
+  const uiSrc = fs.readFileSync(path.join(ROOT, 'js', 'ui.js'), 'utf8');
+  H.ok("ui-008: init()'s ST.on('global') listener calls syncGlobalChip() (the live wiring jsdom cannot run — the same listener drives the map layer)",
+    /ST\.on\('global',\s*function \(v\) \{[^}]*syncGlobalChip\(\);/.test(uiSrc));
+
+  A.ui.openPanel('nearby');
+  H.ok("ui-011: openPanel('nearby') → exactly one aria-current=\"page\" in the dock, on Nearby (" + current().join(',') + ')',
+    current().length === 1 && current()[0] === 'nearby');
+  A.ui.openPanel('profile');
+  H.ok("ui-011: openPanel('profile') → it moves to Profile (" + current().join(',') + ')', current().length === 1 && current()[0] === 'profile');
+  A.ui.openPanel(null);
+  H.ok('ui-011: openPanel(null) → back on Map, never cleared: the map IS the current page when no panel is open (pinned) (' + current().join(',') + ')',
+    current().length === 1 && current()[0] === 'map');
+
+  // ui-012: the register form — three required consent boxes, and a failed submit names the input at fault
+  const button = (text) => Array.from(doc.querySelectorAll('#onboarding button')).find((b) => b.textContent.trim().indexOf(text) === 0);
+  A.ui.showAuth(function () {});
+  await tick();
+  button('Create account').click();
+  await tick();
+  const boxes = Array.from(doc.querySelectorAll('#onboarding .consent-row input[type="checkbox"]'));
+  H.ok('ui-012: the register form\'s three consent checkboxes carry aria-required="true" (' + boxes.length + ' found)',
+    boxes.length === 3 && boxes.every((b) => b.getAttribute('aria-required') === 'true'));
+  boxes.forEach((b) => { b.checked = true; b.dispatchEvent(new win.Event('change', { bubbles: true })); });
+  const submit = button('Create account & ride');
+  H.ok('the submit button enables once all three are ticked', !!submit && !submit.disabled);
+  const uInput = doc.querySelector('#onboarding input[placeholder="Pick a username"]');
+  const pInput = doc.querySelector('#onboarding input[type="password"]');
+  if (submit) submit.click();
+  const e1 = uInput && describedBy(uInput);
+  H.ok('ui-012: submit with an empty username → the username input is aria-invalid="true" and its aria-describedby resolves to the shown .auth-err ("Pick a username")',
+    !!uInput && uInput.getAttribute('aria-invalid') === 'true' && !!e1 && e1.className === 'auth-err' && !e1.hidden && e1.textContent === 'Pick a username',
+    'aria-invalid=' + (uInput && uInput.getAttribute('aria-invalid')) + ' describedby=' + (uInput && uInput.getAttribute('aria-describedby')) + ' err=' + (e1 && e1.textContent));
+  H.ok('ui-012: … and the password input is not blamed for it', !!pInput && !pInput.hasAttribute('aria-invalid'));
+  if (uInput) uInput.value = 'rider';
+  if (pInput) pInput.value = 'abc';
+  if (submit) submit.click();
+  const e2 = pInput && describedBy(pInput);
+  H.ok('ui-012: fix the username, submit a 3-character password → the username is cleared and the password is aria-invalid, described by "Password needs 6+ characters"',
+    !!uInput && !uInput.hasAttribute('aria-invalid') && !!pInput && pInput.getAttribute('aria-invalid') === 'true' && !!e2 && e2.textContent === 'Password needs 6+ characters',
+    'u=' + (uInput && uInput.getAttribute('aria-invalid')) + ' p=' + (pInput && pInput.getAttribute('aria-invalid')) + ' err=' + (e2 && e2.textContent));
+  const serverSrc = fs.readFileSync(path.join(ROOT, 'server', 'server.js'), 'utf8');
+  const sm = serverSrc.match(/if \(p\.length < (\d+)\) return 'Password must be at least/);
+  const cm = uiSrc.match(/pInput\.value\.length < (\d+)/);
+  H.ok('cross-file pin: the client password floor (' + (cm && cm[1]) + ') equals the server\'s (' + (sm && sm[1]) + ', server/server.js)',
+    !!sm && !!cm && sm[1] === cm[1]);
+
+  // the guest form carries the same three required boxes
+  A.ui.closeOverlay();
+  await tick(400);
+  A.ui.showAuth(function () {});
+  await tick();
+  button('Continue as guest').click();
+  await tick();
+  const gboxes = Array.from(doc.querySelectorAll('#onboarding .consent-row input[type="checkbox"]'));
+  H.ok('ui-012: the guest form carries the same three aria-required consent boxes (' + gboxes.length + ' found)',
+    gboxes.length === 3 && gboxes.every((b) => b.getAttribute('aria-required') === 'true'));
+  A.ui.closeOverlay();
+  await tick(400);
+}
+
 /* ---------------- 3. themes still parse after any CSS/token edit ---------------- */
 function testThemes() {
   H.group('js/themes.js — every registered theme still injects a parseable block');
@@ -680,6 +772,7 @@ function testDetector() {
   testClosedPanelsInert();
   await testModalFocusTrap();
   await testShellRestoreInvariant();
+  await testAriaState();
   testThemes();
   testStamps();
   testBootCost();
