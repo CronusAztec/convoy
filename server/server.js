@@ -49,6 +49,7 @@ const flags = require('./flags');
 const audit = require('./audit');
 const admin = require('./admin');
 const play = require('./play');
+const httpcache = require('./httpcache');
 
 const PORT = parseInt(process.env.PORT || '5173', 10);
 // Fake/demo riders are OFF by default for the production build. Set BOTS=12 (or
@@ -1934,6 +1935,18 @@ function send(c, msg) {
   }
 }
 
+// Deferred work runs outside every request/socket try/catch: a throw in one of
+// these lands on the process-level uncaughtException handler, which logs and
+// keeps the process up — by luck, not design, and it silently swallows the rest
+// of the callback. Every deferred body in this file goes through here
+// (server-002). Argument order matches setTimeout on purpose, and the timer
+// handle is returned so a caller can still .unref() it.
+function defer(fn, ms) {
+  return setTimeout(() => {
+    try { fn(); } catch (e) { console.error('[defer] deferred task threw:', (e && e.message) || e); }
+  }, ms);
+}
+
 /* ================= proximity voice ================= */
 // "Auto voice chat" — riders opted in (voice:prox) exchange walkie-talkie
 // traffic with other opted-in riders around them, no convoy needed.
@@ -2245,7 +2258,18 @@ function leaveParty(rider, silent) {
     return;
   }
   if (party.leader === rider.id) {
-    party.leader = humanMembers[0];
+    // party.members is push-ordered and only ever spliced, so humanMembers[0] is
+    // already the longest-tenured member — that half of the ledger entry was wrong.
+    // What it is NOT is necessarily still connected: ws.on('close') calls
+    // leaveParty() BEFORE clients.delete(), so when two riders drop together the
+    // first close handler still sees the second in `clients` with a socket that has
+    // already left OPEN. Prefer the earliest member whose socket is live; fall back
+    // to the old pick so a party is never left leaderless.  (server-020)
+    const live = humanMembers.find((id) => {
+      const m = clients.get(id);
+      return m && m.ws && m.ws.readyState === 1;
+    });
+    party.leader = live || humanMembers[0];
     partySys(party, riderName(getRider(party.leader)) + ' now leads the convoy');
   }
   sendPartyState(party);
@@ -2336,7 +2360,7 @@ function endRace(race) {
   sendRaceState(race);
   // Tear down after a short grace so clients can render the final leaderboard.
   const id = race.id;
-  setTimeout(() => {
+  defer(() => {
     const r = races.get(id);
     if (!r) return;
     for (const mid of r.members) { const mc = clients.get(mid); if (mc && mc.raceId === id) mc.raceId = null; }
@@ -2617,7 +2641,7 @@ const handlers = {
 
     if (target.bot) {
       const pid = party.id, tid = target.id;
-      setTimeout(() => {
+      defer(() => {
         const p = parties.get(pid), bot = bots.get(tid);
         if (!p || !bot) return;
         if (!bot.party && B.chance(0.85) && joinParty(bot, p)) return;
@@ -2847,7 +2871,7 @@ const handlers = {
     const botMembers = party.members.filter((id) => bots.has(id));
     if (botMembers.length && B.chance(0.75)) {
       const pid = party.id;
-      setTimeout(() => {
+      defer(() => {
         const p = parties.get(pid);
         if (!p) return;
         const stillBots = p.members.filter((id) => bots.has(id));
@@ -2873,7 +2897,7 @@ const handlers = {
     if (blockedPair(c, target)) return;
     if (target.bot) {
       const tid = target.id, cid = c.id;
-      setTimeout(() => {
+      defer(() => {
         const bot = bots.get(tid), me = clients.get(cid);
         if (bot && me && B.chance(0.9)) send(me, { t: 'wave', from: bot.name });
       }, B.randInt(900, 2200));
@@ -3038,7 +3062,7 @@ const handlers = {
     sendRaceState(race);
     // Flip to running at green. Each racer's client arms on 'running'.
     const id = race.id;
-    setTimeout(() => {
+    defer(() => {
       const r = races.get(id);
       if (!r || r.status !== 'countdown') return;
       r.status = 'running';
@@ -3757,13 +3781,41 @@ const httpServer = http.createServer((req, res) => {
     res.writeHead(404); res.end('Not found'); return;
   }
 
-  fs.readFile(file, (err, data) => {
-    if (err) { res.writeHead(404); res.end('Not found'); return; }
-    res.writeHead(200, {
-      'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
-      'Cache-Control': 'no-cache'
+  // Stat first; read only when a body is actually going out. The cache policy
+  // lives in server/httpcache.js (require-able, proven by real round-trips in
+  // test/httpcache.test.js, which also lifts the block below and runs it):
+  // stamped `?v=cyNNN` assets are cached for a year without revalidation,
+  // everything unstamped — index.html, the legal pages, /convoy.apk — stays
+  // `no-cache` but now carries an ETag, so a revalidation is a ~200-byte 304
+  // instead of the body. index.html must NEVER be cached long-term: it is the
+  // unstamped entry point that names the current stamp, and the policy keys on
+  // the stamp alone — do not add a special case here, in either direction.
+  // Any change to the block below must keep it self-contained (fs, path, req,
+  // res, file, httpcache, MIME) or the executed test stops compiling it.
+  const qAt = req.url.indexOf('?');
+  fs.stat(file, (err, st) => {
+    // A directory (e.g. /js) stats fine but is not a file: 404 it exactly as
+    // fs.readFile's EISDIR used to, rather than minting it a validator.
+    if (err || !st.isFile()) { res.writeHead(404); res.end('Not found'); return; }
+    const meta = {
+      stamped: httpcache.isStamped(qAt >= 0 ? req.url.slice(qAt + 1) : ''),
+      immutable: httpcache.IMMUTABLE_ENABLED,
+      etag: httpcache.etagFor(st),
+      mtime: st.mtime
+    };
+    if (httpcache.matchesEtag(req.headers['if-none-match'], meta.etag)) {
+      // RFC 7232 §4.1: the 304 repeats Cache-Control / ETag / Last-Modified,
+      // carries no body and — since nothing was read — no Content-Type.
+      res.writeHead(304, httpcache.headersFor(meta));
+      res.end();
+      return;
+    }
+    fs.readFile(file, (err2, data) => {
+      if (err2) { res.writeHead(404); res.end('Not found'); return; }
+      meta.type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
+      res.writeHead(200, httpcache.headersFor(meta));
+      res.end(req.method === 'HEAD' ? undefined : data);
     });
-    res.end(req.method === 'HEAD' ? undefined : data);
   });
 });
 

@@ -36,7 +36,19 @@
      W1  the socket dispatcher survives an impolite client (a global
          per-connection message budget over ALL message types, server-024)
          and an absent one (the TTS synth callback checks for a response the
-         rider already abandoned before writing headers, server-022) */
+         rider already abandoned before writing headers, server-022)
+
+   Added with the cycle-54 B3b + cache-policy stage (2026-09-03):
+     H1  static assets are cached by their stamp: the handler stats before it
+         reads, a matching If-None-Match short-circuits to a 304 before any
+         fs.readFile, the policy lives in server/httpcache.js (executed by
+         test/httpcache.test.js, never re-inlined here), `immutable` never
+         reaches the branch that serves index.html, and STATIC_IMMUTABLE is
+         the documented kill switch
+     D1  every deferred body goes through defer() (a try/catch around the
+         five setTimeout bodies that used to land on uncaughtException,
+         server-002) and leadership goes to a socket that is still OPEN
+         (server-020) */
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -283,5 +295,112 @@ ok('the TTS synth callback checks res.writableEnded || res.destroyed before it w
 ok('ttsRelease(ip) runs BEFORE that guard (an aborting client must not burn one of its in-flight synth slots)',
   ttsAt >= 0 && releaseAt > ttsAt && guardAt > releaseAt,
   'release after the early return = a slot leaks per aborted request until the IP is locked out of TTS');
+
+group('H1 — static assets are cached by their stamp, and revalidation is a 304');
+// The policy itself is executed by test/httpcache.test.js (real round-trips over
+// a temp dir, plus the real static tail lifted out of this file). These pins
+// guard the WIRING: stat before read, 304 before read, the module required
+// rather than re-inlined, and `immutable` kept out of the index.html branch.
+const CACHE_SRC = fs.readFileSync(path.join(__dirname, '..', 'server', 'httpcache.js'), 'utf8');
+const ENV_EXAMPLE = fs.readFileSync(path.join(__dirname, '..', 'server', '.env.example'), 'utf8');
+const staticAt = SRC.indexOf('Object.prototype.hasOwnProperty.call(LEGAL_PAGES, urlPath)');
+const staticEnd = SRC.indexOf('/* ================= websocket wiring', staticAt);
+const staticRegion = (staticAt >= 0 && staticEnd > staticAt) ? SRC.slice(staticAt, staticEnd) : '';
+const staticCode = staticRegion.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+const statAt = staticRegion.indexOf('fs.stat(file');
+const readAt = staticRegion.indexOf('fs.readFile(file');
+const notModAt = staticRegion.indexOf('res.writeHead(304');
+ok('server.js requires ./httpcache (the policy is a module, not re-inlined in the handler)',
+  /require\('\.\/httpcache'\)/.test(SRC), "no require('./httpcache') in server.js");
+ok('the static handler calls fs.stat(file) BEFORE fs.readFile(file)',
+  statAt >= 0 && readAt > statAt, 'stat@' + statAt + ' read@' + readAt + ' (region ' + staticRegion.length + ' chars)');
+ok('the 304 branch sits between the stat and the read, and returns before any fs.readFile',
+  notModAt > statAt && notModAt < readAt && /res\.writeHead\(304[\s\S]{0,200}?return;/.test(staticRegion),
+  '304@' + notModAt + ' — a 304 that still reads the body is the old cost with a new status code');
+ok('the 304 is answered by matchesEtag(req.headers[\'if-none-match\'], …) — RFC 7232, not a hand-rolled compare',
+  /httpcache\.matchesEtag\(req\.headers\['if-none-match'\]/.test(staticRegion));
+ok('a non-file stat (a directory such as /js) still 404s — stat-first must not turn EISDIR into a cacheable 200/304',
+  /!st\.isFile\(\)/.test(staticRegion), "the '!st.isFile()' guard is gone");
+ok('the literal `immutable` lives in server/httpcache.js …',
+  /immutable/.test(CACHE_SRC));
+ok('… and the static handler CODE (comments stripped) builds no Cache-Control string of its own: no quoted `immutable`, no max-age, no Cache-Control literal — the only `immutable` there is the option key passing the switch through',
+  staticCode.length > 0 && !/Cache-Control|max-age|['"`][^'"`\n]*immutable/.test(staticCode),
+  'a Cache-Control decision crept back into server.js — index.html must stay no-cache');
+ok('max-age=31536000 is paired with `immutable` in the same header string (a long max-age alone still revalidates on every reload)',
+  /public, max-age=31536000, immutable/.test(CACHE_SRC));
+ok('the entry point stays revalidated: httpcache.js emits `no-cache` for anything unstamped',
+  /'no-cache'/.test(CACHE_SRC));
+ok('STATIC_IMMUTABLE is read from process.env exactly once, at require time, as a kill switch',
+  /const IMMUTABLE_ENABLED = process\.env\.STATIC_IMMUTABLE !== '0'/.test(CACHE_SRC) && (CACHE_SRC.match(/process\.env\.STATIC_IMMUTABLE/g) || []).length === 1);
+ok('server/.env.example documents STATIC_IMMUTABLE and WS_MSG_BUDGET (the runtime tuning knobs are discoverable)',
+  /STATIC_IMMUTABLE/.test(ENV_EXAMPLE) && /WS_MSG_BUDGET/.test(ENV_EXAMPLE), 'a knob nobody can find is a knob nobody can turn');
+
+group('D1 — deferred work is guarded, and leadership goes to a live socket');
+// server-002: five deferred bodies (race teardown, bot invite reply, bot chat
+// reply, bot wave reply, race green light) ran outside every try/catch. The
+// count of bare `setTimeout(() => {` blocks was 5 before the fix; now the only
+// one is inside defer() itself. The shutdown safety net at the bottom of the
+// file is `setTimeout(() => process.exit(0), …)` — no brace, cannot throw,
+// needs its .unref() — and is deliberately not counted.
+const bareBlocks = (SRC.match(/setTimeout\(\(\) => \{/g) || []).length;
+ok('every deferred body in server.js is guarded (only the defer() helper itself uses a bare setTimeout block; found ' + bareBlocks + ')',
+  bareBlocks === 1, 'a new setTimeout(() => { … }) body escaped defer() — a throw in it lands on uncaughtException');
+ok('defer() wraps the body in try/catch and returns the timer handle (two call sites chain .unref())',
+  /function defer\(fn, ms\) \{\s*return setTimeout\(\(\) => \{\s*try \{ fn\(\); \} catch \(e\) \{ console\.error\(/.test(SRC));
+const deferUses = (SRC.match(/\bdefer\(/g) || []).length;
+ok('defer() is actually used at the five deferred call sites (' + deferUses + ' occurrences incl. the helper)',
+  deferUses >= 6, 'expected the helper + 5 call sites');
+ok('the two teardown timers (race end grace, race green light) still .unref() so a draining process is not held open',
+  (SRC.match(/\}, 8000\)\.unref\(\);/g) || []).length === 1 && (SRC.match(/\}, 3000\)\.unref\(\);/g) || []).length === 1);
+// server-020: leaveParty() runs from ws.on('close') BEFORE clients.delete(), so
+// with two riders dropping together the first close handler still finds the
+// second in `clients` with a socket that has already left OPEN.
+const lpAt = SRC.indexOf('function leaveParty(rider, silent)');
+const lpEnd = SRC.indexOf('\n}\n', lpAt);
+const lp = (lpAt >= 0 && lpEnd > lpAt) ? SRC.slice(lpAt, lpEnd) : '';
+const pickAt = lp.indexOf('if (party.leader === rider.id)');
+const liveAt = lp.indexOf('readyState === 1', pickAt);
+const assignAt = lp.indexOf('party.leader = ', pickAt);
+ok('leaveParty() picks the new leader with the file\'s own liveness idiom (ws.readyState === 1) before assigning',
+  pickAt >= 0 && liveAt > pickAt && assignAt > liveAt,
+  'pick@' + pickAt + ' live@' + liveAt + ' assign@' + assignAt + ' — leadership can be handed to a socket that is mid-close again');
+ok('… and keeps the `|| humanMembers[0]` fallback so a party whose every socket is mid-close is never leaderless',
+  /party\.leader = live \|\| humanMembers\[0\];/.test(lp));
+ok('the pick is join-ordered by construction: party.members is only ever push()ed and splice()d, never reassigned or sorted',
+  !/party\.members = |members\.sort\(|members\.reverse\(|members\.unshift\(/.test(SRC));
+
+// Executed, not just grepped (the W1 pattern): defer() and leaveParty() are
+// lifted out of server.js verbatim and run against fakes. If the try/catch
+// or the liveness pick regress, this fails on the behaviour, not on a string.
+const dAt = SRC.indexOf('function defer(fn, ms)');
+const dEnd = dAt >= 0 ? SRC.indexOf('\n}\n', dAt) + 3 : -1;
+if (dAt >= 0 && dEnd > dAt) {
+  const logged = [];
+  const runNow = (fn) => { fn(); return { unref() { return this; } }; };
+  const deferFn = new Function('setTimeout', 'console', SRC.slice(dAt, dEnd) + '\nreturn defer;')(runNow, { error: (...a) => logged.push(a.join(' ')) });
+  let escaped = null, handle = null;
+  try { handle = deferFn(() => { throw new Error('boom'); }, 5); } catch (e) { escaped = e; }
+  ok('executed: a throwing deferred body is caught and logged with its message, never raised',
+    escaped === null && logged.length === 1 && /boom/.test(logged[0]), escaped ? 'escaped: ' + escaped.message : logged.join(' | '));
+  ok('executed: defer() returns the timer handle, so .unref() still chains',
+    !!handle && typeof handle.unref === 'function');
+}
+if (lp) {
+  const parties = new Map(), clients = new Map(), bots = new Map(), sys = [];
+  const mk = (id, ready) => ({ id, party: 'p1', ws: { readyState: ready }, profile: { name: id }, bot: false });
+  const A = mk('A', 1), B = mk('B', 3), C = mk('C', 1);   // B: mid-close (CLOSED=3), still in `clients`
+  clients.set('A', A); clients.set('B', B); clients.set('C', C);
+  const party = { id: 'p1', code: 'X', leader: 'A', members: ['A', 'B', 'C'], chat: [] };
+  parties.set('p1', party);
+  const leave = new Function('parties', 'clients', 'bots', 'send', 'partySys', 'riderName', 'getRider', 'sendPartyState',
+    lp + '\n}\nreturn leaveParty;')(parties, clients, bots, () => {}, (p, t) => sys.push(t), (r) => r.profile.name, (id) => clients.get(id) || null, () => {});
+  leave(A, true);
+  ok('executed: leader A leaves while B (next in join order) is mid-close -> C, the earliest LIVE member, leads',
+    party.leader === 'C' && sys[sys.length - 1] === 'C now leads the convoy', 'leader=' + party.leader + ' sys=' + sys.join(' | '));
+  C.ws.readyState = 3;
+  leave(C, true);
+  ok('executed: with every remaining socket mid-close the fallback keeps the join-order pick (B) — never leaderless',
+    party.leader === 'B' && parties.has('p1'), 'leader=' + party.leader);
+}
 
 process.exit(report());

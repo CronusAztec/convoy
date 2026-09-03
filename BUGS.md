@@ -212,7 +212,7 @@ Each bug has:
 
 ### BUG server-002
 - **Severity:** high
-- **Status:** OPEN (re-verified 2026-09-03) — latent, not observed: the deferred bot-chat body at `server/server.js:2850-2862` still has no try/catch, but bots are off in production (`BOT_COUNT` defaults to 0 at `server/server.js:56`) so the branch never runs, and the `uncaughtException` handler at `server/server.js:4099` logs and keeps the process up — "high" overstates it
+- **Status:** FIXED (re-verified 2026-09-03) — fixed in cycle 54: every deferred body goes through the `defer()` helper at `server/server.js:1944` (try/catch, logs `[defer] deferred task threw: <message>`, returns the timer handle so `.unref()` still chains); the five converted sites are the race-end grace `server/server.js:2363`, the bot invite reply `server/server.js:2644`, the bot chat reply `server/server.js:2874`, the bot wave reply `server/server.js:2900` and the race green light `server/server.js:3065` — the only bare `setTimeout(() => {` left in the file is the helper's own; pinned and executed (a throwing body is caught and logged, the handle is returned) by `test/serverpolicy.test.js` group D1
 - **File:** `server/server.js:1731-1740, 1149-1161`
 - **Title:** Deferred `setTimeout` bot-chat callback is not wrapped in try/catch — a throw escapes to `uncaughtException`
 - **Repro:** Trigger a bot reply whose `B.pick` or `JSON.stringify` throws (e.g. malformed bot config).
@@ -293,12 +293,13 @@ Each bug has:
 
 ### BUG server-011
 - **Severity:** critical
-- **Status:** OPEN (re-verified 2026-09-03) — latent, not observed: `scopeFor()` at `server/server.js:2014` is still a per-viewer haversine loop over the pool, now with a `hasBlocks()` pre-check (`server/server.js:2008`) and one shared pool per 1 Hz tick (`server/server.js:3185`). The premise is 200 concurrent clients; production runs a handful of riders at ~66 MB RSS. Needs a measurement and its own cycle, not a drive-by
+- **Status:** OPEN (re-verified 2026-09-03) — latent, not observed: `scopeFor()` at `server/server.js:2014` is still a per-viewer haversine loop over the pool, now with a `hasBlocks()` pre-check (`server/server.js:2008`) and one shared pool per 1 Hz tick (`server/server.js:3185`). The premise is 200 concurrent clients; production runs a handful of riders at ~66 MB RSS. Needs a measurement and its own cycle, not a drive-by. **DEFERRED with a trigger** (cycle-54 directive) — see the Decision line below
 - **File:** `server/server.js:1427-1442, 1447-1465, 1475-1499, 1552-1557, 1759-1765`
 - **Title:** `scopeFor` is O(H × (H+B)) haversine/sec on the main thread; at MAX_CLIENTS=200 that's ~42k trig ops/sec → event-loop starvation; also all maintenance timers lack `.unref()`
 - **Repro:** 200 simulated clients at nearby coords → 1 Hz tick blocks the loop, WS pings lag, heartbeat false-positive disconnects live clients.
 - **Impact:** Cascading false disconnects and stuck UIs as user count grows.
 - **Fix:** Spatial-index riders (lat/lng grid buckets) so `scopeFor` only checks nearby cells; `unref` maintenance timers.
+- **Decision 2026-09-03 (cycle-54 directive, recorded by the implementer): DEFER, with a trigger.** The fix is a spatial index over `scopeFor()` — the hottest loop in the server, run once per viewer per second. The bug's premise is 200 concurrent clients; production runs a handful of riders at ~66 MB RSS and has never been within an order of magnitude of `MAX_CLIENTS`. Rewriting the visibility loop against a load we cannot reproduce risks a *visibility* bug — riders not seeing each other — which is strictly worse for a convoy app than a tick that is slower than it could be. **Re-open as a scheduled milestone when either** (a) a broadcast-tick duration measurement exists and shows the 1 Hz tick over ~50 ms, **or** (b) concurrent humans exceed 60. Building that measurement (peak concurrency + tick p100, logged every 5 min when it moves) is the first task of whichever cycle takes server-011 — measure, then fix.
 
 ### BUG server-012
 - **Severity:** high
@@ -347,12 +348,13 @@ Each bug has:
 
 ### BUG server-017
 - **Severity:** high
-- **Status:** OPEN (re-verified 2026-09-03) — mitigated, partly by design: per-action buckets now exist (`server/server.js:849` `login:` per identity 10/10 min, `server/server.js:866` `recover:` per name, `server/server.js:1090` `forgot:` per address), but the shared `auth:` + ip bucket at `server/server.js:726` (24/10 min, was 14) still fronts every anonymous auth route, so 24 failed logins from one NAT still 429 `/api/recover`; and it is consumed before `readBody()` runs (`server/server.js:730`), so an oversized body still burns an attempt
+- **Status:** OPEN (re-verified 2026-09-03) — mitigated, partly by design: per-action buckets now exist (`server/server.js:849` `login:` per identity 10/10 min, `server/server.js:866` `recover:` per name, `server/server.js:1090` `forgot:` per address), but the shared `auth:` + ip bucket at `server/server.js:726` (24/10 min, was 14) still fronts every anonymous auth route, so 24 failed logins from one NAT still 429 `/api/recover`; and it is consumed before `readBody()` runs (`server/server.js:730`), so an oversized body still burns an attempt. **SCHEDULED as milestone B5, cycle 55** (cycle-54 directive) — see the Decision line below
 - **File:** `server/server.js:308-311, 277`
 - **Title:** Single shared `'auth:'+ip` bucket gates register/login/recover — fat-fingering login 14× also locks out `/api/recover`; oversized body still burns an attempt
 - **Repro:** From one NAT IP, fail login 14×; 15th request to `/api/recover` returns 429.
 - **Impact:** Self-DoS of password recovery; legitimate lockout behind NAT.
 - **Fix:** Separate buckets for login vs recover; only count after body parses successfully.
+- **Decision 2026-09-03 (cycle-54 directive, recorded by the implementer): SCHEDULED, not folded in.** The shared `auth:`+ip bucket (`server/server.js:726`) is a real self-DoS — 24 failed logins from one NAT 429s `/api/recover` for everyone behind it — and the fix (per-route buckets; only charge the bucket after `readBody()` succeeds) touches the auth path, which the operating contract (rule 6) says may only be changed by a milestone that names it. It also inverts a deliberate ordering — today the bucket is consumed *before* the body is read, which is what stops a flooder from making the server read bodies — so it needs its own cycle with its own tests, not a ride-along in a caching cycle. Milestone **B5**, cycle 55.
 
 ### BUG server-018
 - **Severity:** medium
@@ -374,12 +376,12 @@ Each bug has:
 
 ### BUG server-020
 - **Severity:** high
-- **Status:** OPEN (re-verified 2026-09-03) — `server/server.js:2248`: leadership still goes to `humanMembers[0]` with no tenure or join-order tracking
+- **Status:** FIXED (re-verified 2026-09-03) — fixed in cycle 54: `leaveParty()` now prefers the earliest member whose socket is still OPEN (`server/server.js:2268`, the file's own `ws.readyState === 1` liveness idiom) and keeps `|| humanMembers[0]` as the fallback (`server/server.js:2272`) so a party is never leaderless; pinned and executed by `test/serverpolicy.test.js` group D1 (leader leaves while the next-in-join-order member is mid-close → the earliest LIVE member leads; every socket mid-close → join-order fallback)
 - **File:** `server/server.js:741-746`
 - **Title:** On leader leave, new leader is `humanMembers[0]` (deterministic, mid-disconnect-prone); churns reassignment
 - **Repro:** Have the first human member be mid-disconnect when the leader leaves; close handler reassigns again.
 - **Impact:** Leadership churn.
-- **Fix:** Pick the longest-tenured member (earliest join time); track join order.
+- **Fix:** ~~Pick the longest-tenured member (earliest join time); track join order.~~ **Diagnosis corrected 2026-09-03 (cycle 54):** the "no join-order tracking" premise was wrong — `party.members` starts as `[creator]`, is only ever `push`ed and `splice`d, never reassigned or sorted, so `humanMembers[0]` already *was* the longest-tenured member. The real defect was the *liveness* of the pick, not its ordering: `ws.on('close')` (`server/server.js:3936`) calls `leaveParty()` **before** `clients.delete()`, so when two riders drop together the first close handler still finds the second in `clients` with a socket that has already left OPEN, hands it the lead, and the next close handler reassigns again. Applied fix: prefer the earliest member with `ws.readyState === 1`, fall back to `humanMembers[0]`.
 
 ### BUG server-021
 - **Severity:** high
@@ -1108,7 +1110,7 @@ this table ever drifts from what's actually here.
 | Area | critical | high | medium | low | total |
 |---|---:|---:|---:|---:|---:|
 | Frontend | 0 | 5 | 13 | 1 | 19 | (frontend-001/002/003/008/009 are the highs; frontend-019 fixed) |
-| Server | 4 | 10 | 14 | 0 | 28 | (server-003/006/008/011 critical — 003/008 FIXED, 006 STALE, 011 OPEN-latent; 8 OPEN / 17 FIXED / 3 STALE after the 2026-09-03 re-verification, roll-up below) |
+| Server | 4 | 10 | 14 | 0 | 28 | (server-003/006/008/011 critical — 003/008 FIXED, 006 STALE, 011 OPEN-latent; 6 OPEN / 19 FIXED / 3 STALE after the 2026-09-03 re-verification and the cycle-54 B3b fixes of 002 + 020, roll-up below) |
 | Android | 3 | 8 | 8 | 1 | 20 | (android-001/002/003 critical) |
 | UI/UX | 1 | 5 | 10 | 6 | 22 | (ui-001/004/006/013/014/015/016/017/018/019/003/003b fixed; ui-020/021 visual-verification-pending, unresolved without a browser) |
 | Runtime | 0 | 2 | 3 | 1 | 6 | (runtime-001 STALE, the other five FIXED — re-verified 2026-09-03) |
@@ -1125,8 +1127,8 @@ OPEN entries marked *latent* describe a real risk whose premise production has n
 
 | Area | OPEN | FIXED | STALE | total |
 |---|---:|---:|---:|---:|
-| Server | 8 | 17 | 3 | 28 |
+| Server | 6 | 19 | 3 | 28 |
 | Runtime | 0 | 5 | 1 | 6 |
-| **Total** | **8** | **22** | **4** | **34** |
+| **Total** | **6** | **24** | **4** | **34** |
 
-Open after the pass: `server-002` (latent), `server-009`, `server-011` (latent), `server-014` (latent), `server-015`, `server-016`, `server-017`, `server-020`.
+Open after the pass (updated cycle 54 — `server-002` and `server-020` fixed with executed tests): `server-009`, `server-011` (latent, **deferred with a trigger**), `server-014` (latent), `server-015`, `server-016`, `server-017` (**scheduled B5, cycle 55**).

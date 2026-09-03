@@ -18,7 +18,7 @@ installed APKs, unlimited cycles). The push stage follows `deploy/PUSH-RUNBOOK.m
 | # | Aspect | Status | Closes when |
 |---|---|---|---|
 | A | Front-end (cycles 0-4, closed in cycle 50) | **done 2026-09-03** — released by the cycle-50 push stage at 06:56Z (`stages/0021-c050-push.md`). Closing facts, re-measured in cycle 51 at 07:00Z with one request each: (1) `/api/ota` → `"current":{"version":"1.0.117",…}` (was `null` since the mission began); (2) https://odoreeci.tech serves `45 v=cy117` (== local). `livetest` PASS in the push report | `setShellInert` nesting fix + shell-restore invariant test + `#toasts` scoping landed ✔; stamp bumped to `cy117` ✔; review not BROKEN; push stage reports `cy117` served and `/api/ota` current = 1.0.117; livetest green |
-| B | Backend / server (`server/*.js`) | **current** — B1 **done** (cycle 51, section "Aspect B — backend truth pass (cycle 51)" below); B2 **done and shipped** (cycle 52: server-031 + frontend-019, live as `cy118` / OTA `1.0.118` since 2026-09-03 07:46Z, `stages/0029-c052-push.md`); **B3 done in code (cycle 53 stage 30)**: all **34** Server + Runtime entries re-verified against the current tree with a machine-checked `- **Status:**` line each — **8 OPEN / 22 FIXED / 4 STALE** (Server 8/17/3, Runtime 0/5/1; `test/bugstats.test.js` 11→20 checks incl. the anti-rot path check) and the two really-open ones fixed with tests: server-024 (global per-connection `WS_MSG_BUDGET` gate, O(1)) and server-022 (TTS callback dead-response guard), `test/serverpolicy.test.js` 39→55 (group W1). Server-only cycle → **no stamp bump** (`45 × cy118` == production); the push stage runs **Lane B**. **Closing criterion NOT met yet** — open critical/high after the pass: server-011 (critical, latent — needs a measured cycle of its own), server-017 (high, shared `auth:`+ip bucket still fronts every anon auth route), server-020 (high, `humanMembers[0]` leader pick), server-002 (high but latent — bots off in production). **Next: B3b** = fix 002/017/020 with regression tests and take the server-011 decision explicitly; then plan-v2's static cache policy (stamped assets still served `cache-control: no-cache`, stage-17 evidence) and B4 Overpass mirrors (production per-mirror log lines now accumulating since the 07:46Z restart) | BUGS.md server+runtime truth pass (33 entries re-verified against current code, statuses updated, `bugstats` green); every open critical/high server bug fixed **with a regression test**; stamped assets cached `immutable`; shipped via Lane B/A |
+| B | Backend / server (`server/*.js`) | **current** — B1 **done** (cycle 51, section "Aspect B — backend truth pass (cycle 51)" below); B2 **done and shipped** (cycle 52: server-031 + frontend-019, live as `cy118` / OTA `1.0.118` since 2026-09-03 07:46Z, `stages/0029-c052-push.md`); **B3 done in code (cycle 53 stage 30)**: all **34** Server + Runtime entries re-verified against the current tree with a machine-checked `- **Status:**` line each — **8 OPEN / 22 FIXED / 4 STALE** (Server 8/17/3, Runtime 0/5/1; `test/bugstats.test.js` 11→20 checks incl. the anti-rot path check) and the two really-open ones fixed with tests: server-024 (global per-connection `WS_MSG_BUDGET` gate, O(1)) and server-022 (TTS callback dead-response guard), `test/serverpolicy.test.js` 39→55 (group W1). Server-only cycle → **no stamp bump** (`45 × cy118` == production); the push stage runs **Lane B**. **B3b + static cache policy done in code (cycle 54 stage 34)**: server-002 (`defer()` try/catch around all five deferred bodies) and server-020 (leadership goes to the earliest member whose socket is still OPEN) **FIXED with executed tests** (`test/serverpolicy.test.js` 55→77, group D1 lifts `defer()` and `leaveParty()` out of server.js and runs them); server-011 **deferred with a recorded trigger** (tick > 50 ms or > 60 concurrent humans) and server-017 **scheduled as milestone B5, cycle 55** — both decisions written into their BUGS.md entries; ledger now **6 OPEN / 24 FIXED / 4 STALE** (Server 6/19/3, Runtime 0/5/1). The cache policy: new `server/httpcache.js` — stamped `?v=cyNNN` assets `public, max-age=31536000, immutable`, everything unstamped (`index.html`, legal, `/convoy.apk`) `no-cache` **+ ETag + Last-Modified**, the static handler stats before it reads and answers a matching `If-None-Match` with a body-less 304 before any `fs.readFile`; `STATIC_IMMUTABLE=0` kill switch (documented in `server/.env.example` with `WS_MSG_BUDGET`); new suite `test/httpcache.test.js` (41 checks: real round-trips over a temp dir + the production static tail lifted verbatim and executed). Server-only cycle → **no stamp bump** (`45 × cy118` == production); the push stage runs **Lane B**. **Closing criterion still open on:** server-017 (high → B5) and B4 Overpass mirrors; server-011 is closed *by decision* (critical-latent, re-open trigger recorded). **Next: B5** (server-017: per-route auth buckets, charge only after `readBody()` succeeds — touches auth, needs its own cycle + `serverpolicy` green), then **B4** with the per-mirror log lines accumulating since 07:46Z | BUGS.md server+runtime truth pass (33 entries re-verified against current code, statuses updated, `bugstats` green); every open critical/high server bug fixed **with a regression test**; ~~stamped assets cached `immutable`~~ ✔ cycle 54 (`server/httpcache.js`, pending the cycle-54 push); shipped via Lane B/A |
 | C | Smoothness (delivery + client runtime) | after B | request count ≤ 30 on first load; reduced-motion/idle-CPU audit (plan v1 M10); reconnect UX (frontend-012/013); measured with the headless Chromium recipe below; shipped |
 | D | Android native (code + compile-check only) | after C | android-002/003/004/009/011/014 fixed; compiles with a user-local JDK/SDK if that lands in 20 min, else code-reviewed; **shipping needs the human's keystore** |
 | E | Front-end round 2 | after D | plan v1 M7 (ui.js split), M8 (states), M9 (responsive), M11 (onboarding) |
@@ -44,7 +44,7 @@ installed APKs, unlimited cycles). The push stage follows `deploy/PUSH-RUNBOOK.m
 | M-B html-validate errors on `index.html` | 57 | **13, unchanged** (7 `void-style` + 5 `no-inline-style`, both taste — pinned; 1 `prefer-native-element` on `#search-results`, kept on purpose — see below) | 0 in correctness/a11y rule classes — **already met** (see amendment 2) | `npm run test:frontend` |
 | M-B axe-core violations per surface | shell 1, nearby 1, convoy 2, profile 5, auth **5 (mismeasured, see below)** | **shell 0, nearby 0, convoy 0, profile 0, authWelcome 0, authLogin 0 — target met on all six surfaces** (stage 8: `#radar-dock` landmark fix cleared `region` everywhere; `mkRow`/`mkField`/`.dot-color`/`.emoji-btn` accessible-name fixes cleared the rest) | 0 on every surface — **MET** | `npm run test:frontend` |
 | M-B open BUGS.md UI/UX bugs | 13 listed, ui-003/011/013 confirmed open | **22 listed**, **12 fixed** (ui-001, ui-003, ui-003b, ui-004, ui-006, ui-013, ui-014, ui-015, ui-016, ui-017, ui-018, ui-019) — ui-003b (the ui-003 regression) fixed cycle 50 stage 18 | all closed | read `BUGS.md` §UI/UX |
-| M-C compressed same-origin text bytes / cache policy / requests | 1,033 KB JS + 144 KB CSS + 21 KB HTML uncompressed; `no-cache`; 45 requests | unchanged (M4 not started) | ≤ 300 KB compressed; `immutable`; ≤ 30 requests | `node test/frontend-delivery.test.js` (not yet built) |
+| M-C compressed same-origin text bytes / cache policy / requests | 1,033 KB JS + 144 KB CSS + 21 KB HTML uncompressed; `no-cache`; 45 requests | **cycle 54:** first visit unchanged — 1086 KB raw / **342 KB gzip** across the 45 stamped assets + 22 KB `index.html` (measured locally by the cycle-53 improve stage: `gzip -9` per file, summed). **Repeat visit: 342 KB → ~0 and 46 requests → 1** — the 45 stamped assets are now `public, max-age=31536000, immutable` (the browser never re-requests them; the stamp is bumped all-45-together so it is content-addressed), `index.html` stays `no-cache` but carries an ETag, so its one revalidation is a ~200-byte `304` (stat only, no read). Kill switch `STATIC_IMMUTABLE=0` → `no-cache` everywhere, ETag kept | ≤ 300 KB compressed (first visit — aspect C); `immutable` ✔; ≤ 30 requests (first visit — aspect C) | `node test/httpcache.test.js` (41 checks); after the cycle-54 push, one production request: `curl -sI 'https://odoreeci.tech/js/ui.js?v=cy118' \| grep -iE 'cache-control\|etag'` → expect `public, max-age=31536000, immutable` + a `W/"…"` ETag |
 
 All of the above (except M-C) are gated by `npm run test:frontend` against `test/frontend-baseline.json`
 — **ratchet-down only, and this is now enforced, not just documented**: `testBaselineRatchet()` compares
@@ -53,6 +53,54 @@ if any shared key's value has been raised. New keys (e.g. this stage's `axeViola
 `axeViolations_authLogin` replacing `axeViolations_auth`) are exempt on the stage that introduces them.
 
 ## Current milestone
+**Cycle 54 stage 34 (IMPLEMENT, executing the cycle-53-stage-32 IMPROVE directive's Tasks 1-3) — DONE, server-only, NO STAMP BUMP.**
+The site finally has a cache policy (repeat visits stop re-downloading 342 KB), and two of the four open
+critical/high server bugs are fixed with executed tests; the other two carry recorded decisions instead of ambiguity.
+
+1. **Task 1 — `server/httpcache.js` (new, require-able with no env/Supabase) + the static handler rewired.**
+   Five exports: `isStamped(query)` (the `v=cy<digits>` *parameter*, `/(^|[?&])v=cy\d+(&|$)/`), `etagFor(stat)`
+   (`W/"<size hex>-<mtime ms hex>"`, never a body hash), `matchesEtag(header, etag)` (RFC 7232: `*`, comma lists,
+   weak comparison), `headersFor({stamped, immutable, etag, mtime, type})`, `IMMUTABLE_ENABLED`
+   (`process.env.STATIC_IMMUTABLE !== '0'`, read once). Policy: stamped → `public, max-age=31536000, immutable`;
+   stamped with `STATIC_IMMUTABLE=0` → `no-cache`; unstamped (`index.html`, `/`, legal pages, `/convoy.apk`) →
+   `no-cache` — every row with ETag + Last-Modified. `server/server.js` static tail (`const qAt … fs.stat(file …`):
+   **stat first**, `!st.isFile()` → 404 (a directory used to EISDIR in `readFile`; now it must not become a
+   304-able resource), matching `If-None-Match` → `304` with Cache-Control/ETag/Last-Modified, **no body, no
+   Content-Type and no `fs.readFile`**, otherwise `readFile` → 200 exactly as before plus the new headers.
+   `ALLOWED_TOP`, the traversal guard, `LEGAL_PAGES`, `MIME` untouched. `server/.env.example` gains a "Runtime
+   tuning (optional)" block documenting `STATIC_IMMUTABLE` and `WS_MSG_BUDGET`.
+2. **Task 2 — tests, 25 → 26 suites.** New `test/httpcache.test.js` (**41** checks, registered after
+   `serverpolicy.test.js`): the pure policy (12), a throwaway `http.createServer` over a temp dir driven by real
+   `http.request` round-trips on an ephemeral port (21: the policy table row by row, 304 with zero body and the
+   headers RFC 7232 §4.1 requires, `*` and list-form `If-None-Match`, HEAD, an `fs.readFile` spy proving the 304
+   branch never reads, the validator moving on `utimes` and on rewrite, the kill switch, directory/missing → 404,
+   directory + `If-None-Match: *` → 404 not 304), and — the part that keeps the double honest — the **real static
+   tail lifted verbatim out of `server/server.js` and executed** through the same server (8). `test/serverpolicy.test.js`
+   55 → **77**: group **H1** (11: `require('./httpcache')`, stat before read, 304 between them and returning, the
+   `!st.isFile()` guard, `immutable` only in httpcache.js and no Cache-Control string built in the handler code,
+   `max-age=31536000` paired with `immutable`, the kill switch read once, `.env.example` documents both knobs) and
+   group **D1** (11, see Task 3). **RED first:** the new suite crashed on the missing module, then ran 32/33 with
+   only the lifted-tail check red against the unpatched server; serverpolicy ran **11 failed / 62 passed** against
+   the unpatched server. Mutation-tested in a `/tmp` copy: `isStamped` always-true → 5 red (index.html immutable),
+   `etagFor` ignoring mtime → 4 red, 304 branch not returning → 1 red, `!st.isFile()` dropped → 1 red.
+3. **Task 3 — server-002 and server-020 fixed, ledger told the truth.** `defer(fn, ms)` (next to `send()`,
+   try/catch + `console.error('[defer] deferred task threw:')`, returns the handle) replaces all five bare
+   `setTimeout(() => {` bodies — race-end grace, bot invite reply, bot chat reply, bot wave reply, race green light;
+   the two `.unref()` chains survive; the shutdown `setTimeout(() => process.exit(0), 5000).unref()` is left alone.
+   `leaveParty()` now hands the lead to the earliest `humanMembers` entry whose `ws.readyState === 1`, falling back
+   to `humanMembers[0]`. D1 pins both as text **and executes them**: `defer()` lifted and run with a throwing body
+   (caught, logged, handle returned); `leaveParty()` lifted and run — leader A leaves while B (next in join order)
+   is mid-close → **old code picks B, new code picks C**; every socket mid-close → the join-order fallback keeps a
+   leader. BUGS.md: server-002 and server-020 → FIXED (evidence line numbers computed from the patched tree),
+   server-020's `Fix:` line corrected (the "no join-order tracking" diagnosis was wrong — `party.members` is
+   push-ordered; the defect was liveness), server-011 → OPEN + **DEFER with a trigger** decision, server-017 →
+   OPEN + **SCHEDULED B5** decision; roll-up **Server 6/19/3, Runtime 0/5/1, Total 6/24/4 = 34**; still 100 bugs.
+4. **Not bumped:** `45 ?v=cy118` == production. Response headers are not web files. Push stage → **Lane B**.
+
+**What B still needs (the honest count):** server-017 (B5, cycle 55 — the auth path, its own cycle) and B4
+(Overpass mirrors, with the per-mirror log lines that have been accumulating since the 07:46Z restart). server-011
+is deferred by decision with a re-open trigger (tick > ~50 ms or > 60 concurrent humans), not open work.
+
 **Cycle 53 stage 30 (IMPLEMENT, executing the cycle-52-stage-28 IMPROVE directive's Tasks 1-4) — DONE, server-only, NO STAMP BUMP.**
 The server stops assuming the client is polite (server-024) or present (server-022), and the Server/Runtime
 half of BUGS.md is finally a measured ledger instead of a two-month-old to-do list (B3 truth pass).
@@ -761,6 +809,13 @@ check count, and the 7 baseline keys from going down.
 7 baseline keys **unchanged** (`htmlValidateErrors` 13, `axeViolations_*` 0 ×6, `detectorWarnings` 17) —
 expected: no web file touched. Stamp deliberately **not** bumped: `45 ?v=cy118` == production `cy118`. Keep suite
 count (25), every per-suite check count, and the 7 baseline keys from going down.
+`npm test` on 2026-09-03 (implementer stage 34, cycle 54, after Tasks 1-3, server-only): **All 26 suites passed**
+(25→26, new `test/httpcache.test.js`, **41/41** checks, registered after `serverpolicy.test.js`). `serverpolicy.test.js`
+55 → **77** (+22: group H1 11, group D1 11 incl. 4 executed checks). `bugstats.test.js` 20/20 (still **100** bugs;
+roll-up now 6/24/4). `frontend.test.js` 78, `overpass.test.js` 66, `ghostbbox.test.js` 18, `browser.test.js` 5/5 — all
+unchanged. `npm run test:frontend` 7 baseline keys **unchanged** (`htmlValidateErrors` 13, `axeViolations_*` 0 ×6,
+`detectorWarnings` 17) — expected: no web file touched. Stamp deliberately **not** bumped: `45 ?v=cy118` == production
+`cy118`. Keep suite count (26), every per-suite check count, and the 7 baseline keys from going down.
 
 ## Operating contract (cycle 50+, plan v2) — every role reads this; it is the tail of this file on purpose
 1. **One aspect at a time.** Implement works only on the current aspect's next milestone from plan v2
@@ -771,9 +826,10 @@ count (25), every per-suite check count, and the 7 baseline keys from going down
    read the current stamp (`grep -oE '\?v=cy[0-9]+' index.html | sort | uniq -c`, one value, 45×), then e.g.
    `sed -i 's/?v=cy117/?v=cy118/g' index.html && grep -oc '?v=cy118' index.html` (must print 45),
    then `node scripts/pack-ota.js --offline 2>&1 | tail -6` (must print the matching `version 1.0.NNN`).
-   Current stamp after cycle 52 stage 26: `cy118` — **production has served `cy117` since 2026-09-03 06:56Z**
-   (cycle-50 push); `LOCAL(118) > PROD(117)` by exactly one is the expected state until the cycle-52 push stage
-   runs Lane A (rule 7). If that push is held back, the next implement stage does not bump again.
+   Current stamp after cycle 54 stage 34: `cy118` **== production** (`cy118` served since 2026-09-03 07:46Z, the
+   cycle-52 push). Cycles 53 and 54 were server-only — no bump, Lane B both times. The next web edit (aspect C) bumps
+   to `cy119`; until then `LOCAL == PROD` is the expected state. If a push is held back, the next implement stage
+   does not bump again.
    Server-only stages do not bump. Never leave a mixed page. The bumped stamp is what the push stage
    uses to decide Lane A (web + OTA) vs Lane B (site only).
 3. **Push gates** (`deploy/PUSH-RUNBOOK.md`): review verdict BROKEN or any BLOCKER → nothing moves;
