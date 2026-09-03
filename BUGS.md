@@ -24,12 +24,13 @@ Each bug has:
 
 **Severity legend:** `critical` = security hole / data loss / hard crash · `high` = broken feature / resource leak · `medium` = degraded UX / latent bug · `low` = polish / a11y.
 
-**Jump to a section:** [Frontend (21)](#frontend) · [Server (30)](#server) · [Android (20)](#android) · [UI/UX (22)](#uiux) · [Runtime (6)](#runtime)
+**Jump to a section:** [Frontend (23)](#frontend) · [Server (30)](#server) · [Android (20)](#android) · [UI/UX (22)](#uiux) · [Runtime (6)](#runtime)
 
-### Top priorities (fix first — Server/Runtime rows re-verified 2026-09-03, see each entry's `- **Status:**` line; Android rows not yet re-verified)
+### Top priorities (fix first — Server/Runtime rows re-verified 2026-09-03 and the whole Frontend ledger re-verified 2026-09-03 (cycle 60), see each entry's `- **Status:**` line; Android rows not yet re-verified)
 
 | ID | Why |
 |---|---|
+| `frontend-001` … `frontend-023` | **Frontend ledger re-verified 2026-09-03 (cycle 60, C4a): 0 OPEN / 21 FIXED / 2 STALE — nothing in Frontend is open.** All six "high" entries (001/002/003/008/009/022) are FIXED: 001/008/009/010's null guards were already in the tree and the ids they dereference are executed by `test/domids.test.js` (31st suite, group D4); 003's unreachable solo physics was deleted this cycle (−1622 B gzip); 005 and 014 are STALE (premises that cannot occur). Residual for C4b: 015's `pollClose` timer on chained profile opens |
 | `server-032` | Convoy chat was **never delivered in live mode** — the fan-out envelope's timestamp was an undefined name (`now`), the handler threw before its first `send()`, and the dispatcher's catch swallowed it on every message since the initial commit. — **FIXED 2026-09-03 (cycle 55)**, with a class gate (`test/globals.test.js`) |
 | `server-008` | `X-Forwarded-For` is trusted blindly → defeats **every** per-IP rate limit and connection ceiling. Trivial DoS. — **FIXED 2026-09-03** |
 | `runtime-001` / `runtime-002` | Concurrent `/api/register` and `/api/recover` create duplicate accounts / burn one code 5×. Auth data integrity. — **STALE / FIXED 2026-09-03** (the local-JSON store is gone; the recovery burn is a conditional DELETE) |
@@ -43,90 +44,101 @@ Each bug has:
 ---
 
 ## Frontend
-*Client-side JS (`js/*.js`) — 21 bugs*
+*Client-side JS (`js/*.js`) — 23 entries, re-verified 2026-09-03 (cycle 60, aspect C milestone C4a): **0 OPEN / 21 FIXED / 2 STALE** — see each entry's `- **Status:**` line (machine-checked by `test/bugstats.test.js`) and the roll-up under Stats*
 
-### BUG frontend-001
+### BUG frontend-001 — FIXED (re-statused cycle 60 stage 59, 2026-09-03; fixed in an earlier cycle, never re-statused)
 - **Severity:** high
+- **Status:** FIXED (re-verified 2026-09-03) — phantom, fixed in an earlier cycle and never re-statused: `js/mapview.js:1179` `wireControls()` guards all five controls (`if (zIn)` / `if (zOut)` / `if (cmp)` / `if (loc)` / `if (rec)`, lines 1180-1199) exactly like `ctl-global`; and the premise cannot occur on the shipped page — every `ctl-*` id resolves in `index.html`, executed by `test/domids.test.js` group D4 (cycle 60)
 - **File:** `js/mapview.js:992-1005`
 - **Title:** Missing null checks on map control elements (`ctl-zoom-in/out`, `ctl-compass`, `ctl-locate`, `ctl-recenter`) crash `wireControls()` if any ID is absent
 - **Repro:** Remove `<button id="ctl-zoom-in">` from `index.html`; reload. `wireControls()` throws `TypeError: Cannot read properties of null (reading 'addEventListener')` and the entire control bar (plus the `map.on('load')` global cursor wiring at 1011) stays unwired.
 - **Impact:** One missing/mis-typed control ID hard-crashes the whole control bar at boot. Inconsistent vs the null-checked `ctl-global` at 1008.
 - **Fix:** Guard each like `ctl-global`: `var z = document.getElementById('ctl-zoom-in'); if (z) z.addEventListener('click', ...);` for all five.
 
-### BUG frontend-002
+### BUG frontend-002 — FIXED (re-statused cycle 60 stage 59, 2026-09-03; fixed in an earlier cycle, never re-statused)
 - **Severity:** high
+- **Status:** FIXED (re-verified 2026-09-03) — phantom, fixed in an earlier cycle and never re-statused: `js/race.js:333` sets `finished: !!mem.finished` on the sort wrapper, the comment below it says so ("used to read a.finished off the wrapper, which never had the field") and both comparisons are the prescribed ones
 - **File:** `js/race.js:308-314`
 - **Title:** `paintHud` sort comparator reads `a.finished`/`b.finished` which never exist (the flag lives on `mem`)
 - **Repro:** Multiplayer race, ≥2 opponents. Opponent A finishes 12.5 s, B finishes 14.0 s. The two finished rows are not reliably A-then-B (depends on engine sort stability).
 - **Impact:** Leaderboard ordering for finished racers is wrong — fastest-finished does not bubble up.
 - **Fix:** `if (a.mem.finished !== b.mem.finished) return a.mem.finished ? -1 : 1;` and `if (a.mem.finished && b.mem.finished) return a.time - b.time;`
 
-### BUG frontend-003
+### BUG frontend-003 — FIXED (cycle 60 stage 59, 2026-09-03)
 - **Severity:** high
+- **Status:** FIXED (re-verified 2026-09-03) — cycle 60 stage 59 took the entry's first option and deleted the unreachable `if (solo)` subtree from `js/sim.js`: `randomCar` / `spawnLocal` / `stepWanderer` / `stepMember` / `ensureAmbient` / `stepAmbientLocal` / `buildLocalGlobal`, the `if (solo)` bodies in `tick()` and `relocatePlayer()`, the `solo` / `globalTimer` / `GLOBAL_MS` / `NEARBY_N` / `MAX_RANGE` state, the unused `A.data` binding and the caller-less `isSolo` export (802 → 645 lines); `enableSolo()` / `disableSolo()` stay for `js/net.js`. 1622 B gzip earned back (11334 → 9712) → `bootAssetGzipBudget` 359424 → 358400 in `test/frontend-baseline.json`; the 1 Hz `tick()` still emits `tick` for the HUD widgets (its timer stays in `test/visibility.test.js` POLL_ALLOW)
 - **File:** `js/sim.js:164-173`
 - **Title:** `enableSolo()` never sets `solo=true`, so the `tick()` physics body (`if (solo)`) is unreachable dead code; contract is inconsistent
 - **Repro:** `A.sim.enableSolo();` — `solo` stays false; tick interval runs but body skipped forever.
 - **Impact:** Solo-mode contract broken; latent state-corruption footgun for any future caller that sets `solo=true` directly.
 - **Fix:** Either delete the `solo` flag + `if (solo)` branch (simulation is intentionally disabled in production), or set `solo=true` in `enableSolo` and `solo=false` in `disableSolo` consistently.
 
-### BUG frontend-004
+### BUG frontend-004 — FIXED (re-statused cycle 60 stage 59, 2026-09-03; fixed in an earlier cycle, never re-statused)
 - **Severity:** medium
+- **Status:** FIXED (re-verified 2026-09-03) — phantom, fixed in an earlier cycle and never re-statused: `js/voice.js:1135` — the document Space listeners are bound once for the life of the module behind the `spaceWired` flag (`wireSpaceKey()` returns early on every later call), with the explaining comment above it
 - **File:** `js/voice.js:436-467`
 - **Title:** `wirePttButton()` attaches document-level Space keydown/keyup listeners with no dedupe; they leak across re-opens if `#wt-ptt` is ever recreated
 - **Repro:** Force-rebuild `#wt-ptt` (clearing `dataset.wired`) and reopen the walkie overlay repeatedly. Each open stacks another Space listener pair.
 - **Impact:** Listener leak; duplicate PTT firing; Space becomes unreliable.
 - **Fix:** Guard the document listeners with a module-level `docWired` flag, or attach them once in `init()`.
 
-### BUG frontend-005
+### BUG frontend-005 — STALE (re-statused cycle 60 stage 59, 2026-09-03; the premise cannot occur in the tree)
 - **Severity:** medium
+- **Status:** STALE (re-verified 2026-09-03) — the premise cannot occur: `js/dragy.js:238` only calls `uploadPB()` when `A.auth.isLoggedIn()` is true, and that is `hasSession()` at `js/auth.js:60`, `!!(S.auth && S.auth.token)` — a truthy answer guarantees the token the header at `js/dragy.js:248` reads in the same synchronous tick (`js/state.js:221` also refuses to restore a saved session without a token). Nit for C4b if bytes allow: route the call through the `api()` helper's conditional header at `js/auth.js:45` instead of building it by hand
 - **File:** `js/dragy.js:183-201`
 - **Title:** `uploadPB` sends `Authorization: Bearer undefined` when token is missing but `isLoggedIn()` is truthy
 - **Repro:** Set `A.state.auth = { username:'x' }` (no `.token`), complete a PB run. Outgoing POST header is `Authorization: Bearer undefined`.
 - **Impact:** Silent PB sync failure with malformed auth header; confusing server logs.
 - **Fix:** Build the header conditionally: `var tok = A.state.auth && A.state.auth.token; if (!tok) return; headers.Authorization = 'Bearer ' + tok;`
 
-### BUG frontend-006
+### BUG frontend-006 — FIXED (re-statused cycle 60 stage 59, 2026-09-03; fixed in an earlier cycle, never re-statused)
 - **Severity:** medium
+- **Status:** FIXED (re-verified 2026-09-03) — phantom, fixed in an earlier cycle and never re-statused: `js/overlays.js:283-285` re-reads `S.settings.showWeather` inside the `refreshRadar().then` before revealing the layer, with the comment "this reveal used to run anyway and resurrected the layer the rider just killed"
 - **File:** `js/overlays.js:255-265`
 - **Title:** Toggling weather off races the in-flight `refreshRadar()` promise and re-shows the layer
 - **Repro:** Toggle weather on, then off within ~1 s (before RainViewer fetch resolves). Layer reappears when the promise resolves.
 - **Impact:** Weather layer "ghost-on" after explicit disable.
 - **Fix:** Capture desired state at call time and re-check inside `.then` (generation counter, or check `S.settings.showWeather`).
 
-### BUG frontend-007
+### BUG frontend-007 — FIXED (re-statused cycle 60 stage 59, 2026-09-03; fixed in an earlier cycle, never re-statused)
 - **Severity:** medium
+- **Status:** FIXED (re-verified 2026-09-03) — phantom, fixed in an earlier cycle and never re-statused: the dead `var speed = … ? null : null;` line is gone from `js/race.js` (the only speed-named local left is `speedTxt`, which is read); `:165-178` is now the `fixListener` + relay-suppression block
 - **File:** `js/race.js:172`
 - **Title:** Dead placeholder `var speed = (A.dragy && A.dragy._state) ? null : null;` — always null, never read
 - **Repro:** Static — `speed` declared, assigned null, never referenced.
 - **Impact:** Maintenance hazard; a future "fix" could wire the null into the relay payload.
 - **Fix:** Delete the line; the comment alone communicates intent.
 
-### BUG frontend-008
+### BUG frontend-008 — FIXED (re-statused cycle 60 stage 59, 2026-09-03; fixed in an earlier cycle, never re-statused)
 - **Severity:** high
+- **Status:** FIXED (re-verified 2026-09-03) — phantom, fixed in an earlier cycle and never re-statused: `js/ui.js:874-880` `updateDockBadge()` opens with `if (!badge) return;` ("a missing badge must not throw on every party emit"); and `#dock-convoy-badge` resolves on the shipped page, executed by `test/domids.test.js` group D4 (cycle 60)
 - **File:** `js/ui.js:709-714`
 - **Title:** `updateDockBadge()` dereferences `badge.hidden`/`textContent` with no null check
 - **Repro:** Remove `<span id="dock-convoy-badge">`, join/leave a convoy. Throws `TypeError: Cannot set properties of null (setting 'hidden')` on every party emit.
 - **Impact:** Uncaught error on every party membership change when the badge is absent.
 - **Fix:** `var badge = document.getElementById('dock-convoy-badge'); if (!badge) return;`
 
-### BUG frontend-009
+### BUG frontend-009 — FIXED (re-statused cycle 60 stage 59, 2026-09-03; fixed in an earlier cycle, never re-statused)
 - **Severity:** high
+- **Status:** FIXED (re-verified 2026-09-03) — phantom, fixed in an earlier cycle and never re-statused: `js/routing.js:977-978` (`if (card) { … }`) and `:1123-1124` (`renderEtaCard()`: `if (!card) return;` — "a page variant without the card must not abort the route commit"); `#eta-card` resolves on the shipped page, executed by `test/domids.test.js` group D4 (cycle 60) — whose RED run also named two `eta-card` lookups this entry never listed, `js/tripextras.js:71` and `:136`
 - **File:** `js/routing.js:714-723, 859-862`
 - **Title:** `clearRoute()` and `renderEtaCard()` dereference `#eta-card` (`classList`/`hidden`/`innerHTML`) without null check
 - **Repro:** Load a page variant without `<div id="eta-card">`; pick a search result. `renderEtaCard` throws at 862 and the route commit aborts.
 - **Impact:** Hard crash on routing when the ETA card is missing.
 - **Fix:** `var card = document.getElementById('eta-card'); if (!card) return;` at the top of both.
 
-### BUG frontend-010
+### BUG frontend-010 — FIXED (re-statused cycle 60 stage 59, 2026-09-03; fixed in an earlier cycle, never re-statused)
 - **Severity:** medium
+- **Status:** FIXED (re-verified 2026-09-03) — phantom, fixed in an earlier cycle and never re-statused: `js/ui.js:359-360` (`renderNearby()`), `:606-608` (`renderConvoy()`, which also guards `#convoy-sub`) and `:1663-1664` (`buildProfilePanel()`) each open with `if (!body) return;` ("absent panel must not desync openName from the DOM"); all three body ids resolve on the shipped page, executed by `test/domids.test.js` group D4 (cycle 60)
 - **File:** `js/ui.js:275-278, 506-510, 1255-1258`
 - **Title:** `renderNearby` / `renderConvoy` / `buildProfilePanel` set `body.innerHTML=''` with no null guard
 - **Repro:** Open Nearby panel on a page where `#nearby-body` is missing. Throws at 277; `openName='nearby'` desyncs from DOM.
 - **Impact:** Panel render crash + state/DOM desync when a panel body is missing.
 - **Fix:** Guard each: `var body = document.getElementById('nearby-body'); if (!body) return;`
 
-### BUG frontend-011
+### BUG frontend-011 — FIXED (re-statused cycle 60 stage 59, 2026-09-03; fixed in an earlier cycle, never re-statused)
 - **Severity:** medium
+- **Status:** FIXED (re-verified 2026-09-03) — phantom, fixed in an earlier cycle and never re-statused: `js/ghost.js:286` `if (!running) return;` before the poll, `:290` `if (!running || list == null) return;` when it resolves, and `stop()` at `:624` clears `acLive` / `acMerged` / `trails` and both aircraft map layers — the full prescription; `test/visibility.test.js` V1 executes `pollAircraft` / `predictTick` against the real module
 - **File:** `js/ghost.js:205-225, 592-624`
 - **Title:** In-flight aircraft poll resolves after `stop()` and runs `predictTick()` once, re-painting aircraft the user just turned off
 - **Repro:** Enable Ghost Mode, wait for aircraft, toggle off while a poll is mid-flight. Aircraft briefly reappear.
@@ -135,7 +147,7 @@ Each bug has:
 
 ### BUG frontend-012 — FIXED (re-statused cycle 58 stage 50, 2026-09-03; fixed in an earlier cycle, never re-statused)
 - **Severity:** medium
-- **Status:** FIXED (re-verified 2026-09-03) — `js/net.js:157-163`: `onConnectFailed()` always calls `scheduleRetry()` (no budget, `RETRY_MIN` 2 s → `RETRY_MAX` 30 s, "we never stop trying"); `everConnected` only picks the toast wording. The cycle-57 review handed this to cycle 58 as OPEN — the cycle-57 improve stage caught the phantom (`stages/0048-c057-improve.md` §2.1)
+- **Status:** FIXED (re-verified 2026-09-03) — `js/net.js:157-163`: `onConnectFailed()` always calls `scheduleRetry()` (no budget, `RETRY_MIN` 2 s → `RETRY_MAX` 30 s, "we never stop trying"); `everConnected` only picks the toast wording. The cycle-57 review handed this to cycle 58 as OPEN — the cycle-57 improve stage caught the phantom (mission stage doc 0048-c057-improve §2.1)
 - **File:** `js/net.js:102-119`
 - **Title:** `onConnectFailed` requires `everConnected` to retry, so the very first connect failure strands the user in solo with no retry
 - **Repro:** Boot with the server briefly unreachable. `connect()` times out → `everConnected` false → `fallbackSolo(false)`, no retry.
@@ -151,24 +163,27 @@ Each bug has:
 - **Impact:** UI flicker, repeated toasts, mic churn on flaky connections.
 - **Fix:** Keep `S.party` optimistic for a short grace window before nulling; null only on explicit `party:left` or after retries exhausted.
 
-### BUG frontend-014
+### BUG frontend-014 — STALE (re-statused cycle 60 stage 59, 2026-09-03; the premise cannot occur in the tree)
 - **Severity:** medium
+- **Status:** STALE (re-verified 2026-09-03) — both claims miss the tree: `js/scanners.js:91-96` creates `P.audio` once (`if (!P.audio)`) and attaches `ended` / `error` exactly once for the page lifetime, so nothing accumulates; and a late `error` after `close()` reaches `playNext()` (`:160`) after `resetPlayback()` (`:190`) has set `P.sys = null`, whose first line `if (!P.sys || P.paused) return;` makes it a no-op. Nothing to fix
 - **File:** `js/scanners.js:107-126, 196-200`
 - **Title:** Retained `P.audio` element's `error`/`ended` listeners are never removed; a late `error` after `close()` calls `playNext()` post-close
 - **Repro:** Open scanner, start a system, immediately close while buffering. On some platforms the abort fires as `error` → `playNext` runs after close.
 - **Impact:** Minor post-close state churn; listeners accumulate over the page lifetime.
 - **Fix:** In `resetPlayback`, also `removeEventListener` for `ended`/`error` (or null `P.audio` and rebuild on next open).
 
-### BUG frontend-015
+### BUG frontend-015 — FIXED as re-scoped (cycle 60 stage 59, 2026-09-03; `pollClose` residual → C4b)
 - **Severity:** medium
+- **Status:** FIXED (re-verified 2026-09-03) — as re-scoped: the listener half is fixed at `js/ui.js:1637` (`var off = ST.on('stats', …)` — "it returned undefined before, so the off() call below threw and every opened profile leaked a live listener") and the generation token exists at `:1627` (`profileOverlayId !== subject.id`). Residual handed to C4b (cycle 61): the 250 ms `pollClose` interval at `:1643` only self-clears when `#onboarding` goes hidden, so chaining profile A → B leaves A's timer running one no-op comparison per 250 ms until the overlay closes, and `pollClose` is in `test/visibility.test.js` POLL_ALLOW so it also ticks with the screen off — bounded by the overlay's lifetime, not worth `js/ui.js` bytes this cycle
 - **File:** `js/ui.js:1219-1242`
 - **Title:** `openProfileOverlay`'s 250 ms `pollClose` interval + `stats` listener leak when another overlay opens before `#onboarding` is hidden
 - **Repro:** Open rider A's profile, then open rider B's profile (or a race overlay) without fully closing. A's `pollClose` keeps running at 250 ms forever; `stats` listener never detached.
 - **Impact:** Interval + listener leak per chained profile open; memory grows; stats fan-out to stale handlers.
 - **Fix:** Use a generation token; clear the interval when `profileOverlayId !== subject.id` in `refresh`.
 
-### BUG frontend-016
+### BUG frontend-016 — FIXED (re-statused cycle 60 stage 59, 2026-09-03; fixed in an earlier cycle, never re-statused)
 - **Severity:** low
+- **Status:** FIXED (re-verified 2026-09-03) — phantom, fixed in an earlier cycle and never re-statused: `js/space.js:637-642` — `if (ctx.ellipse) { … } else { … }` with a pole-to-pole quadratic fallback for legacy WebViews, exactly the prescribed feature detection
 - **File:** `js/space.js:637`
 - **Title:** `ctx.ellipse(...)` for moon terminator with no feature detection; throws on old WebViews
 - **Repro:** Run in an old Android WebView without `CanvasRenderingContext2D.prototype.ellipse`. Each sky-paint frame throws at 637.
@@ -177,15 +192,16 @@ Each bug has:
 
 ### BUG frontend-017 — FIXED (re-statused cycle 58 stage 50, 2026-09-03; fixed in an earlier cycle, never re-statused)
 - **Severity:** medium
-- **Status:** FIXED (re-verified 2026-09-03) — `js/race.js:174-190`: `fixSendTimer` relays only when the fix signature changed, with a 2 s maximum gap so a peer's `RaceTimer` cannot back-date a late launch ("Relay at ~10Hz ONLY while something is changing"). Caught as a phantom by the cycle-57 improve stage (`stages/0048-c057-improve.md` §2.1)
+- **Status:** FIXED (re-verified 2026-09-03) — `js/race.js:174-190`: `fixSendTimer` relays only when the fix signature changed, with a 2 s maximum gap so a peer's `RaceTimer` cannot back-date a late launch ("Relay at ~10Hz ONLY while something is changing"). Caught as a phantom by the cycle-57 improve stage (mission stage doc 0048-c057-improve §2.1)
 - **File:** `js/race.js:160-181`
 - **Title:** `fixSendTimer` relays `race:fix` at 10 Hz even when GPS is stationary/no-fix — 9 of 10 packets are stale duplicates
 - **Repro:** Start a multiplayer race and leave the device still. Capture WS outgoing frames: ~10 identical `race:fix` messages/sec for the whole race.
 - **Impact:** 10× redundant network traffic + peer-side processing every race; battery/bandwidth drain.
 - **Fix:** Relay only when the new fix differs beyond a small epsilon, or relay at most once per real `gpsfix` event.
 
-### BUG frontend-018
+### BUG frontend-018 — FIXED (re-statused cycle 60 stage 59, 2026-09-03; fixed in an earlier cycle, never re-statused)
 - **Severity:** medium
+- **Status:** FIXED (re-verified 2026-09-03) — phantom, fixed in an earlier cycle and never re-statused: `js/ui.js:641-642` — `A.party.create(nameInput.value.trim() || nameInput.placeholder, chosen)` with the comment ("… not create a convoy called '   '"), and `js/party.js:22` / `:27` trim again downstream
 - **File:** `js/ui.js:519-521, 535-538`
 - **Title:** Convoy create uses `nameInput.value || nameInput.placeholder` without `.trim()`; whitespace-only entry reaches `party.create`
 - **Repro:** Type only spaces into the convoy name field, tap Create. Currently masked because `party.create` trims downstream; latent if that trim is ever removed.
@@ -194,6 +210,7 @@ Each bug has:
 
 ### BUG frontend-019 — FIXED (cycle 52 stage 26, 2026-09-03)
 - **Severity:** medium
+- **Status:** FIXED (re-verified 2026-09-03) — `js/ghost.js` `clampBBox()` (exported on `A.ghost`) returns `null` for a world-wrapped or degenerate view ("skip this tick", which all four callers handle); executed in `test/ghostbbox.test.js` (18 checks: the −180..180 view → `null`, the `-2 … 2` signature it kills, a 12° regional view still clamped to 4°)
 - **File:** `js/ghost.js:97-110` (`viewBBox`, now the pure `clampBBox` beside it), with `:280` (`BACKOFF_MAX_MS`) and `:366` (`backoffFail('police', …)`)
 - **Title:** The intro globe's world-wrapped viewport is clamped to a fictional 4° box at longitude 0, firing 5–7 junk upstream queries per app open whose failures back the rider's real police layer off for up to 15 minutes
 - **Repro:** Open the app with animations on (the intro globe spins, then flies down to the rider). On the VPS, `journalctl -u convoy | grep overpass` shows `all mirrors failed for enforcement <lat>,-2,<lat+4>,2` — longitude exactly `-2 … 2`, the signature of `viewBBox()` clamping a −180..180 view to `centre ± 2` at centre 0. Five of the seven production failures logged on 2026-09-03 (03:42Z–06:55Z) carry that pair; none is a place a rider was looking at (cycle-51 truth pass, STATE.md "Aspect B").
@@ -202,6 +219,7 @@ Each bug has:
 
 ### BUG frontend-020 — FIXED (cycle 57 stage 46, 2026-09-03)
 - **Severity:** medium
+- **Status:** FIXED (re-verified 2026-09-03) — `js/util.js` `fetchT(url, opts, ms)` + the `FETCH_TIMEOUT` table (overpass 75 s, aircraft 20 s, api 15 s), all 20 bare `fetch` sites converted; class gate `test/fetchtimeout.test.js` (39 checks: the real `fetchPolice()` with a stalling transport, the two-entry allowlist with anti-rot, the cross-file `overpass >= MIRRORS × TIMEOUT_MS` floor read from `server/overpass.js` each run)
 - **File:** `js/ghost.js:336` (the enforcement-layer `fetch(OVERPASS_PROXY, …)`) and `:386` (the `lastPoliceBbox = null` + `backoffFail('police', …)` recovery, which only runs on rejection); also `js/routing.js:835` (the `road` lookup for stops/signals — same call, same missing `signal`); compare `js/routing.js:243-245` (the `police` lookup, which does carry an `AbortController` + `signal`)
 - **Title:** The enforcement-layer fetch (and routing.js's `road` lookup) has no `AbortSignal.timeout()` — a slow or hung proxy leaves the promise pending indefinitely, and the recovery path only runs on rejection
 - **Repro:** code-read, 2026-09-03 (cycle-55 improve stage): `js/ghost.js:336` passes no `signal`; `js/routing.js:245` does (`signal: ctrl.signal`). While the proxy's upstream call was paying a dead first mirror's full 30 s timeout (server-034, fixed server-side in cycle 56) the layer's request sat pending with nothing to cancel it; a proxy that never answers at all (a stalled TCP session) leaves it pending for good.
@@ -1184,7 +1202,7 @@ this table ever drifts from what's actually here.
 
 | Area | critical | high | medium | low | total |
 |---|---:|---:|---:|---:|---:|
-| Frontend | 0 | 6 | 16 | 1 | 23 | (frontend-001/002/003/008/009/022 are the highs; frontend-012/013/017/019/020/022/023 fixed — 012/013/017 re-statused in cycle 58 after the cycle-57 improve stage caught them as phantoms; frontend-021 fixed cycle 59, aspect C milestone C3) |
+| Frontend | 0 | 6 | 16 | 1 | 23 | (all six highs — 001/002/003/008/009/022 — FIXED; **0 OPEN / 21 FIXED / 2 STALE** after the 2026-09-03 cycle-60 re-verification of every entry: 001/002/004/006/007/008/009/010/011/016/018 were phantoms fixed in earlier cycles and never re-statused, 003 deleted in cycle 60, 005/014 STALE, 015 FIXED as re-scoped with a residual for C4b, 012/013/017 re-statused cycle 58, 019 cycle 52, 020 cycle 57, 021 cycle 59, 022/023 cycle 58; roll-up below) |
 | Server | 5 | 11 | 15 | 1 | 32 | (server-003/006/008/011/032 critical — 003/008/032 FIXED, 006 STALE, 011 OPEN-latent; 5 OPEN / 24 FIXED / 3 STALE after the 2026-09-03 re-verification, the cycle-54 B3b fixes of 002 + 020, the cycle-55 fixes of 032 + 033, the cycle-56 fixes of 017 + 034 and the cycle-58 seat hold 035, roll-up below) |
 | Android | 3 | 8 | 8 | 1 | 20 | (android-001/002/003 critical) |
 | UI/UX | 1 | 5 | 10 | 6 | 22 | (ui-001/004/006/013/014/015/016/017/018/019/003/003b fixed; ui-020/021 visual-verification-pending, unresolved without a browser) |
@@ -1193,17 +1211,20 @@ this table ever drifts from what's actually here.
 | Perf | 0 | 0 | 1 | 0 | 1 | |
 | **Total** | **9** | **33** | **54** | **12** | **108** |
 
-### Open-status roll-up (Server + Runtime only — re-verified 2026-09-03)
+### Open-status roll-up (Server + Runtime + Frontend — re-verified 2026-09-03)
 
-Computed from the per-entry `- **Status:**` lines added by the cycle-53 B3 truth pass. `test/bugstats.test.js`
+Computed from the per-entry `- **Status:**` lines added by the cycle-53 B3 truth pass (Server + Runtime) and the cycle-60 C4a pass (Frontend). `test/bugstats.test.js`
 recomputes these numbers from the entries and checks every FIXED/STALE evidence path against the tree, so a
 cited file that disappears (or a "no longer exists" file that comes back) fails `npm test` with the bug's ID.
 OPEN entries marked *latent* describe a real risk whose premise production has never met.
 
 | Area | OPEN | FIXED | STALE | total |
 |---|---:|---:|---:|---:|
+| Frontend | 0 | 21 | 2 | 23 |
 | Server | 5 | 24 | 3 | 32 |
 | Runtime | 0 | 5 | 1 | 6 |
-| **Total** | **5** | **29** | **4** | **38** |
+| **Total** | **5** | **50** | **6** | **61** |
 
 Open after the pass (updated cycle 56 — `server-017` high FIXED as milestone B5 and `server-034` medium filed and fixed as milestone B4, both with executed tests; cycle 55 fixed `server-032` and `server-033`; cycle 54 fixed `server-002` and `server-020`): `server-009`, `server-011` (latent, **deferred with a trigger**), `server-014` (latent), `server-015`, `server-016`. No open HIGH or CRITICAL remains in the Server/Runtime ledger other than the deferred `server-011`.
+
+Frontend (cycle 60, C4a): **nothing OPEN**. `frontend-005` and `frontend-014` are STALE (their premises cannot occur in the tree — `isLoggedIn()` implies a token; the scanner audio element is created once). Residual handed to C4b (cycle 61): `frontend-015`'s 250 ms `pollClose` timer keeps ticking until the overlay closes when profile A → B are chained. The four "no null check" entries (001/008/009/010) are kept true by `test/domids.test.js`: every id the client looks up by literal must resolve on the shipped page.

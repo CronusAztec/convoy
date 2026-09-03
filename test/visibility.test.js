@@ -287,8 +287,8 @@ const listeners = (type) => (typeof doc._listeners === 'function' ? doc._listene
     'js/state.js': [{ fn: 'applyTheme', why: 'sun-synced theme, 60 s: two comparisons, no network, no paint — pausing buys nothing' }],
     'js/space.js': [{ fn: 'refreshNight', why: 'already visibility-aware: returns unless `active`, and the rAF loop stops on its own visibilitychange listener' }],
     'js/sim.js': [
-      { fn: 'tick', why: 'start(): the solo physics tick — paused and re-armed by its own visibilitychange listener' },
-      { fn: 'tick', why: 'that visibilitychange listener re-arming the physics tick on return' }
+      { fn: 'tick', why: 'start(): the 1 s UI tick (ST.emit("tick") → speedo, compass, trip meter…; the solo physics it used to step was deleted in cycle 60, frontend-003) — paused and re-armed by its own visibilitychange listener' },
+      { fn: 'tick', why: 'that visibilitychange listener re-arming the UI tick on return' }
     ]
   };
   // The pause set, by file: every U.poll() call must be here, and every count must hold.

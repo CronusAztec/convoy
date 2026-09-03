@@ -114,9 +114,11 @@ function testBugStatsTableMatchesFile() {
    two months after that file was deleted and nothing noticed. Now a FIXED line
    whose evidence path vanishes — or a STALE line whose "no longer exists" path
    comes back — turns npm test red with the bug's ID in the message. Scoped to
-   ## Server and ## Runtime; the other sections' truth passes are later cycles'
-   work and inherit these checks by being added to STATUS_SECTIONS. */
-const STATUS_SECTIONS = ['Server', 'Runtime'];
+   ## Server and ## Runtime by the B3 pass, ## Frontend added by the cycle-60
+   C4a pass (23 entries; test/domids.test.js executes the four "no null check"
+   entries); ## UI/UX is C4b and ## Android is aspect D — each inherits these
+   checks by being added to STATUS_SECTIONS. */
+const STATUS_SECTIONS = ['Server', 'Runtime', 'Frontend'];
 const STATUS_RE = /^- \*\*Status:\*\* (OPEN|FIXED|STALE) \(re-verified (\d{4}-\d{2}-\d{2})\)( — (.+))?$/;
 const GONE_RE = /no longer exists|does not exist|was removed/;
 // `server/server.js:3054` → server/server.js · `js/net.js:222-230` → js/net.js · `users.json` → users.json
@@ -170,15 +172,15 @@ function parseRollup(text) {
 }
 
 function testStatusLedger() {
-  H.group('BUGS.md — Server + Runtime "Status" lines are present, well-formed and not rotten (B3)');
+  H.group('BUGS.md — ' + STATUS_SECTIONS.join(' + ') + ' "Status" lines are present, well-formed and not rotten (B3 + C4a)');
   const text = fs.readFileSync(BUGS_PATH, 'utf8');
   const entries = parseStatuses(text);
   const ids = (arr) => arr.map((e) => e.id).join(', ') || 'none';
 
   const wrongCount = entries.filter((e) => e.statuses.length !== 1);
-  H.ok('every Server/Runtime entry (' + entries.length + ') carries exactly one "- **Status:**" line',
-    entries.length >= 34 && wrongCount.length === 0,
-    'entries with 0 or 2+ Status lines: ' + ids(wrongCount) + (entries.length < 34 ? ' (only ' + entries.length + ' entries parsed)' : ''));
+  H.ok('every ' + STATUS_SECTIONS.join('/') + ' entry (' + entries.length + ') carries exactly one "- **Status:**" line',
+    entries.length >= 57 && wrongCount.length === 0,
+    'entries with 0 or 2+ Status lines: ' + ids(wrongCount) + (entries.length < 57 ? ' (only ' + entries.length + ' entries parsed — 32 Server + 6 Runtime + 23 Frontend expected)' : ''));
 
   const misplaced = entries.filter((e) => e.statuses.length &&
     (e.sevLine === null || e.sevLine > e.line + 5 || e.statuses[0].line <= e.sevLine));
@@ -221,7 +223,7 @@ function testStatusLedger() {
   }
   const rollup = parseRollup(text);
   H.ok('BUGS.md has an "### Open-status roll-up" table under ## Stats',
-    !!rollup && Object.keys(rollup).length >= 3, 'missing or unparseable roll-up table');
+    !!rollup && Object.keys(rollup).length >= STATUS_SECTIONS.length + 1, 'missing or unparseable roll-up table (need a row per STATUS_SECTIONS area + Total)');
   const grand = { OPEN: 0, FIXED: 0, STALE: 0, total: 0 };
   for (const area of STATUS_SECTIONS) {
     const t = tally[area] || { OPEN: 0, FIXED: 0, STALE: 0, total: 0 };

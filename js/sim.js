@@ -1,17 +1,12 @@
 /* Convoy — rider engine: marker store, interpolation, trip motion, follow camera.
-   Two rider sources share this engine:
-     - solo: local wanderer physics (no server reachable)
-     - live: js/net.js feeds positions from the Convoy server
-   The rest of the app (ui/party/mapview/routing) never needs to know which is active. */
+   Rider positions come from js/net.js (the Convoy server); the rest of the app
+   (ui/party/mapview/routing) only ever talks to this engine. */
 (function () {
   'use strict';
   var A = (window.App = window.App || {});
-  var U = A.util, S = A.state, ST = A.store, D = A.data;
+  var U = A.util, S = A.state, ST = A.store;
 
-  var TICK_MS = 1000;       // solo physics step / UI refresh cadence
-  var GLOBAL_MS = 45000;    // solo global feed refresh
-  var NEARBY_N = 14;
-  var MAX_RANGE = 5200;
+  var TICK_MS = 1000;       // UI refresh cadence: tick() emits 'tick' (speedo, compass, trip meter…)
   var MAX_EXTRAP_S = 1.6;   // cap on dead-reckoning prediction past the last known point
   var OFF_ROUTE_M = 55;     // lateral deviation (m) that counts as "off the planned route"
   var OFF_ROUTE_MS = 5000;  // ...sustained this long before we auto-reroute (ignores GPS jitter)
@@ -19,7 +14,6 @@
   var player = { pos: S.playerStart.slice(), heading: 0 };
   var npcs = {};            // id -> rider
   var npcOrder = [];
-  var solo = false;
   // Local player's dragy stats (PBs + race counters). Mirrors what the server
   // stores; kept in sync via adoptStats() and read by the profile overlay. Stays
   // null for guests.
@@ -29,7 +23,6 @@
   var linksSig = ''; // position signature of the last convoy-link build (skip no-op rebuilds)
   var uiTickAt = 0;
   var started = false;
-  var globalTimer = null;
 
   /* ---------------- rider records ---------------- */
   function baseRider(rec) {
@@ -126,154 +119,19 @@
     if (mode) npc.mode = mode;
   }
 
-  /* ---------------- solo source ---------------- */
-  function randomCar() {
-    var make = U.pick(D.MAKE_LIST);
-    var model = U.pick(D.MAKES[make]);
-    var trims = (D.VEHICLES && D.VEHICLES[make] && D.VEHICLES[make][model]) || [];
-    var paint = U.pick(D.PAINTS);
-    return {
-      year: U.randInt(1995, 2026), make: make, model: model,
-      trim: trims.length ? U.pick(trims) : '',
-      paint: paint.hex, paintName: paint.name, finish: U.pick(D.FINISHES)
-    };
-  }
-
-  function spawnLocal(center) {
-    var name = U.pick(D.NAMES);
-    return {
-      id: U.uid(),
-      name: name,
-      handle: name.toLowerCase() + U.randInt(2, 99),
-      emoji: U.pick(D.EMOJIS),
-      vibe: U.pick(D.VIBES),
-      car: randomCar(),
-      pos: U.destPoint(center, U.rand(0, 360), U.rand(300, 4200)),
-      heading: U.rand(0, 360),
-      speed: U.rand(7, 19),
-      mode: U.chance(0.22) ? 'parked' : 'cruise'
-    };
-  }
-
-  // Solo simulation is DISABLED in the production build. Previously this spawned
-  // ~14 fake nearby riders + ambient global dots so the app felt populated when
-  // the server was unreachable. Now: no fake riders — offline/no-server shows an
-  // empty map (just the player marker), which is honest. No crash: the render
-  // loop iterates an empty npcOrder. netMode stays 'connecting' so the UI reads
-  // truthfully; net.js toasts the real situation.
+  // Solo source (wanderer physics, fake nearby riders, ambient global dots) deleted in
+  // cycle 60: `solo` was never set true since the initial commit — dead code (frontend-003).
+  // "No fake riders" is the product decision: offline is an honest empty map; net.js toasts why.
   function enableSolo() {
     S.netMode = 'connecting';
     ST.emit('nearby:seeded', 0);
   }
 
   function disableSolo() {
-    solo = false;
-    if (globalTimer) { clearInterval(globalTimer); globalTimer = null; }
     clearRiders();
   }
 
-  function tick() {
-    if (solo) {
-      var dt = TICK_MS / 1000;
-      var memberIdx = 0;
-      npcOrder.forEach(function (id) {
-        var npc = npcs[id];
-        if (npc.member) stepMember(npc, memberIdx++, dt);
-        else stepWanderer(npc, dt);
-      });
-    }
-    ST.emit('tick');
-  }
-
-  function stepWanderer(npc, dt) {
-    if (npc.mode === 'parked') {
-      if (U.chance(0.05)) npc.mode = 'cruise';
-      setNext(npc, npc.pos, npc.heading);
-      return;
-    }
-    if (U.chance(0.02)) { npc.mode = 'parked'; setNext(npc, npc.pos, npc.heading); return; }
-    var heading = (npc.heading + U.rand(-22, 22) + 360) % 360;
-    var d = U.haversine(npc.pos, player.pos);
-    if (d > MAX_RANGE) {
-      heading = U.lerpAngle(heading, U.bearing(npc.pos, player.pos) + U.rand(-25, 25), 0.45);
-    }
-    npc.speed = U.clamp(npc.speed + U.rand(-1.5, 1.5), 6, 21);
-    setNext(npc, U.destPoint(npc.pos, heading, npc.speed * dt), heading);
-  }
-
-  function stepMember(npc, idx, dt) {
-    var trailBrg = (player.heading + 180) % 360;
-    var target = U.destPoint(player.pos, trailBrg, 60 + 70 * (idx + 1));
-    target = U.destPoint(target, (player.heading + 90) % 360, (idx % 2 === 0 ? 16 : -16));
-    var d = U.haversine(npc.pos, target);
-    if (d < 6) { setNext(npc, npc.pos, npc.heading); return; }
-    var speed = U.clamp(d * 0.5, 3, d > 700 ? 60 : 34);
-    var heading = U.lerpAngle(npc.heading, U.bearing(npc.pos, target), 0.55);
-    setNext(npc, U.destPoint(npc.pos, heading, Math.min(speed * dt, d)), heading);
-  }
-
-  // Persistent moving global drivers for solo mode. Seeded once, then stepped
-  // each refresh so they visibly drift around their city instead of teleporting.
-  var ambientDrivers = null;
-  function ensureAmbient() {
-    if (ambientDrivers) return;
-    ambientDrivers = [];
-    D.CITIES.forEach(function (c) {
-      var n = U.randInt(3, 7);
-      for (var i = 0; i < n; i++) {
-        ambientDrivers.push({
-          name: U.pick(D.NAMES) + ' ' + U.pick(['R.', 'K.', 'M.', 'T.', 'S.', 'J.']),
-          emoji: U.pick(D.EMOJIS),
-          carStr: (function () { var cr = randomCar(); return cr.year + ' ' + cr.make + ' ' + cr.model; })(),
-          city: c[0],
-          base: [c[1], c[2]],
-          pos: U.destPoint([c[1], c[2]], U.rand(0, 360), U.rand(400, 9000)),
-          heading: U.rand(0, 360),
-          speed: U.rand(7, 19),
-          online: true,
-          lastSeen: Date.now() - U.randInt(0, 6) * 60000
-        });
-      }
-    });
-  }
-
-  function stepAmbientLocal(a, dt) {
-    if (!a.online) {
-      if (U.chance(0.04)) {
-        a.online = true; a.lastSeen = Date.now();
-        a.pos = U.destPoint(a.base, U.rand(0, 360), U.rand(400, 9000));
-        a.heading = U.rand(0, 360); a.speed = U.rand(7, 19);
-      }
-      return;
-    }
-    var d = U.haversine(a.pos, a.base);
-    if (d > 11000) { a.pos = U.destPoint(a.base, U.rand(0, 360), U.rand(400, 9000)); a.heading = U.rand(0, 360); return; }
-    if (Date.now() - a.lastSeen > U.randInt(8, 22) * 60000 && U.chance(0.03)) { a.online = false; return; }
-    a.heading = (a.heading + U.rand(-22, 22) + 360) % 360;
-    if (d > 9000) a.heading = U.lerpAngle(a.heading, U.bearing(a.pos, a.base) + U.rand(-25, 25), 0.45);
-    a.speed = U.clamp(a.speed + U.rand(-1.5, 1.5), 6, 21);
-    a.pos = U.destPoint(a.pos, a.heading, a.speed * dt);
-    a.lastSeen = Date.now();
-  }
-
-  function buildLocalGlobal() {
-    ensureAmbient();
-    var dt = GLOBAL_MS / 1000;
-    var feats = [];
-    ambientDrivers.forEach(function (a) {
-      stepAmbientLocal(a, dt);
-      if (!a.online) return;
-      feats.push({
-        type: 'Feature',
-        geometry: { type: 'Point', coordinates: a.pos.slice() },
-        properties: {
-          name: a.name, emoji: a.emoji, car: a.carStr, city: a.city,
-          seenMin: U.randInt(3, 9), online: true
-        }
-      });
-    });
-    A.mapview.setGlobalData({ type: 'FeatureCollection', features: feats });
-  }
+  function tick() { ST.emit('tick'); }
 
   /* ---------------- live source api (used by net.js) ---------------- */
   function remoteAdd(rec) { addRider(rec); ST.emit('nearby:seeded', npcOrder.length); }
@@ -619,20 +477,7 @@
     lastRaw = null; // ...and the delta baseline, so the jump isn't read as speed
     hasRealPos = true; // an explicit relocate is as good as a fix for "the rider is here"
     A.mapview.setPlayer(pos, player.heading);
-    if (solo) {
-      npcOrder.forEach(function (id) {
-        var npc = npcs[id];
-        npc.pos = npc.member
-          ? U.destPoint(pos, U.rand(0, 360), U.rand(80, 300))
-          : U.destPoint(pos, U.rand(0, 360), U.rand(300, 4200));
-        npc.prev = { pos: npc.pos.slice(), heading: npc.heading };
-        npc.next = { pos: npc.pos.slice(), heading: npc.heading };
-        npc.livePos = null;
-        A.mapview.updateNpc(id, npc.pos, npc.heading);
-      });
-    } else if (A.net) {
-      A.net.sendPosNow(); // server re-scopes riders around the new position
-    }
+    if (A.net) A.net.sendPosNow(); // server re-scopes riders around the new position
     startWatch();
     ST.emit('tick');
   }
@@ -694,9 +539,8 @@
         if (e.touches && e.touches.length > 1) adaptivePauseUntil = performance.now() + 12000;
       }, { passive: true });
     } catch (e) { }
-    // Pause the solo physics tick while the tab is hidden: it used to keep
-    // running in the background, so NPC tAt timestamps drifted and riders
-    // visibly "jumped" on refocus. The rAF loop already no-ops when hidden.
+    // Pause the 1 Hz UI tick while the tab is hidden (the rAF loop already
+    // no-ops when hidden); catch up at once on return.
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) {
         if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
@@ -755,7 +599,6 @@
     start: start,
     enableSolo: enableSolo,
     disableSolo: disableSolo,
-    isSolo: function () { return solo; },
     playerHeading: function () { return player.heading; },
     getNpc: function (id) { return npcs[id]; },
     getByUsername: function (username) {
