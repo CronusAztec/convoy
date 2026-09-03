@@ -24,7 +24,7 @@ Each bug has:
 
 **Severity legend:** `critical` = security hole / data loss / hard crash · `high` = broken feature / resource leak · `medium` = degraded UX / latent bug · `low` = polish / a11y.
 
-**Jump to a section:** [Frontend (18)](#frontend) · [Server (27)](#server) · [Android (20)](#android) · [UI/UX (22)](#uiux) · [Runtime (6)](#runtime)
+**Jump to a section:** [Frontend (19)](#frontend) · [Server (28)](#server) · [Android (20)](#android) · [UI/UX (22)](#uiux) · [Runtime (6)](#runtime)
 
 ### Top priorities (fix first)
 
@@ -42,7 +42,7 @@ Each bug has:
 ---
 
 ## Frontend
-*Client-side JS (`js/*.js`) — 18 bugs*
+*Client-side JS (`js/*.js`) — 19 bugs*
 
 ### BUG frontend-001
 - **Severity:** high
@@ -188,10 +188,18 @@ Each bug has:
 - **Impact:** Latent empty-name convoy creation.
 - **Fix:** Trim in the UI: `A.party.create((nameInput.value || nameInput.placeholder).trim(), chosen)`
 
+### BUG frontend-019 — FIXED (cycle 52 stage 26, 2026-09-03)
+- **Severity:** medium
+- **File:** `js/ghost.js:97-110` (`viewBBox`, now the pure `clampBBox` beside it), with `:280` (`BACKOFF_MAX_MS`) and `:366` (`backoffFail('police', …)`)
+- **Title:** The intro globe's world-wrapped viewport is clamped to a fictional 4° box at longitude 0, firing 5–7 junk upstream queries per app open whose failures back the rider's real police layer off for up to 15 minutes
+- **Repro:** Open the app with animations on (the intro globe spins, then flies down to the rider). On the VPS, `journalctl -u convoy | grep overpass` shows `all mirrors failed for enforcement <lat>,-2,<lat+4>,2` — longitude exactly `-2 … 2`, the signature of `viewBBox()` clamping a −180..180 view to `centre ± 2` at centre 0. Five of the seven production failures logged on 2026-09-03 (03:42Z–06:55Z) carry that pair; none is a place a rider was looking at (cycle-51 truth pass, STATE.md "Aspect B").
+- **Impact:** 5–7 wasted Overpass queries per app open against a shared community resource (and our IP's budget), and `backoffFail('police', 90 s)` per failure, doubling to the 15-minute cap — the real police/camera layer can stay silent for the first quarter-hour of a ride. (Inferred from code + log timing, not a device trace.)
+- **Fix (applied):** the clamp is a pure `clampBBox(rawBounds, lim)` (exported on `A.ghost` for tests) that returns `null` — "skip this tick", which all four callers already handle — for a view wider than `WIDE_VIEW_FACTOR × lim` (4 × 4° = 16° for aircraft/police/Waze, 320° for hotspots) or for degenerate bounds. A regional 12° view still clamps to 4° and is queried exactly as before. `test/ghostbbox.test.js` (18 checks) pins the world-wrapped view → `null`, the `-2 … 2` signature it kills, and the no-regression band.
+
 ---
 
 ## Server
-*Node backend (`server/*.js`) — 27 bugs*
+*Node backend (`server/*.js`) — 28 bugs*
 
 ### BUG server-001
 - **Severity:** high
@@ -408,6 +416,14 @@ Each bug has:
 - **Repro:** `curl -H "X-Forwarded-For: $RANDOM" /api/login` for 10 min → `authHits` holds millions of entries → OOM.
 - **Impact:** Memory exhaustion via spoofed IPs.
 - **Fix:** Cap `authHits` size (LRU eviction); don't trust XFF unconditionally (server-008).
+
+### BUG server-031 — FIXED (cycle 52 stage 26, 2026-09-03)
+- **Severity:** medium
+- **File:** `server/overpass.js:203-212` before the fix (the mirror loop inside `query()`; now its `failed()` helper)
+- **Title:** Every per-mirror failure reason is discarded; the single `all mirrors failed` log line cannot distinguish a 429 from a timeout from a malformed body
+- **Repro:** `OVERPASS_URLS=https://127.0.0.1:9/a,https://127.0.0.1:9/b node server/server.js`, then `POST /api/overpass {"kind":"enforcement","bbox":{"minLat":34.03,"minLng":-118.3,"maxLat":34.09,"maxLng":-118.2}}` → the log said only `[overpass] all mirrors failed for enforcement 34.03,-118.3,34.09,-118.2`. The same line for a dead host, a 429, a 504, an HTML body, or JSON without `elements[]`; a first mirror failing while the second answered logged nothing at all.
+- **Impact:** 7 production failures over the mission (2026-09-03) with no diagnosable cause; a mirror that is down 100% of the time is invisible while the other one covers for it; every B4 decision (mirror list, timeouts, client backoff) is a guess until the reason is in the log.
+- **Fix (applied):** each failed attempt records `host reason NNNms` (`timeout` / `net:<ErrorName>` / `http:<status>` / `body:<message>` / `shape`); the failure line carries all of them plus `(session ok=N fail=N)`; a partial failure now emits one `console.warn` naming the mirror that failed, why, and the one that served; `stats()` gains `ok`/`fail`/`cached`, `byMirror` and `byReason` (fixed-vocabulary keys, so it cannot grow unbounded). Still at most one line per query. `test/overpass.test.js` "A failed mirror says which one and why" (29 checks, scripted `fetch`, real `Response` streams). IDs `server-028…030` are unassigned — the Top-priorities table's `server-030` has no entry; B3 reconciles.
 
 ---
 
@@ -1057,11 +1073,11 @@ this table ever drifts from what's actually here.
 
 | Area | critical | high | medium | low | total |
 |---|---:|---:|---:|---:|---:|
-| Frontend | 0 | 5 | 12 | 1 | 18 | (frontend-001/002/003/008/009 are the highs) |
-| Server | 4 | 10 | 13 | 0 | 27 | (server-003/006/008/011 critical) |
+| Frontend | 0 | 5 | 13 | 1 | 19 | (frontend-001/002/003/008/009 are the highs; frontend-019 fixed) |
+| Server | 4 | 10 | 14 | 0 | 28 | (server-003/006/008/011 critical; server-031 fixed) |
 | Android | 3 | 8 | 8 | 1 | 20 | (android-001/002/003 critical) |
 | UI/UX | 1 | 5 | 10 | 6 | 22 | (ui-001/004/006/013/014/015/016/017/018/019/003/003b fixed; ui-020/021 visual-verification-pending, unresolved without a browser) |
 | Runtime | 0 | 2 | 3 | 1 | 6 | |
 | Add | 0 | 1 | 1 | 2 | 4 | |
 | Perf | 0 | 0 | 1 | 0 | 1 | |
-| **Total** | **8** | **31** | **48** | **11** | **98** |
+| **Total** | **8** | **31** | **50** | **11** | **100** |

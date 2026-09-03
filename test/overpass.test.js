@@ -27,7 +27,7 @@ const overpass = require(path.join(__dirname, '..', 'server', 'overpass.js'));
 const LA = { minLat: 34.03, minLng: -118.30, maxLat: 34.09, maxLng: -118.20 };
 function box(over) { return Object.assign({}, LA, over || {}); }
 
-(function main() {
+(async function main() {
 
   H.group('Only the app\'s own three lookups can be run');
   {
@@ -112,20 +112,153 @@ function box(over) { return Object.assign({}, LA, over || {}); }
     let calls = 0;
     const realFetch = global.fetch;
     global.fetch = () => { calls++; return Promise.reject(new Error('should not be called')); };
-
-    Promise.all([
-      overpass.query('nope', LA),
-      overpass.query('police', { minLat: 'x' }),
-      overpass.query('police', undefined),
-      overpass.query('road', { minLat: -80, minLng: -170, maxLat: 80, maxLng: 170 })
-    ]).then((rs) => {
-      global.fetch = realFetch;
-      H.ok('an unknown kind is reported', rs[0].error === 'unknown-kind', JSON.stringify(rs[0]));
-      H.ok('a string corner is reported as a bad bbox', rs[1].error === 'bad-bbox', JSON.stringify(rs[1]));
-      H.ok('a missing bbox is reported', rs[2].error === 'bad-bbox', JSON.stringify(rs[2]));
-      H.ok('an oversized bbox is reported', rs[3].error === 'bad-bbox', JSON.stringify(rs[3]));
-      H.ok('and Overpass was never contacted for any of them', calls === 0, 'calls=' + calls);
-      process.exit(H.report());
-    });
+    let rs;
+    try {
+      rs = await Promise.all([
+        overpass.query('nope', LA),
+        overpass.query('police', { minLat: 'x' }),
+        overpass.query('police', undefined),
+        overpass.query('road', { minLat: -80, minLng: -170, maxLat: 80, maxLng: 170 })
+      ]);
+    } finally { global.fetch = realFetch; }
+    H.ok('an unknown kind is reported', rs[0].error === 'unknown-kind', JSON.stringify(rs[0]));
+    H.ok('a string corner is reported as a bad bbox', rs[1].error === 'bad-bbox', JSON.stringify(rs[1]));
+    H.ok('a missing bbox is reported', rs[2].error === 'bad-bbox', JSON.stringify(rs[2]));
+    H.ok('an oversized bbox is reported', rs[3].error === 'bad-bbox', JSON.stringify(rs[3]));
+    H.ok('and Overpass was never contacted for any of them', calls === 0, 'calls=' + calls);
   }
+
+  H.group('A failed mirror says which one and why');
+  await failedMirrorGroup();
+
+  process.exit(H.report());
 })();
+
+/* ---------------- a scripted upstream ----------------
+   Cycle 51 (2026-09-03) read seven `all mirrors failed` lines out of production
+   and could not say why a single one failed: every branch in the mirror loop
+   `continue`d past its own reason. These checks pin the line that replaces it.
+
+   The mirror list is read from the environment at require time, so it is not
+   changed here; instead `fetch` is replaced with a script consumed in call
+   order — the module tries MIRRORS[0] first, then MIRRORS[1]. Outcomes are
+   real `Response` objects (so jsonCapped reads a real stream, the path
+   production takes) or functions that throw. Every case uses its own bbox:
+   a success caches for 30 min and identical concurrent queries share one
+   promise, so a reused box would silently read the previous case's answer. */
+function jsonRes(obj, status) {
+  return new Response(JSON.stringify(obj), { status: status || 200, headers: { 'content-type': 'application/json' } });
+}
+function textRes(text, status) { return new Response(text, { status: status || 200 }); }
+function timeoutErr() { return new DOMException('The operation was aborted due to timeout', 'TimeoutError'); }
+function netErr() { return Object.assign(new TypeError('fetch failed'), { cause: new Error('ECONNREFUSED') }); }
+// Distinct, valid, small boxes: keyFor() rounds to 0.01°, so 1° apart is safe.
+function at(k) { return { minLat: 40 + k, minLng: 10, maxLat: 40.06 + k, maxLng: 10.1 }; }
+
+// Run one query against a scripted upstream, capturing what the module logged
+// and which hosts it asked, then restore fetch and console whatever happened.
+async function drive(kind, bbox, script) {
+  const realFetch = global.fetch, realErr = console.error, realWarn = console.warn;
+  const errors = [], warns = [], hosts = [];
+  let n = 0;
+  global.fetch = (url) => {
+    hosts.push(new URL(url).host);
+    const step = script[n++];
+    if (typeof step === 'function') return Promise.resolve().then(step);   // a throw becomes a rejection
+    return Promise.resolve(step);
+  };
+  console.error = (...a) => errors.push(a.join(' '));
+  console.warn = (...a) => warns.push(a.join(' '));
+  try {
+    const r = await overpass.query(kind, bbox);
+    return { r: r, errors: errors, warns: warns, hosts: hosts };
+  } finally {
+    global.fetch = realFetch; console.error = realErr; console.warn = realWarn;
+  }
+}
+const n0 = (o, k) => (o && o[k]) || 0;
+
+async function failedMirrorGroup() {
+  {
+    // Total failure: the first mirror is out of slots, the second hangs to the
+    // deadline. The one line must carry both facts.
+    const before = overpass.stats();
+    const d = await drive('enforcement', at(0), [textRes('rate limited', 429), () => { throw timeoutErr(); }]);
+    const line = d.errors.join('\n');
+    H.ok('the client still gets the same {error:"upstream"} it always did', d.r.error === 'upstream', JSON.stringify(d.r));
+    H.ok('exactly one error line for the whole query, not one per mirror', d.errors.length === 1, String(d.errors.length));
+    H.ok('every mirror was tried', d.hosts.length === before.mirrors, 'asked ' + d.hosts.join(', '));
+    H.ok('the line names each mirror that failed', d.hosts.every((h) => line.indexOf(h) >= 0), line);
+    H.ok('an HTTP status survives as http:429', line.indexOf(d.hosts[0] + ' http:429 ') >= 0, line);
+    H.ok('a timeout survives as "timeout"', line.indexOf(d.hosts[1] + ' timeout ') >= 0, line);
+    H.ok('each attempt carries its elapsed ms', (line.match(/ \d+ms\b/g) || []).length === d.hosts.length, line);
+    H.ok('the line carries the session tallies', /\(session ok=\d+ fail=\d+\)/.test(line), line);
+    const after = overpass.stats();
+    H.ok('stats().fail went up by exactly one — per query, not per attempt', after.fail === before.fail + 1,
+      before.fail + ' -> ' + after.fail);
+    H.ok('stats().ok did not move', after.ok === before.ok);
+    H.ok('stats().byReason counted http:429 and timeout once each',
+      n0(after.byReason, 'http:429') === n0(before.byReason, 'http:429') + 1 &&
+      n0(after.byReason, 'timeout') === n0(before.byReason, 'timeout') + 1, JSON.stringify(after.byReason));
+    H.ok('stats().byMirror charged one failure to each host',
+      d.hosts.every((h) => n0((after.byMirror || {})[h], 'fail') === n0((before.byMirror || {})[h], 'fail') + 1), JSON.stringify(after.byMirror));
+  }
+  {
+    // Partial failure: the first mirror is unreachable, the second answers.
+    // Today this is completely silent — a mirror down 100% of the time is
+    // invisible while the other one covers for it.
+    const before = overpass.stats();
+    const d = await drive('enforcement', at(1), [
+      () => { throw netErr(); },
+      jsonRes({ elements: [{ type: 'node', id: 1, lat: 41.02, lon: 10.05, tags: { amenity: 'police' } }] })
+    ]);
+    H.ok('the body still comes back', !!(d.r.body && Array.isArray(d.r.body.elements) && d.r.body.elements.length === 1), JSON.stringify(d.r));
+    H.ok('and is marked as a fresh (uncached) answer', d.r.cached === false);
+    H.ok('no error line — the query succeeded', d.errors.length === 0, d.errors.join('\n'));
+    H.ok('one warn line names the mirror that failed and why (net:TypeError)',
+      d.warns.length === 1 && d.warns[0].indexOf(d.hosts[0] + ' net:TypeError ') >= 0, d.warns.join('\n'));
+    H.ok('and which mirror served the answer', d.warns.length === 1 && d.warns[0].indexOf('served by ' + d.hosts[1]) >= 0, d.warns.join('\n'));
+    const after = overpass.stats();
+    H.ok('stats().ok went up by one and fail did not', after.ok === before.ok + 1 && after.fail === before.fail,
+      'ok ' + before.ok + '->' + after.ok + ', fail ' + before.fail + '->' + after.fail);
+    H.ok('the serving mirror is credited and the failing one charged',
+      n0(after.byMirror[d.hosts[1]], 'ok') === n0(before.byMirror[d.hosts[1]], 'ok') + 1 &&
+      n0(after.byMirror[d.hosts[0]], 'fail') === n0(before.byMirror[d.hosts[0]], 'fail') + 1, JSON.stringify(after.byMirror));
+  }
+  {
+    // The normal day: first mirror answers. Nothing is logged, and the same
+    // box a second time is a cache hit that costs no fetch and is counted as one.
+    const before = overpass.stats();
+    const d1 = await drive('police', at(2), [jsonRes({ elements: [] })]);
+    H.ok('a first-mirror success logs nothing at all', d1.errors.length === 0 && d1.warns.length === 0 && d1.r.cached === false,
+      d1.errors.concat(d1.warns).join('\n'));
+    const d2 = await drive('police', at(2), [jsonRes({ elements: [] })]);
+    const after = overpass.stats();
+    H.ok('the same box again is a cache hit and costs no fetch', d2.r.cached === true && d2.hosts.length === 0, JSON.stringify(d2.r));
+    H.ok('stats() counts the hit under cached, not ok', after.cached === before.cached + 1 && after.ok === before.ok + 1,
+      'cached ' + before.cached + '->' + after.cached + ', ok ' + before.ok + '->' + after.ok);
+  }
+  {
+    // A 200 that is not the answer: an HTML busy page, then JSON without elements[].
+    const d = await drive('road', at(3), [textRes('<html><body>Gateway busy</body></html>', 200), jsonRes({ remark: 'runtime error: query timed out' })]);
+    const line = d.errors[0] || '';
+    H.ok('a non-JSON 200 is reported as a body failure', line.indexOf(d.hosts[0] + ' body:') >= 0, line);
+    H.ok('a JSON answer without elements[] is reported as "shape"', line.indexOf(d.hosts[1] + ' shape ') >= 0, line);
+    H.ok('the body detail stays on one line and is capped', line.indexOf('\n') < 0 && line.length < 400, 'length ' + line.length);
+    H.ok('byReason files body failures under one key, not one key per message', n0(overpass.stats().byReason, 'body') >= 1,
+      JSON.stringify(overpass.stats().byReason));
+  }
+  {
+    // The shape any future caller (admin page, health line) can rely on, and
+    // that reading it cannot corrupt it.
+    const s = overpass.stats();
+    H.ok('stats() still has entries and mirrors', typeof s.entries === 'number' && typeof s.mirrors === 'number', JSON.stringify(s));
+    H.ok('and ok / fail / cached / byMirror / byReason',
+      ['ok', 'fail', 'cached'].every((k) => typeof s[k] === 'number') && !!s.byMirror && !!s.byReason, JSON.stringify(s));
+    const host = Object.keys(s.byMirror)[0];
+    s.byReason.timeout = 999; if (host) s.byMirror[host].fail = 999;
+    const s2 = overpass.stats();
+    H.ok('a caller mutating what stats() returned does not touch the live counters',
+      s2.byReason.timeout !== 999 && (!host || s2.byMirror[host].fail !== 999), JSON.stringify(s2));
+  }
+}

@@ -97,12 +97,33 @@
   function viewBBox(maxDeg) {
     var m = map();
     if (!m) return null;
-    var lim = maxDeg || MAX_BBOX_DEG;
     var b = m.getBounds();
     var sw = b.getSouthWest(), ne = b.getNorthEast();
-    var minLat = Math.max(-90, sw.lat), maxLat = Math.min(90, ne.lat);
-    var minLng = Math.max(-180, sw.lng), maxLng = Math.min(180, ne.lng);
-    // if the world wraps (tiny zoom), shrink to a manageable box around center
+    return clampBBox({ minLat: sw.lat, minLng: sw.lng, maxLat: ne.lat, maxLng: ne.lng }, maxDeg || MAX_BBOX_DEG);
+  }
+
+  // How much wider than the clamp a view may be before its clamped box stops
+  // describing anything the rider can see. At 4x the clamp the box is 1/16th
+  // of the visible area; on the intro globe the view is 90x the clamp and the
+  // box collapses to lng -2..2 at longitude 0 — a query about the Gulf of
+  // Guinea, sent on every intro frame, whose failures then back off the
+  // rider's REAL area for up to 15 minutes (see backoffFail below; BUGS.md
+  // frontend-019). Not a view worth asking about; every caller already treats
+  // null as "skip this tick".
+  var WIDE_VIEW_FACTOR = 4;
+
+  // Pure: raw view bounds -> the box we are willing to query, or null. Exported
+  // on A.ghost for tests only (test/ghostbbox.test.js).
+  function clampBBox(b, lim) {
+    if (!b) return null;
+    var minLat = Math.max(-90, b.minLat), maxLat = Math.min(90, b.maxLat);
+    var minLng = Math.max(-180, b.minLng), maxLng = Math.min(180, b.maxLng);
+    // Degenerate (zero-area, inverted, NaN) bounds are not a view either.
+    if (!(maxLat > minLat) || !(maxLng > minLng)) return null;
+    if (maxLat - minLat > lim * WIDE_VIEW_FACTOR) return null;
+    if (maxLng - minLng > lim * WIDE_VIEW_FACTOR) return null;
+    // A wide but real view (a whole region on screen): shrink to a manageable
+    // box around the centre, exactly as before.
     var cLat = (minLat + maxLat) / 2, cLng = (minLng + maxLng) / 2;
     if (maxLat - minLat > lim) { minLat = cLat - lim / 2; maxLat = cLat + lim / 2; }
     if (maxLng - minLng > lim) { minLng = cLng - lim / 2; maxLng = cLng + lim / 2; }
@@ -614,5 +635,5 @@
     if (A.mapview && A.mapview.setAircraftTrailData) A.mapview.setAircraftTrailData(emptyFC());
   }
 
-  A.ghost = { start: start, stop: stop, isRunning: function () { return running; } };
+  A.ghost = { start: start, stop: stop, isRunning: function () { return running; }, clampBBox: clampBBox };
 })();

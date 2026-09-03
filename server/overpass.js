@@ -33,6 +33,27 @@
 const MIRRORS = (process.env.OVERPASS_URLS ||
   'https://overpass-api.de/api/interpreter,https://overpass.kumi.systems/api/interpreter')
   .split(',').map((s) => s.trim()).filter(Boolean);
+// Short label for logs. A full URL in every line is noise, and MIRRORS is
+// env-configurable, so a malformed entry must not throw at require time.
+const MIRROR_HOSTS = MIRRORS.map((u) => { try { return new URL(u).host; } catch (e) { return u; } });
+
+/* ---------------- what happened, and where ----------------
+   Cycle 51 (2026-09-03) read seven `all mirrors failed` lines out of
+   production and could not say why a single one failed: every branch of the
+   mirror loop `continue`d past its own reason (BUGS.md server-031). The
+   per-attempt strings in the log line and these counters are the fix.
+
+   Reasons are a small fixed vocabulary — `timeout`, `net:<ErrorName>`,
+   `http:<status>`, `body`, `shape` — so `byReason` cannot grow past a few
+   dozen keys however long the process lives; the free-text part of a body
+   failure (a JSON parse message quoting the upstream page) goes in the log
+   line only. Surfaced through stats() and the `(session ok= fail=)` suffix
+   of the failure line; deliberately no HTTP endpoint for them. */
+const counters = { ok: 0, fail: 0, cached: 0 };
+const byMirror = {};              // host -> { ok, fail }
+const byReason = {};              // reason -> count
+function mirrorTally(host) { return byMirror[host] || (byMirror[host] = { ok: 0, fail: 0 }); }
+function oneLine(e) { return String((e && e.message) || e).replace(/\s+/g, ' ').slice(0, 80); }
 
 const TIMEOUT_MS = parseInt(process.env.OVERPASS_TIMEOUT_MS || '30000', 10);
 // Static POIs. Half an hour is short enough that a newly mapped camera shows up
@@ -109,7 +130,16 @@ function toCache(key, body) {
   cache.set(key, { at: Date.now(), body: body });
 }
 
-function stats() { return { entries: cache.size, mirrors: MIRRORS.length }; }
+// The first two keys predate the counters; the rest are copies so a caller
+// cannot mutate the live tallies through what it was handed.
+function stats() {
+  return {
+    entries: cache.size, mirrors: MIRRORS.length,
+    ok: counters.ok, fail: counters.fail, cached: counters.cached,
+    byMirror: JSON.parse(JSON.stringify(byMirror)),
+    byReason: Object.assign({}, byReason)
+  };
+}
 
 /* ---------------- fetch ---------------- */
 
@@ -180,14 +210,21 @@ async function query(kind, bbox) {
 
   const key = keyFor(kind, b);
   const hit = fromCache(key);
-  if (hit) return { body: hit, cached: true };
+  if (hit) { counters.cached++; return { body: hit, cached: true }; }
   if (inFlight.has(key)) return inFlight.get(key);
 
   const box = b.minLat + ',' + b.minLng + ',' + b.maxLat + ',' + b.maxLng;
   const ql = KINDS[kind](box);
 
   const job = (async () => {
+    const tried = [];             // 'host reason NNNms' per failed attempt, in order
+    const failed = (i, reason, detail, t0) => {
+      mirrorTally(MIRROR_HOSTS[i]).fail++;
+      byReason[reason] = (byReason[reason] || 0) + 1;
+      tried.push(MIRROR_HOSTS[i] + ' ' + reason + (detail ? ':' + detail : '') + ' ' + (Date.now() - t0) + 'ms');
+    };
     for (let i = 0; i < MIRRORS.length; i++) {
+      const t0 = Date.now();
       let res;
       try {
         res = await fetchT(MIRRORS[i], {
@@ -201,22 +238,37 @@ async function query(kind, bbox) {
           body: 'data=' + encodeURIComponent(ql)
         }, TIMEOUT_MS);
       } catch (e) {
-        continue;                 // timeout or network error → next mirror
+        // AbortSignal.timeout rejects with a TimeoutError; anything else is
+        // the network (DNS, refused, reset — fetch wraps them in a TypeError).
+        failed(i, e && e.name === 'TimeoutError' ? 'timeout' : 'net:' + ((e && e.name) || 'Error'), '', t0);
+        continue;                 // → next mirror
       }
       // 429 (slot exhausted) and 504 (query timed out) are the two Overpass
       // answers worth retrying elsewhere; both are per-instance load, not a
-      // problem with the query.
-      if (!res.ok) continue;
+      // problem with the query. The status IS the diagnosis, so it is kept.
+      if (!res.ok) { failed(i, 'http:' + res.status, '', t0); continue; }
       let body;
-      try { body = await jsonCapped(res); } catch (e) { continue; }
-      if (!body || !Array.isArray(body.elements)) continue;
+      try { body = await jsonCapped(res); }
+      catch (e) { failed(i, 'body', oneLine(e), t0); continue; }
+      if (!body || !Array.isArray(body.elements)) { failed(i, 'shape', '', t0); continue; }
       toCache(key, body);
+      counters.ok++;
+      mirrorTally(MIRROR_HOSTS[i]).ok++;
+      // A mirror that is down 100% of the time while the other covers for it
+      // used to be invisible. Still at most one line per query.
+      if (tried.length) {
+        console.warn('[overpass] ' + kind + ' ' + box + ' served by ' + MIRROR_HOSTS[i] +
+          ' after ' + tried.join('; '));
+      }
       return { body: body, cached: false };
     }
     // Deliberately not cached: a failure must not lock the area out for the
     // whole TTL, and the client treats this exactly as it treated a CORS
-    // failure before — feature off, nothing broken.
-    console.error('[overpass] all mirrors failed for ' + kind + ' ' + box);
+    // failure before — feature off, nothing broken. The line says which
+    // mirror failed, why, and how long each attempt took.
+    counters.fail++;
+    console.error('[overpass] all mirrors failed for ' + kind + ' ' + box + ' — ' + tried.join('; ') +
+      ' (session ok=' + counters.ok + ' fail=' + counters.fail + ')');
     return { error: 'upstream' };
   })().finally(() => inFlight.delete(key));
 
