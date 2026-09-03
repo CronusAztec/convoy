@@ -2966,6 +2966,13 @@
 
   /* ============================== live invites ============================== */
   function inviteToast(from, party, onAccept, onDecline) {
+    // A blocking gate is showing (auth, re-consent, password reset, OAuth setup, or
+    // a card that opted out of dismissal): the rider cannot answer this, and its
+    // Join/Pass buttons would be the one live thing they could reach around the
+    // gate (#toasts is exempt from the shell trap so announcements still work).
+    // Declining now is the same outcome the 30-second auto-decline below already
+    // produces — a decision the rider could not make anyway, just made sooner.
+    if (gateUp()) { if (onDecline) onDecline(); return; }
     var box = document.getElementById('toasts');
     var t = U.el('div', 'toast toast-info toast-invite',
       '<span class="toast-dot"></span><span><b>' + U.esc(from.name) + '</b> invited you to <b>' +
@@ -3008,8 +3015,23 @@
   var modalLastFocus = null; // element focused before the modal opened, restored on close
   var shellInerted = [];     // exactly what setShellInert(true) touched, so (false)
                               // restores only that — never openPanel's own inert state
+  var shellTrapped = false;  // ui-003b: a *chained* open — a second openOverlay() with no
+                              // closeOverlay() between — is normal in this codebase (the race
+                              // lobby re-renders on every state push, a profile overlay refreshes
+                              // on a stats event, block→report, regen-recovery's success card).
+                              // Without this flag the second call recomputes shellInerted from
+                              // "body children that are not yet inert" — which is now none — so
+                              // the list empties and the matching close restores nothing, leaving
+                              // all 21 shell children inert until reload. Only the outermost open
+                              // captures; only its close restores. A boolean on purpose: not a
+                              // depth counter (closeOverlay runs once per dismissal however many
+                              // cards were chained — chains replace root.innerHTML, they don't
+                              // stack) and not shellInerted.length (which couples "is a trap
+                              // active" to "did the capture find anything").
   function setShellInert(on) {
     if (on) {
+      if (shellTrapped) return;
+      shellTrapped = true;
       shellInerted = [].filter.call(document.body.children, function (el) {
         return el.id !== 'onboarding' && el.id !== 'toasts' &&
           el.tagName !== 'SCRIPT' && el.tagName !== 'NOSCRIPT' &&
@@ -3017,9 +3039,36 @@
       });
       shellInerted.forEach(function (el) { el.setAttribute('inert', ''); });
     } else {
+      shellTrapped = false;
       shellInerted.forEach(function (el) { el.removeAttribute('inert'); });
       shellInerted = [];
     }
+  }
+  // A gate (auth / re-consent / password reset / OAuth setup, or an explicitly
+  // non-dismissable card) is up: the rider is not in a position to answer anything.
+  // A gate that is already on its way out (.closing — CSS gives it pointer-events:
+  // none, so the rider can reach the toasts again) does not count.
+  function gateUp() {
+    var ob = document.getElementById('onboarding');
+    return !!(ob && !ob.hidden && !ob.classList.contains('closing') && !overlayDismissable);
+  }
+  // #toasts is exempt from setShellInert on purpose — aria-live announcements must
+  // still reach AT behind a modal — but inviteToast() puts live Join/Pass buttons in
+  // that same container, and a socket push can land one while a gate is up. Only the
+  // interactive toasts are inerted, never plain ones, whose whole purpose is to be
+  // announced. Kept outside shellInerted / shellTrapped: the off-path is
+  // unconditional (nothing else ever inerts a toast), so this is idempotent by
+  // construction and cannot interact with the nesting logic above — which is also
+  // why a chained {dismissable:false} card opened over a dismissable one (only
+  // showRegenRecovery's success card) still re-scans: openOverlay calls this on
+  // every open, trapped or not, and inviteToast's own gateUp() check covers every
+  // invite that arrives afterwards.
+  function setInviteToastsInert(on) {
+    var box = document.getElementById('toasts');
+    if (!box) return;
+    [].forEach.call(box.querySelectorAll('.toast-invite'), function (t) {
+      if (on) t.setAttribute('inert', ''); else t.removeAttribute('inert');
+    });
   }
   var MODAL_FOCUSABLE = 'a[href],button,input,select,textarea,[tabindex]:not([tabindex="-1"])';
   function focusFirstIn(root) {
@@ -3031,9 +3080,16 @@
   // force dismissal off, regardless of what the *previous* #onboarding guest
   // (a dismissable openOverlay card) last left overlayDismissable at.
   function beginModalGate() {
+    // A gate can open inside a pending close: closeAuthEnter → enterApp → showConsentGate
+    // (login never records consent locally, so an existing account on a new device, or any
+    // rider after a LEGAL_VERSION bump, gets the re-consent gate synchronously). Left armed,
+    // the 380ms hide timer would blank the gate and leave the shell inert. openOverlay
+    // already cancels it first; the four gates must too.
+    cancelOverlayClose();
     overlayDismissable = false;
     if (!modalLastFocus) modalLastFocus = document.activeElement;
     setShellInert(true);
+    setInviteToastsInert(true);
   }
 
   function showAuth(onDone) {
@@ -3059,6 +3115,7 @@
     cancelOverlayClose();
     root.classList.add('closing');
     setShellInert(false);
+    setInviteToastsInert(false);
     if (modalLastFocus) { try { modalLastFocus.focus(); } catch (e) {} modalLastFocus = null; }
     overlayCloseTimer = setTimeout(function () {
       overlayCloseTimer = null;
@@ -3375,6 +3432,9 @@
     overlayDismissable = !opts || opts.dismissable !== false;
     if (!modalLastFocus) modalLastFocus = document.activeElement;
     setShellInert(true);
+    // Mirrors the flag exactly: a non-dismissable card is a gate (invites on screen
+    // go inert), a dismissable one is not (the off-path is an idempotent no-op).
+    setInviteToastsInert(!overlayDismissable);
     root.hidden = false;
     root.classList.remove('closing');
     root.innerHTML = '';
@@ -3387,6 +3447,7 @@
     cancelOverlayClose();
     root.classList.add('closing');
     setShellInert(false);
+    setInviteToastsInert(false);
     if (modalLastFocus) { try { modalLastFocus.focus(); } catch (e) {} modalLastFocus = null; }
     overlayCloseTimer = setTimeout(function () {
       overlayCloseTimer = null;

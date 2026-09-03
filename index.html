@@ -22,7 +22,7 @@
 <link rel="preconnect" href="https://tiles.openfreemap.org" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.min.css" rel="stylesheet"/>
-<link rel="stylesheet" href="css/styles.css?v=cy116"/>
+<link rel="stylesheet" href="css/styles.css?v=cy117"/>
 </head>
 <body>
 
@@ -287,54 +287,54 @@
      order right before DOMContentLoaded (which app.js waits on), so nothing is
      render-blocking. maplibre stays first so its global is ready for mapview. -->
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.min.js" defer></script>
-<script src="js/config.js?v=cy116" defer></script>
+<script src="js/config.js?v=cy117" defer></script>
 <!-- Second, and deliberately so. telemetry.js installs the global error and
      unhandledrejection handlers at load time, so it has to run before every
      module it is supposed to be watching — a crash reporter that boots after
      state.js cannot report the crash IN state.js. It depends on nothing but
      config.js, and its release stamp is read off its own ?v= below. -->
-<script src="js/telemetry.js?v=cy116" defer></script>
-<script src="js/data.js?v=cy116" defer></script>
-<script src="js/util.js?v=cy116" defer></script>
-<script src="js/state.js?v=cy116" defer></script>
-<script src="js/themes.js?v=cy116" defer></script>
-<script src="js/detectors.js?v=cy116" defer></script>
-<script src="js/space.js?v=cy116" defer></script>
-<script src="js/mapview.js?v=cy116" defer></script>
-<script src="js/sim.js?v=cy116" defer></script>
-<script src="js/net.js?v=cy116" defer></script>
-<script src="js/routing.js?v=cy116" defer></script>
-<script src="js/ghost.js?v=cy116" defer></script>
-<script src="js/radar.js?v=cy116" defer></script>
-<script src="js/overlays.js?v=cy116" defer></script>
-<script src="js/scanners.js?v=cy116" defer></script>
-<script src="js/racetimer.js?v=cy116" defer></script>
-<script src="js/dragy.js?v=cy116" defer></script>
-<script src="js/wake.js?v=cy116" defer></script>
-<script src="js/places.js?v=cy116" defer></script>
-<script src="js/triplog.js?v=cy116" defer></script>
-<script src="js/speedo.js?v=cy116" defer></script>
-<script src="js/hud.js?v=cy116" defer></script>
-<script src="js/compass.js?v=cy116" defer></script>
-<script src="js/clock.js?v=cy116" defer></script>
-<script src="js/tripmeter.js?v=cy116" defer></script>
-<script src="js/gmeter.js?v=cy116" defer></script>
-<script src="js/quest.js?v=cy116" defer></script>
-<script src="js/weathernow.js?v=cy116" defer></script>
-<script src="js/battery.js?v=cy116" defer></script>
-<script src="js/coords.js?v=cy116" defer></script>
-<script src="js/destarrow.js?v=cy116" defer></script>
-<script src="js/riderarrows.js?v=cy116" defer></script>
-<script src="js/speedalert.js?v=cy116" defer></script>
-<script src="js/dimmer.js?v=cy116" defer></script>
-<script src="js/tripextras.js?v=cy116" defer></script>
-<script src="js/party.js?v=cy116" defer></script>
-<script src="js/voice.js?v=cy116" defer></script>
-<script src="js/ui.js?v=cy116" defer></script>
-<script src="js/auth.js?v=cy116" defer></script>
-<script src="js/native.js?v=cy116" defer></script>
-<script src="js/ota.js?v=cy116" defer></script>
-<script src="js/race.js?v=cy116" defer></script>
-<script src="js/app.js?v=cy116" defer></script>
+<script src="js/telemetry.js?v=cy117" defer></script>
+<script src="js/data.js?v=cy117" defer></script>
+<script src="js/util.js?v=cy117" defer></script>
+<script src="js/state.js?v=cy117" defer></script>
+<script src="js/themes.js?v=cy117" defer></script>
+<script src="js/detectors.js?v=cy117" defer></script>
+<script src="js/space.js?v=cy117" defer></script>
+<script src="js/mapview.js?v=cy117" defer></script>
+<script src="js/sim.js?v=cy117" defer></script>
+<script src="js/net.js?v=cy117" defer></script>
+<script src="js/routing.js?v=cy117" defer></script>
+<script src="js/ghost.js?v=cy117" defer></script>
+<script src="js/radar.js?v=cy117" defer></script>
+<script src="js/overlays.js?v=cy117" defer></script>
+<script src="js/scanners.js?v=cy117" defer></script>
+<script src="js/racetimer.js?v=cy117" defer></script>
+<script src="js/dragy.js?v=cy117" defer></script>
+<script src="js/wake.js?v=cy117" defer></script>
+<script src="js/places.js?v=cy117" defer></script>
+<script src="js/triplog.js?v=cy117" defer></script>
+<script src="js/speedo.js?v=cy117" defer></script>
+<script src="js/hud.js?v=cy117" defer></script>
+<script src="js/compass.js?v=cy117" defer></script>
+<script src="js/clock.js?v=cy117" defer></script>
+<script src="js/tripmeter.js?v=cy117" defer></script>
+<script src="js/gmeter.js?v=cy117" defer></script>
+<script src="js/quest.js?v=cy117" defer></script>
+<script src="js/weathernow.js?v=cy117" defer></script>
+<script src="js/battery.js?v=cy117" defer></script>
+<script src="js/coords.js?v=cy117" defer></script>
+<script src="js/destarrow.js?v=cy117" defer></script>
+<script src="js/riderarrows.js?v=cy117" defer></script>
+<script src="js/speedalert.js?v=cy117" defer></script>
+<script src="js/dimmer.js?v=cy117" defer></script>
+<script src="js/tripextras.js?v=cy117" defer></script>
+<script src="js/party.js?v=cy117" defer></script>
+<script src="js/voice.js?v=cy117" defer></script>
+<script src="js/ui.js?v=cy117" defer></script>
+<script src="js/auth.js?v=cy117" defer></script>
+<script src="js/native.js?v=cy117" defer></script>
+<script src="js/ota.js?v=cy117" defer></script>
+<script src="js/race.js?v=cy117" defer></script>
+<script src="js/app.js?v=cy117" defer></script>
 </body>
 </html>

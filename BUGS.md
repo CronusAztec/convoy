@@ -24,7 +24,7 @@ Each bug has:
 
 **Severity legend:** `critical` = security hole / data loss / hard crash · `high` = broken feature / resource leak · `medium` = degraded UX / latent bug · `low` = polish / a11y.
 
-**Jump to a section:** [Frontend (18)](#frontend) · [Server (27)](#server) · [Android (20)](#android) · [UI/UX (14)](#uiux) · [Runtime (6)](#runtime)
+**Jump to a section:** [Frontend (18)](#frontend) · [Server (27)](#server) · [Android (20)](#android) · [UI/UX (22)](#uiux) · [Runtime (6)](#runtime)
 
 ### Top priorities (fix first)
 
@@ -644,6 +644,65 @@ Each bug has:
   `root.hidden`, the `closing` class — rather than simulated keyboard traversal). Each assertion
   was proven to fail first (keydown wrap reverted, backdrop listener removed, `setShellInert`
   blanket-un-inert injected) before being trusted; see the cycle-3-stage-14 implementer report.
+- **Regression:** the `setShellInert` recompute shipped with this fix broke every *chained* open
+  (a second `openOverlay()` with no `closeOverlay()` between) — see [[BUG ui-003b]], fixed cycle 50
+  stage 18 before anything reached production.
+
+### BUG ui-003b — FIXED (cycle 50 stage 18, 2026-09-03) — regression introduced by the ui-003 fix
+- **Severity:** critical
+- **File:** `js/ui.js` — `setShellInert` (cross-ref `openOverlay`/`closeOverlay`/`beginModalGate`,
+  `js/race.js` `renderLobby`, `inviteToast`)
+- **Title:** A second `openOverlay()` with no `closeOverlay()` between left every shell child `inert`
+  for good — map, dock, topbar, chips, panels, HUD and the whole radar cluster dead to mouse **and**
+  keyboard until the page was reloaded
+- **Repro (pre-fix):** join or host any race — `js/race.js` calls `renderLobby()` →
+  `A.ui.openOverlayRaw()` on *every* race-state push, including each countdown tick, so the second
+  push locked the shell for every racer. Also reachable from block → "also report them" (ticked by
+  default), a profile overlay refreshing on a `stats` event, regen-recovery's success card, and
+  add/change-email's "we sent you a link" card. In jsdom: `openOverlayRaw ×2 → closeOverlay()` left
+  18 non-panel body children (plus the 3 closed panels, which are meant to be inert) carrying
+  `[inert]`.
+- **Impact:** total lockout, reload-only recovery. `inert` blocks hit-testing as well as focus
+  (measured in real Chromium, stage-16 directive §3), so this was not a keyboard-only defect. It
+  **never reached production**: cycle 4's tree was held by the review (BLOCKER) and nothing had been
+  deployed yet — the first thing this mission ships is the fixed code.
+- **Cause:** `setShellInert(true)` recomputed its restore list from "body children that are not yet
+  inert" on every call (the right guard against clobbering `openPanel`'s own inert state). On a
+  chained open that set is empty, so the list became `[]` and the matching `setShellInert(false)`
+  restored nothing.
+- **Fix:** a `shellTrapped` boolean — only the outermost open captures, only its close restores
+  (the same "keep the outermost" shape `modalLastFocus` already used). A boolean on purpose: not a
+  depth counter (`closeOverlay` runs once per dismissal however many cards were chained — chains
+  replace `root.innerHTML`, they don't stack) and not `shellInerted.length` (which couples "is a
+  trap active" to "did the capture find anything"). Bundled, from the same review's MEDIUM: the
+  `#toasts` exemption is now scoped to non-interactive content — `inviteToast()` declines at once
+  while a gate is up (`gateUp()`; same outcome as the existing 30-second auto-decline, just sooner),
+  and invite toasts already on screen carry `inert` for the gate's lifetime (`setInviteToastsInert`,
+  wired into `beginModalGate`, `openOverlay`, `closeOverlay`, `closeAuthEnter`). Plain `aria-live`
+  toasts are untouched in both cases.
+- **Second path, found and fixed in the same stage:** none of the four gate screens cancelled a
+  *pending* close timer. `closeAuthEnter` → `done()` → `auth.enterApp` → `showConsentGate` runs
+  synchronously, and login never records consent locally (only register/guest/OAuth-setup do), so an
+  existing account signing in on a new device — or any rider after a `LEGAL_VERSION` bump — opened
+  the re-consent gate while `closeAuthEnter`'s 380ms hide timer was still armed. Reproduced in jsdom:
+  450ms later `#onboarding` was hidden and empty with 18 shell children still inert — a blank overlay
+  over a dead app. Fix: `beginModalGate()` now calls `cancelOverlayClose()` first, exactly as
+  `openOverlay` already did. Matrix row (k) covers it and was proved to fail first
+  (`hidden=true children=0`).
+- **Verified:** `test/frontend.test.js` → `testShellRestoreInvariant()` — 22 assertions over a
+  sequence matrix, each row in a fresh window: (a) open→close, (b) open→open→close,
+  (c) open→open→open→close (the race-lobby shape), (d) open→open(`{dismissable:false}`)→close,
+  (e) `showAuth`→`closeOverlay`→open→close, (f) `openPanel('nearby')`→`openPanel(null)`→open→open→
+  close asserting both "no stray inert" *and* "the closed panel keeps its own inert" (ui-013 not
+  reverted), (k) a gate opened inside a pending close; then (g–j) the toast scoping. Rows b/c/d/f each reported **18** stray inert children
+  against the pre-fix code and **0** after; rows g/i/j each failed against a deliberately neutered
+  half of the toast fix; row f's panel assertion (and ui-003's own composition guard) failed
+  against an over-reaching "un-inert everything" fix. `test/browser.test.js` (new suite, real
+  headless Chromium, SKIPs with exit 0 when the binary is absent) repeats the chained shape in a
+  real browser and asserts `document.elementFromPoint` over `#dock` lands inside the dock again —
+  the hit-test jsdom cannot perform. Proved to fail first too: against the pre-fix `js/ui.js` both
+  post-close assertions failed while its two controls (dock reachable before; covered while the cards
+  are up) passed.
 
 ### BUG ui-004 — FIXED (verified cycle 0 stage 5, not this stage's work)
 - **Severity:** medium
@@ -1001,8 +1060,8 @@ this table ever drifts from what's actually here.
 | Frontend | 0 | 5 | 12 | 1 | 18 | (frontend-001/002/003/008/009 are the highs) |
 | Server | 4 | 10 | 13 | 0 | 27 | (server-003/006/008/011 critical) |
 | Android | 3 | 8 | 8 | 1 | 20 | (android-001/002/003 critical) |
-| UI/UX | 0 | 5 | 10 | 6 | 21 | (ui-001/004/006/013/014/015/016/017/018/019/003 fixed; ui-020/021 visual-verification-pending, unresolved without a browser) |
+| UI/UX | 1 | 5 | 10 | 6 | 22 | (ui-001/004/006/013/014/015/016/017/018/019/003/003b fixed; ui-020/021 visual-verification-pending, unresolved without a browser) |
 | Runtime | 0 | 2 | 3 | 1 | 6 | |
 | Add | 0 | 1 | 1 | 2 | 4 | |
 | Perf | 0 | 0 | 1 | 0 | 1 | |
-| **Total** | **7** | **31** | **48** | **11** | **97** |
+| **Total** | **8** | **31** | **48** | **11** | **98** |

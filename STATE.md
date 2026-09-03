@@ -17,7 +17,7 @@ installed APKs, unlimited cycles). The push stage follows `deploy/PUSH-RUNBOOK.m
 ## Aspect roadmap (v2 — one aspect at a time; an aspect closes only with a shipped release)
 | # | Aspect | Status | Closes when |
 |---|---|---|---|
-| A | Front-end (cycles 0-4, closing in cycle 50) | **current** | `setShellInert` nesting fix + shell-restore invariant test + `#toasts` scoping landed; stamp bumped to `cy117`; review not BROKEN; push stage reports `cy117` served and `/api/ota` current = 1.0.117; livetest green |
+| A | Front-end (cycles 0-4, closing in cycle 50) | **current** — code side done in cycle 50 stage 18 (fix + invariant matrix + toast scoping + browser smoke suite + `cy117`); waiting on review + push | `setShellInert` nesting fix + shell-restore invariant test + `#toasts` scoping landed ✔; stamp bumped to `cy117` ✔; review not BROKEN; push stage reports `cy117` served and `/api/ota` current = 1.0.117; livetest green |
 | B | Backend / server (`server/*.js`) | next | BUGS.md server+runtime truth pass (33 entries re-verified against current code, statuses updated, `bugstats` green); every open critical/high server bug fixed **with a regression test**; stamped assets cached `immutable`; shipped via Lane B/A |
 | C | Smoothness (delivery + client runtime) | after B | request count ≤ 30 on first load; reduced-motion/idle-CPU audit (plan v1 M10); reconnect UX (frontend-012/013); measured with the headless Chromium recipe below; shipped |
 | D | Android native (code + compile-check only) | after C | android-002/003/004/009/011/014 fixed; compiles with a user-local JDK/SDK if that lands in 20 min, else code-reviewed; **shipping needs the human's keystore** |
@@ -43,7 +43,7 @@ installed APKs, unlimited cycles). The push stage follows `deploy/PUSH-RUNBOOK.m
 | M-A design-integrity findings (impeccable detector) | 37 (32 warnings, 5 advisories) | **17** — the actionable subset (`undersized-ui-text` 14, `tiny-text` 1, `layout-transition` 5, `clipped-overflow-container` 2) is now **0**; remaining 17 is the checked-in design-identity allowlist, see `css/DESIGN-DECISIONS.md` | 22 actionable findings → 0 — **MET**; remaining 17 allowlisted per amendment 1, not chased further | `node /opt/data/skills/creative/impeccable/scripts/detect.mjs --json index.html css/styles.css js/ui.js \| grep -c '"antipattern"'` |
 | M-B html-validate errors on `index.html` | 57 | **13, unchanged** (7 `void-style` + 5 `no-inline-style`, both taste — pinned; 1 `prefer-native-element` on `#search-results`, kept on purpose — see below) | 0 in correctness/a11y rule classes — **already met** (see amendment 2) | `npm run test:frontend` |
 | M-B axe-core violations per surface | shell 1, nearby 1, convoy 2, profile 5, auth **5 (mismeasured, see below)** | **shell 0, nearby 0, convoy 0, profile 0, authWelcome 0, authLogin 0 — target met on all six surfaces** (stage 8: `#radar-dock` landmark fix cleared `region` everywhere; `mkRow`/`mkField`/`.dot-color`/`.emoji-btn` accessible-name fixes cleared the rest) | 0 on every surface — **MET** | `npm run test:frontend` |
-| M-B open BUGS.md UI/UX bugs | 13 listed, ui-003/011/013 confirmed open | **21 listed**, **11 fixed** (ui-001, ui-003, ui-004, ui-006, ui-013, ui-014, ui-015, ui-016, ui-017, ui-018, ui-019) — ui-003/ui-013 fixed this stage | all closed | read `BUGS.md` §UI/UX |
+| M-B open BUGS.md UI/UX bugs | 13 listed, ui-003/011/013 confirmed open | **22 listed**, **12 fixed** (ui-001, ui-003, ui-003b, ui-004, ui-006, ui-013, ui-014, ui-015, ui-016, ui-017, ui-018, ui-019) — ui-003b (the ui-003 regression) fixed cycle 50 stage 18 | all closed | read `BUGS.md` §UI/UX |
 | M-C compressed same-origin text bytes / cache policy / requests | 1,033 KB JS + 144 KB CSS + 21 KB HTML uncompressed; `no-cache`; 45 requests | unchanged (M4 not started) | ≤ 300 KB compressed; `immutable`; ≤ 30 requests | `node test/frontend-delivery.test.js` (not yet built) |
 
 All of the above (except M-C) are gated by `npm run test:frontend` against `test/frontend-baseline.json`
@@ -53,7 +53,51 @@ if any shared key's value has been raised. New keys (e.g. this stage's `axeViola
 `axeViolations_authLogin` replacing `axeViolations_auth`) are exempt on the stage that introduces them.
 
 ## Current milestone
-**Cycle 3 stage 14 (IMPLEMENT, executing the cycle-3-stage-13 IMPROVE directive's tasks 1-5) —
+**Cycle 50 stage 18 (IMPLEMENT, executing the cycle-4-stage-16 IMPROVE directive's Tasks 1-4 plus plan-v2
+Task 5) — DONE. The cycle-4 BLOCKER (`ui-003b`, a chained `openOverlay()` leaving the whole shell
+`inert` until reload) is fixed, the class is covered by an invariant matrix, the `#toasts` gap is
+closed, a real-browser smoke suite exists, and the stamp is bumped for the mission's first release.**
+
+1. **Task 1 — `setShellInert` is nesting-safe** (`js/ui.js`): a `shellTrapped` boolean; only the
+   outermost open captures the restore list, only its close restores it. Boolean on purpose (not a
+   depth counter, not `shellInerted.length` — the code comment says why). **Proved to fail first:**
+   matrix rows b/c/d/f reported **18** stray inert body children each (21 shell children minus the
+   3 closed panels the helper excludes by design) against the pre-fix code, **0** after.
+   **1b (beyond the directive, one line, reviewer please judge):** a gate opening inside a *pending*
+   close (`closeAuthEnter` → `enterApp` → `showConsentGate`, synchronous — login never records
+   consent locally, so an existing account on a new device, or anyone after a `LEGAL_VERSION` bump,
+   hits it) was blanked by the still-armed 380ms hide timer and left the shell inert: a blank
+   overlay over a dead app. Reproduced in jsdom first (`hidden=true`, 18 stray), then
+   `beginModalGate()` gained the `cancelOverlayClose()` call `openOverlay` already had. Matrix row k.
+2. **Task 2 — `#toasts` exemption scoped to non-interactive content**: `gateUp()` +
+   `setInviteToastsInert(on)` next to `setShellInert`; `inviteToast()` declines at once while a gate
+   is up (same outcome as its 30-second auto-decline, sooner); invite toasts already on screen get
+   `inert` from `beginModalGate` / `openOverlay` (mirrors `!overlayDismissable` exactly, so the
+   chained dismissable→non-dismissable shape re-scans too) and lose it in `closeOverlay` /
+   `closeAuthEnter`. `gateUp()` also treats a `.closing` gate as down (CSS gives it
+   `pointer-events: none`, so the rider can reach the toasts again) — the one deliberate addition
+   to the directive's helper. Plain `aria-live` toasts untouched. Each half proved to fail first
+   against a neutered copy (rows i/j for half 1, rows g/j for half 2).
+3. **Task 3 — `testShellRestoreInvariant()`** in `test/frontend.test.js` (+22 checks, 56→78): rows
+   a–f (single, ×2, ×3 = race lobby, ×2 with `{dismissable:false}`, gate→card handoff with the close
+   timer pending, panel-composition + chaining asserting both directions), k (gate opened inside a
+   pending close) and g–j (toast scoping).
+   Each row in a fresh jsdom window. An over-reaching "un-inert everything" fix fails row f's panel
+   assertion and ui-003's original composition guard, as intended.
+4. **Task 4 — `test/browser.test.js`** (new, 24th suite, 5 checks, ~0.6 s): builds a `file://`
+   fixture from the real `index.html` (CSP meta and external links stripped, the page's own module
+   scripts minus `app.js`), drives the already-installed `chrome-headless-shell` with `--dump-dom`
+   and no library, and asserts `document.elementFromPoint` over `#dock` reaches the dock again after
+   `openOverlayRaw ×2 → closeOverlay()` — the hit-test jsdom cannot do. Two controls (dock reachable
+   before; NOT reachable while the cards are up) prove the probe sees real layout. **Proved to fail
+   first** against HEAD's pre-fix `js/ui.js`. SKIPs with exit 0 when the binary is absent (proved
+   with `CONVOY_CHROMIUM=/nonexistent` and with the revision directory `mv`'d aside).
+5. **Task 5 — release readiness**: all 45 stamps `cy116 → cy117`; `node scripts/pack-ota.js --offline`
+   → `version 1.0.117` (353 KB bundle); `BUGS.md` gains `ui-003b` (critical, fixed) with the Stats
+   table regenerated (98 bugs); `graphify update .` run. **Nothing deployed** — that is the push
+   stage's job (`deploy/PUSH-RUNBOOK.md`, Lane A).
+
+Previous milestone, for context — **Cycle 3 stage 14 (IMPLEMENT, executing the cycle-3-stage-13 IMPROVE directive's tasks 1-5) —
 DONE. `ui-003`/`ui-013` shipped after four deferrals; the mission's #1 human-only blocker
 (headless Chromium) turned out not to be a blocker at all.** Five tasks:
 
@@ -302,19 +346,18 @@ cd /opt/data/convoy && python3 -m http.server 5173 &
   in-app element (same headless WebGL/backdrop-filter caveat as above would apply to that).
 
 **Reuse this for the next stage that wants a screenshot** — the browser is already downloaded
-(`~/.cache/ms-playwright`), do not redownload. Guardrail from the stage-13 directive still applies:
-do not add `playwright` to `/opt/data/convoy/package.json` or wire it into `test/run.js`; keep using
-a scratch directory outside the repo for one-off checks until a future cycle deliberately decides to
-make this a permanent, CI-wired capability.
+(`~/.cache/ms-playwright`), do not redownload. Still no `playwright` in `package.json` (guardrail from
+the stage-13 directive). **Since cycle 50 stage 18 there IS a permanent, skippable suite:**
+`test/browser.test.js` (registered in `test/run.js`) drives the `chrome-headless-shell` binary with
+`--dump-dom` and no library, over a `file://` fixture built from the real `index.html` (CSP meta and
+external `<link>`s stripped, the page's own module scripts in order minus `app.js`, an in-page probe
+writing JSON into a `<pre>`). It SKIPs with exit 0 when no `chromium_headless_shell-<rev>` directory
+exists (or `CONVOY_CHROMIUM` points at a missing file). Copy its `buildFixture()`/`runChromium()`
+pattern for any future browser-level check instead of a scratch directory.
 
-**Next (per the stage-13 IMPROVE directive):** `ui-003`/`ui-013` are done — the standing
-four-deferral item is closed. `htmlValidateErrors` (13) and the `.htmlvalidate.json` rule-class
-split (plan amendment §5(b)) remain deliberately untouched for a third cycle running — 13 markup
-nits are still worth less than what just got fixed. With M2 now working, a natural next step is
-using it to *resolve* (not just re-measure) ui-020/ui-021 with real in-app screenshots at real GPU
-fidelity, and to finally look at what 14 stages of CSS/a11y work actually look like end-to-end —
-but per the stage-13 directive's explicit scope, wiring a permanent screenshot capability into the
-test suite is its own decision for a future cycle, not implied by this stage's one-off success.
+**Next:** ui-021 (progress-bar rendering at phone width) still wants a human's eyes or a real GPU; the
+headless recipe above is good for layout/hit-test questions, unreliable for anything over the MapLibre
+canvas or behind `backdrop-filter`.
 
 ## Progress log
 - 2026-09-03 stage 1 (PLAN): plan written; skills installed; baselines measured; STATE.md created. No app code changed.
@@ -382,6 +425,8 @@ test suite is its own decision for a future cycle, not implied by this stage's o
   stage fixed 2 existing ones and corrected the Stats table's arithmetic, it didn't add any), 13 now
   fixed (was 11). `graphify update .`: 3089 nodes, 5742 edges, 198 communities.
 
+- 2026-09-03 cycle 50 stage 18 (IMPLEMENT): ui-003b fixed (`shellTrapped`), `#toasts` scoped, `testShellRestoreInvariant` (+22, proved-to-fail-first 18→0; row k = pending-close-timer gate blanking, one-line `cancelOverlayClose()` in `beginModalGate`), `test/browser.test.js` (24th suite, real Chromium hit-test), stamps `cy116→cy117`, OTA bundle 1.0.117 packed locally. Nothing deployed — push stage next.
+
 ## How to run (solo mode — no Supabase needed)
 ```bash
 cd /opt/data/convoy
@@ -407,7 +452,7 @@ Test baseline: see "Test baseline" below.
 - `/opt/data/skills/software-development/headless-cli-setup/` — no-sudo/no-TTY installs.
 
 ## Invariants / guardrails (see plan §7)
-- All `?v=cyNNN` stamps in `index.html` identical; bump only in M12 (45 occurrences today, `cy116`). **Not touched this stage.**
+- All `?v=cyNNN` stamps in `index.html` identical (45 occurrences). Bumped **`cy116` → `cy117`** in cycle 50 stage 18 — the mission's first bump. Every later implement stage that touches `index.html`/`css/`/`js/`/`legal/` bumps by exactly one (operating-contract rule 2); server-only stages do not.
 - Two CSP allowlists (`index.html` meta + `server/server.js`) stay untouched; `test/serverpolicy.test.js` must pass. **Not touched this stage.**
 - Solo mode via a static server must keep working; `www/` is generated (`npm run copy-web`), never edited.
 - Product name stays as-is ("SLIPSTREAM" in UI vs "Convoy" in repo is a human decision — surface it in reviews).
@@ -418,8 +463,10 @@ Test baseline: see "Test baseline" below.
    gap between work done and value delivered.** Production still serves the line-15 orphan-markup
    defect (BUGS.md ui-014), the 59 previously-unnamed controls (ui-015..019), the entire typography
    floor (76 declarations), the 5-site progress-bar performance fix, and — as of this stage — the
-   keyboard-accessibility focus trap (ui-003) and the 133-phantom-tab-stop fix (ui-013). **14
-   stages, nothing shipped.**
+   keyboard-accessibility focus trap (ui-003), the 133-phantom-tab-stop fix (ui-013), and — as of cycle 50
+   stage 18 — the `ui-003b` lockout fix that makes the ui-003 trap safe to ship. **18 stages, nothing
+   shipped; the cycle-50 push stage (runbook Lane A, `deploy/live-deploy.sh release -- --ota`) is the
+   first that can.**
 2. ~~Install Chromium's shared libraries (needs root).~~ **FALSIFIED, twice over, this stage.**
    Neither "needs root" (disproven cycle-3-stage-13) nor "20 missing shared libraries" (disproven
    this stage — the real count was **zero**) was true. A headless Chromium already runs on this box
@@ -457,6 +504,13 @@ whichever suite happens to run last — `frontend.test.js`). `npm run test:front
 `detectorWarnings` 17) — expected: Tasks 1-2 fixed a keyboard-only defect none of those gates can
 see (Finding C in the stage-13 directive). Keep suite count, every per-suite check count, and the 7
 baseline keys from going down.
+`npm test` on 2026-09-03 (implementer stage 18, cycle 50, after Tasks 1-5): **All 24 suites passed**
+(23→24, new `test/browser.test.js`, 5/5 checks on this box; prints `SKIP …` and exits 0 where the
+headless Chromium is absent, so the suite count stays 24 everywhere). `frontend.test.js`: 56→**78**
+checks (+22 `testShellRestoreInvariant`). `bugstats.test.js` 11/11 (98 bugs). `npm run test:frontend`
+measured counts **unchanged** on all 7 baseline keys (`htmlValidateErrors` 13, `axeViolations_*` 0 ×6,
+`detectorWarnings` 17) — expected: an `inert` bug is invisible to every static gate. Keep suite count
+(24), every per-suite check count, and the 7 baseline keys from going down.
 
 ## Operating contract (cycle 50+, plan v2) — every role reads this; it is the tail of this file on purpose
 1. **One aspect at a time.** Implement works only on the current aspect's next milestone from plan v2
@@ -464,8 +518,10 @@ baseline keys from going down.
    aspect requires the current one's "Closes when" row above to be true **and** a shipped release.
 2. **Stamp rule (implementer, last code edit of the stage).** If the stage changed `index.html`,
    `css/`, `js/` or `legal/`, bump **all 45** stamps by exactly one:
-   `sed -i 's/?v=cy116/?v=cy117/g' index.html && grep -oc '?v=cy117' index.html` (must print 45),
-   then `node scripts/pack-ota.js --offline 2>&1 | tail -6` (must print `version 1.0.117`).
+   read the current stamp (`grep -oE '\?v=cy[0-9]+' index.html | sort | uniq -c`, one value, 45×), then e.g.
+   `sed -i 's/?v=cy117/?v=cy118/g' index.html && grep -oc '?v=cy118' index.html` (must print 45),
+   then `node scripts/pack-ota.js --offline 2>&1 | tail -6` (must print the matching `version 1.0.NNN`).
+   Current stamp after cycle 50 stage 18: `cy117`.
    Server-only stages do not bump. Never leave a mixed page. The bumped stamp is what the push stage
    uses to decide Lane A (web + OTA) vs Lane B (site only).
 3. **Push gates** (`deploy/PUSH-RUNBOOK.md`): review verdict BROKEN or any BLOCKER → nothing moves;

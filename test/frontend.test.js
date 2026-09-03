@@ -365,6 +365,164 @@ async function testModalFocusTrap() {
     closedPanel.hasAttribute('inert'));
 }
 
+/* ---------------- 2e. ui-003b: the shell ALWAYS restores — an invariant over sequences ----------------
+   Cycle 4 shipped a focus trap whose setShellInert(true) recomputed "which body children
+   to inert" on every call. A second openOverlay() with no closeOverlay() between — which
+   this codebase does routinely (the race lobby re-renders on every state push, block→report,
+   a profile overlay refreshing on a stats event, regen-recovery's success card) — found
+   nothing left to capture, overwrote the restore list with [], and the eventual close
+   restored nothing: all 21 shell children stayed inert until reload, for mouse users too
+   (inert blocks hit-testing, measured in real Chromium — see stage-16 directive §3).
+
+   testModalFocusTrap() above never opened a modal twice in a row, so 56/56 stayed green over
+   a dead app. The lesson: test the INVARIANT, not the one shape you thought of. After any
+   open/close sequence that ends in a close, the only [inert] attributes left on body children
+   are the ones openPanel put on closed panels (ui-013). Every row below asserts exactly that,
+   each in a fresh window so one leak cannot mask or cause another. */
+function strayInert(doc) {
+  return Array.from(doc.body.children).filter((el) =>
+    el.hasAttribute('inert') && !el.classList.contains('panel'));
+}
+
+async function testShellRestoreInvariant() {
+  H.group('js/ui.js — the shell always restores after any open/close sequence (ui-003b)');
+  const tick = (ms) => new Promise((r) => setTimeout(r, ms || 0));
+  function fresh() {
+    const dom = buildWindow();
+    const win = dom.window;
+    installAsGlobals(win);
+    const A = loadModules(win);
+    const doc = win.document;
+    const mkCard = () => {
+      const card = doc.createElement('div');
+      const btn = doc.createElement('button'); btn.textContent = 'ok';
+      card.appendChild(btn);
+      return card;
+    };
+    return { A, doc, win, mkCard, open: (opts) => A.ui.openOverlayRaw(mkCard(), opts), close: () => A.ui.closeOverlay() };
+  }
+  function describe(list) {
+    return 'found ' + list.length + (list.length ? ': ' + list.slice(0, 6).map((e) => e.id || e.tagName).join(', ') + (list.length > 6 ? ', …' : '') : '');
+  }
+
+  // a–e: sequences. Each mirrors a real call chain (stage-16 directive §2, chains A–F).
+  const rows = [
+    { id: 'a', label: 'open → close (the one shape the old test covered)',
+      run: async (c) => { c.open(); c.close(); } },
+    { id: 'b', label: 'open → open → close (block→report, add/change-email success card)',
+      run: async (c) => { c.open(); c.open(); c.close(); } },
+    { id: 'c', label: 'open → open → open → close (race lobby + countdown ticks, js/race.js renderLobby)',
+      run: async (c) => { c.open(); c.open(); c.open(); c.close(); } },
+    { id: 'd', label: 'open → open({dismissable:false}) → close (regen-recovery success card)',
+      run: async (c) => { c.open(); c.open({ dismissable: false }); c.close(); } },
+    { id: 'e', label: 'showAuth → closeOverlay → open → close (gate handing off to a card, close timer still pending)',
+      run: async (c) => { c.A.ui.showAuth(function () {}); await tick(0); c.close(); c.open(); c.close(); } }
+  ];
+  for (const row of rows) {
+    const c = fresh();
+    await row.run(c);
+    const stray = strayInert(c.doc);
+    H.ok('case ' + row.id + ': ' + row.label + ' → no shell child left inert',
+      stray.length === 0, describe(stray));
+  }
+
+  // f: the panel-composition guard PLUS chaining. Must fail in BOTH directions: a chaining
+  // leak (shell stuck) and an over-reaching fix that un-inerts openPanel's closed panels
+  // (which would silently revert ui-013).
+  {
+    const c = fresh();
+    c.A.ui.openPanel('nearby');
+    c.A.ui.openPanel(null);
+    const closedPanel = c.doc.querySelector('.panel[data-panel="nearby"]');
+    c.open(); c.open(); c.close();
+    const stray = strayInert(c.doc);
+    H.ok('case f: openPanel(nearby) → openPanel(null) → open → open → close → no shell child left inert',
+      stray.length === 0, describe(stray));
+    H.ok('case f: the closed panel KEEPS its own inert after the chained cycle (ui-013 not reverted)',
+      closedPanel.hasAttribute('inert'));
+  }
+
+  // k: a gate opening INSIDE a pending close. closeAuthEnter → done() → auth.enterApp →
+  // showConsentGate runs synchronously, and login never records consent locally (only
+  // register/guest/OAuth-setup do), so an existing account signing in on a new device — or
+  // after a LEGAL_VERSION bump — opens the re-consent gate while closeAuthEnter's 380ms hide
+  // timer is still armed. Pre-fix that timer blanked the gate (hidden, empty) and left the
+  // shell inert: a blank overlay over a dead app. closeOverlay() has the identical timer
+  // shape, so it stands in for the unexported closeAuthEnter here.
+  {
+    const c = fresh();
+    const root = c.doc.getElementById('onboarding');
+    c.A.ui.showAuth(function () {}); await tick(0);
+    c.close();
+    c.A.ui.showConsentGate(function () {});
+    await tick(450); // past the 380ms timer
+    H.ok('case k: a gate opened while the previous close timer was pending is still showing 450ms later (not blanked)',
+      root.hidden === false && root.children.length > 0, 'hidden=' + root.hidden + ' children=' + root.children.length);
+    H.ok('case k: the shell is inert while that gate is up (the trap survived the timer)', strayInert(c.doc).length > 0);
+    c.close();
+    H.ok('case k: closing the gate restores the shell', strayInert(c.doc).length === 0, describe(strayInert(c.doc)));
+  }
+
+  // g–i: the #toasts exemption is scoped to NON-INTERACTIVE content. #toasts stays out of
+  // the shell trap so aria-live announcements reach AT behind a modal, but inviteToast()
+  // puts live Join/Pass buttons in that same container and a socket push can land one
+  // while a gate is up — a rider could join a convoy around the re-consent gate.
+  {
+    const c = fresh();
+    const box = c.doc.getElementById('toasts');
+    c.A.ui.inviteToast({ name: 'Ana' }, { name: 'Night run' }, function () {}, function () {});
+    c.A.ui.toast('plain announcement', 'info');
+    const invite = box.querySelector('.toast-invite');
+    const plain = Array.from(box.querySelectorAll('.toast')).find((t) => !t.classList.contains('toast-invite'));
+    H.ok('case g setup: an invite toast and a plain toast are on screen before the gate opens', !!invite && !!plain);
+    c.A.ui.showAuth(function () {});
+    await tick(0);
+    H.ok('case g: a .toast-invite already on screen is inert while a gate is up', invite.hasAttribute('inert'));
+    H.ok('case g: a plain toast is NOT inert while a gate is up (aria-live must still reach AT)', !plain.hasAttribute('inert'));
+
+    let declined = false, accepted = false;
+    c.A.ui.inviteToast({ name: 'Ben' }, { name: 'Coast loop' }, function () { accepted = true; }, function () { declined = true; });
+    H.ok('case i: inviteToast() while a gate is up creates no toast node',
+      box.querySelectorAll('.toast-invite').length === 1, 'found ' + box.querySelectorAll('.toast-invite').length);
+    H.ok('case i: inviteToast() while a gate is up calls onDecline at once (and never onAccept)', declined && !accepted);
+    const before = box.querySelectorAll('.toast').length;
+    c.A.ui.toast('still announced', 'info');
+    H.ok('case i: a plain toast() while a gate is up is still created', box.querySelectorAll('.toast').length === before + 1);
+
+    c.A.ui.closeOverlay();
+    H.ok('case h: the invite toast is no longer inert the moment the gate closes', !invite.hasAttribute('inert'));
+    await tick(400); // the 380ms hide timer has run: #onboarding is hidden, nothing is gating
+    let declinedLate = false;
+    c.A.ui.inviteToast({ name: 'Cy' }, { name: 'Dawn patrol' }, function () {}, function () { declinedLate = true; });
+    H.ok('case h: an invite arriving after the gate closed is shown normally, not auto-declined',
+      box.querySelectorAll('.toast-invite').length === 2 && !declinedLate);
+  }
+
+  // j: openOverlay's own {dismissable:false} path is a gate too; a dismissable card is not.
+  // Also pins the chained shape (dismissable → non-dismissable with no close between,
+  // showRegenRecovery's success card): the invite that arrived under the first card must
+  // be re-scanned by the second open, even though the shell trap itself is a no-op then.
+  {
+    const c = fresh();
+    const box = c.doc.getElementById('toasts');
+    c.open();
+    let declined = false;
+    c.A.ui.inviteToast({ name: 'Ana' }, { name: 'Night run' }, function () {}, function () { declined = true; });
+    const invite = box.querySelector('.toast-invite');
+    H.ok('case j: an invite arriving under a dismissable card is shown and live (a card is not a gate)',
+      !!invite && !invite.hasAttribute('inert') && !declined);
+    c.open({ dismissable: false });
+    H.ok('case j: a chained {dismissable:false} card inerts the invite that arrived under the dismissable one',
+      invite.hasAttribute('inert'));
+    let declined2 = false;
+    c.A.ui.inviteToast({ name: 'Ben' }, { name: 'Coast loop' }, function () {}, function () { declined2 = true; });
+    H.ok('case j: a new invite under the {dismissable:false} card is declined, not shown',
+      declined2 && box.querySelectorAll('.toast-invite').length === 1);
+    c.close();
+    H.ok('case j: closeOverlay() un-inerts the invite toast', !invite.hasAttribute('inert'));
+  }
+}
+
 /* ---------------- 0. baseline ratchet guard: a stage may only LOWER the
    committed caps by fixing a real issue, never raise one to make a red run
    green. Compares the working-tree baseline file against the version last
@@ -471,6 +629,7 @@ function testDetector() {
   testGeneratedIdsUnique();
   testClosedPanelsInert();
   await testModalFocusTrap();
+  await testShellRestoreInvariant();
   testThemes();
   testStamps();
   testFontSizeFloor();
