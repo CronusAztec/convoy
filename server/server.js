@@ -1814,6 +1814,16 @@ const bots = new Map();    // id -> bot
 const parties = new Map(); // pid -> party
 const partyByCode = new Map(); // join code -> party
 const ipCount = new Map(); // ip -> open socket count (per-IP ceiling)
+// A rider riding through a tunnel is not a rider leaving the convoy. The socket
+// dies, but the seat is held for PARTY_GRACE_MS so the next `hello` carrying the
+// same resume token drops straight back into the same convoy (server-035; the
+// client half is js/net.js, whose PARTY_GRACE_MS must stay <= this one —
+// test/partyresume.test.js pins it). 0 disables the hold: every close is a
+// leave again, exactly the pre-cycle-58 behaviour.
+const PARTY_GRACE_MS = Number(process.env.PARTY_GRACE_MS || 90000);
+const RESUME_MAX = 500;                 // hard ceiling; seats are pruned on write
+const resumeSeats = new Map();          // token -> { pid, userId, at }  (the socket was already reaped)
+const seatOwner = new Map();            // token -> the client that still owns it (the socket is still open)
 // Ad-hoc drag races (NOT convoy-gated). Any nearby rider can create/join. A race
 // is proximity-scoped at join (B.haversine ≤ NEARBY_KM) so two riders out of range
 // can't race. Auto-cleans up on finish, abandon, or leader disconnect.
@@ -2265,7 +2275,7 @@ function createParty(c, name, emoji) {
   console.log(`[party] ${c.profile.name} created "${party.name}" (${code})`);
 }
 
-function joinParty(rider, party) {
+function joinParty(rider, party, quiet) {
   if (party.members.length >= MAX_PARTY) return false;
   if (rider.bot) {
     if (rider.party) return false;
@@ -2275,7 +2285,8 @@ function joinParty(rider, party) {
     rider.party = party.id;
   }
   party.members.push(rider.id);
-  partySys(party, riderName(rider) + ' joined the convoy');
+  // quiet: restoreSeat() re-seating a rider who never left (server-035).
+  if (!quiet) partySys(party, riderName(rider) + ' joined the convoy');
   sendPartyState(party);
   return true;
 }
@@ -2316,6 +2327,73 @@ function leaveParty(rider, silent) {
     partySys(party, riderName(getRider(party.leader)) + ' now leads the convoy');
   }
   sendPartyState(party);
+}
+
+/* ---------------- seat hold (server-035) ----------------
+   Two ways a rider's seat can still exist when their next `hello` arrives: the
+   server already reaped the old socket (resumeSeats, written by ws.on('close')),
+   or it has not noticed the socket is dead yet (seatOwner — the COMMON case:
+   the client retries in 2 s, the ping loop needs 30-60 s to terminate a phone
+   that vanished). A resume that only consulted the close-time map would almost
+   never fire. All three are top-level on purpose: test/partyresume.test.js
+   lifts them out of this file by text and runs them. */
+function pruneSeats(now) {
+  for (const [token, seat] of resumeSeats) {
+    if (now - seat.at > PARTY_GRACE_MS) resumeSeats.delete(token);
+  }
+}
+
+/* The socket died. Hold the seat, and tell the convoy the truth: they lost
+   signal, they did not leave. Returns true when the seat was held — the close
+   handler makes the leave silent exactly then. */
+function rememberSeat(rider, now) {
+  if (!PARTY_GRACE_MS || !rider || rider.bot || !rider.resume || !rider.party) return false;
+  const party = parties.get(rider.party);
+  if (!party) return false;
+  pruneSeats(now);
+  if (resumeSeats.size >= RESUME_MAX) return false;      // never grow unbounded
+  resumeSeats.set(rider.resume, { pid: rider.party, userId: rider.userId || null, at: now });
+  partySys(party, riderName(rider) + ' lost signal');
+  return true;
+}
+
+/* `hello` carries the token from this rider's last `welcome`. Returns the party
+   to re-join, or null. The token is a session capability at the trust level of
+   the socket that received it (128-bit, sent only inside that socket's own
+   welcome): single use, expiring, bound to the account that was signed in when
+   it was minted, and good for the seat it was minted for — never another convoy. */
+function claimSeat(rider, token, now) {
+  if (!PARTY_GRACE_MS || !rider || typeof token !== 'string' || !token) return null;
+  pruneSeats(now);
+  const prev = seatOwner.get(token);
+  if (prev && prev !== rider) {                    // half-open: the old socket is still live
+    // A different identity holding a signed-in socket's token is not that
+    // rider: leave the live seat to the reaper, seat nobody.
+    if (prev.userId && prev.userId !== (rider.userId || null)) return null;
+    seatOwner.delete(token);
+    const party = prev.party ? parties.get(prev.party) : null;
+    leaveParty(prev, true);                        // silent: moving sockets, not leaving
+    try { prev.ws.close(); } catch (e) { /* already gone */ }
+    if (party && parties.has(party.id) && party.members.length < MAX_PARTY) return party;
+    return null;
+  }
+  const seat = resumeSeats.get(token);
+  if (!seat) return null;
+  resumeSeats.delete(token);                       // single use — spent even by a refused claim
+  if (now - seat.at > PARTY_GRACE_MS) return null;
+  if (seat.userId && seat.userId !== (rider.userId || null)) return null;
+  const party = parties.get(seat.pid);
+  if (!party || party.members.length >= MAX_PARTY) return null;
+  return party;
+}
+
+/* Runs AFTER the welcome frame: joinParty() -> sendPartyState() reaches the
+   client as a `party` frame, and js/net.js applyParty() needs its own id from
+   `welcome` first (isLeader: p.leader === myId). */
+function restoreSeat(rider, party) {
+  if (!joinParty(rider, party, true)) return false;   // quiet: no "joined the convoy"
+  partySys(party, riderName(rider) + ' reconnected');
+  return true;
 }
 
 /* ================= races =================
@@ -2565,9 +2643,15 @@ const handlers = {
     recomputeHumans();
     assignAnchors();
     syncScope(c);
+    // The seat resume (server-035): claim BEFORE the welcome so `resumed` is
+    // truthful, restore AFTER it so the roster reaches a client that already
+    // knows its own id (js/net.js applyParty: isLeader = leader === myId).
+    const seat = claimSeat(c, m.resume, Date.now());
     send(c, {
       t: 'welcome',
       id: c.id,
+      resume: c.resume,
+      resumed: !!seat,
       online: humans().length,
       account: c.userId ? {
         username: c.username,
@@ -2583,6 +2667,7 @@ const handlers = {
       // rider's first sight of the global layer.
       global: gated(c) ? anonymiseGlobal(buildGlobalFC(c)) : buildGlobalFC(c)
     });
+    if (seat) restoreSeat(c, seat);
     console.log(`[join] ${c.profile.name}${c.userId ? ' @' + c.username : ' (guest)'} — ${humans().length} online`);
   },
 
@@ -3917,6 +4002,8 @@ wss.on('connection', (ws, req) => {
   }
   const c = {
     id: 'u' + crypto.randomBytes(5).toString('hex'),
+    // Seat-resume token (server-035): sent only inside this socket's own welcome.
+    resume: crypto.randomBytes(16).toString('hex'),
     ws,
     ip: clientIp(req),
     userId: null,
@@ -3942,6 +4029,7 @@ wss.on('connection', (ws, req) => {
   }
   ipCount.set(c.ip, cur + 1);
   clients.set(c.id, c);
+  seatOwner.set(c.resume, c);
 
   ws.on('pong', () => { c.isAlive = true; });
   ws.on('message', (buf) => {
@@ -3985,7 +4073,12 @@ wss.on('connection', (ws, req) => {
     }
   });
   ws.on('close', () => {
-    if (c.party) leaveParty(c, false);
+    seatOwner.delete(c.resume);
+    // Hold the seat FIRST: a held seat makes the leave silent and posts "lost
+    // signal" instead of "left the convoy" (server-035). Races are not held —
+    // a race is 10-20 s long and endRace/abandonRace have ledger side effects.
+    const held = rememberSeat(c, Date.now());
+    if (c.party) leaveParty(c, held);
     if (c.raceId) leaveRace(c, false);
     clients.delete(c.id);
     const left = (ipCount.get(c.ip) || 1) - 1;

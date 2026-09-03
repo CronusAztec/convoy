@@ -615,8 +615,13 @@ function testBootCost() {
   const indexGz = zlib.gzipSync(Buffer.from(html.replace(/\?v=cy\d+/g, '?v=cy000')), { level: 9 }).length;
   atOrBelowBaseline('boot asset requests — index.html + every same-origin script/stylesheet it references (external origins and map tiles excluded)',
     'bootAssetRequests', 1 + sameOrigin.length, '1 html + ' + css + ' css + ' + js + ' js');
-  atOrBelowBaseline('boot asset gzip bytes — zlib level 9 over those assets + index.html with its ?v= stamps normalised',
-    'bootAssetGzipBytes', gz + indexGz, 'assets raw ' + raw + ' / gzip ' + gz + ', index.html gzip ' + indexGz + ' → ' + Math.round((gz + indexGz) / 1024) + ' KB');
+  // bootAssetGzipBytes (357743, pinned at the exact measurement, zero headroom)
+  // was retired in cycle 58 for a whole-KiB budget: it moves UP only with a
+  // named, justified retirement in the stage report (the aspect-C target is
+  // <= 300 KB — it is meant to trend down), and any stage that adds more than
+  // the headroom left must make the same conscious decision again.
+  atOrBelowBaseline('boot asset gzip budget — zlib level 9 over those assets + index.html with its ?v= stamps normalised (whole-KiB budget, retired bootAssetGzipBytes in cycle 58)',
+    'bootAssetGzipBudget', gz + indexGz, 'assets raw ' + raw + ' / gzip ' + gz + ', index.html gzip ' + indexGz + ' → ' + Math.round((gz + indexGz) / 1024) + ' KB');
   atOrBelowBaseline('boot external origins — distinct hosts across every <script src> and <link href> in index.html, preconnect/dns-prefetch hints included',
     'bootExternalOrigins', hosts.size, Array.from(hosts).sort().join(', '));
 }

@@ -7,7 +7,14 @@
 
   var MAX_MEMBERS = 6;
 
-  function isLive() { return A.net && A.net.isLive(); }
+  // Live, or the socket is down with the server still holding our seat
+  // (js/net.js PARTY_GRACE_MS, server-035): every delegated action below is
+  // queued behind the next hello and lands on the resumed seat. Before the
+  // seat hold S.party was null during any outage, so the solo branches below
+  // only ever touched a simulated convoy; with a real roster kept on screen
+  // they would answer a rider's tunnel chat with a fake reply from a real
+  // member. joinByCode() is the one action that needs a socket right now.
+  function isLive() { return !!(A.net && (A.net.isLive() || (A.net.isResuming && A.net.isResuming()))); }
 
   /* ================= create ================= */
   function create(name, emoji) {
@@ -143,7 +150,7 @@
   }
 
   function joinByCode(code) {
-    if (!isLive()) { A.ui.toast('Join codes need a live connection', 'warn'); return; }
+    if (!(A.net && A.net.isLive())) { A.ui.toast('Join codes need a live connection', 'warn'); return; }
     A.net.sendPartyJoin(code);
   }
 

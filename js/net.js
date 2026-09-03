@@ -24,6 +24,21 @@
   var everConnected = false;
   var toldOffline = false; // only toast the outage once per outage
 
+  // A rider riding through a tunnel is not a rider leaving the convoy. The
+  // server holds their seat for its PARTY_GRACE_MS (server/server.js,
+  // server-035) and the next `hello` carrying the token from the last
+  // `welcome` drops them straight back in. Until then the roster stays on
+  // screen — but only for as long as the server can still be holding the
+  // seat, so this must never exceed the server's window (pinned across both
+  // files by test/partyresume.test.js R3): a client that keeps the roster
+  // after the server let the seat go is showing the rider a convoy they are
+  // no longer in. Before this, teardownLive() threw the roster, links and
+  // chat away on every drop and nothing ever rejoined (frontend-022).
+  var PARTY_GRACE_MS = 90000;
+  var resumeToken = null;       // from the last welcome; in memory only, never persisted
+  var partyGraceUntil = 0;      // while now < this, a dropped socket keeps the roster on screen
+  var graceTimer = null;        // clears a roster nobody came back for (only ever one)
+
   function wsUrl() {
     // Capacitor shell gets an absolute wss URL; web client derives same-origin.
     if (A.config.wsUrl) return A.config.wsUrl;
@@ -108,6 +123,9 @@
       send({
         t: 'hello',
         token: S.auth ? S.auth.token : null,
+        // The seat-resume token from the last welcome (server-035): the server
+        // seats us back in the convoy we were in when the socket died.
+        resume: resumeToken,
         profile: S.profile,
         // Only ever publish a REAL position. player.pos starts at S.playerStart —
         // a randomised point in downtown LA used purely so the map has something
@@ -128,6 +146,13 @@
       flushQueue();
     };
     socket.onmessage = function (ev) {
+      // Same guard as onclose: a frame arriving on a socket this client has
+      // already replaced must not reach the shared handler table. It used to
+      // — and the seat resume makes that load-bearing: the server's half-open
+      // branch sends `party:left` to the OLD socket while unseating it, and a
+      // late delivery would clear the roster the new socket just restored
+      // (frontend-023).
+      if (ws !== socket) return;
       var m;
       try { m = JSON.parse(ev.data); } catch (e) { return; }
       var h = handlers[m.t];
@@ -165,6 +190,7 @@
   // An established socket dropped (tunnel, handover, server restart).
   function onDisconnected() {
     ws = null;
+    if (S.party) holdParty();   // BEFORE teardownLive() looks at the window
     teardownLive();
     connecting = false;
     attempt++;
@@ -177,11 +203,38 @@
     S.netMode = 'connecting';
     if (posTimer) { clearInterval(posTimer); posTimer = null; }
     if (S.party) {
-      clearPartyFlags();
-      S.party = null;
-      A.mapview.setLinksData(null);
-      ST.emit('party');
+      // Inside the grace window the roster stays: the server is holding the
+      // seat and the HUD link light (radar.js 'rst-link') is already dark,
+      // which is the "stale roster" affordance. Past it the seat is gone —
+      // clear, exactly as every drop used to.
+      if (Date.now() < partyGraceUntil) ST.emit('party');
+      else clearParty();
     }
+  }
+
+  function clearParty() {
+    dropGrace();                // no roster, no timer
+    clearPartyFlags();
+    S.party = null;
+    A.mapview.setLinksData(null);
+    ST.emit('party');
+  }
+
+  // The socket died with a convoy on screen: keep it for the grace window and
+  // arm the one timer that clears it if nobody reconnects — a rider who never
+  // comes back must not stare at a frozen roster forever.
+  function holdParty() {
+    partyGraceUntil = Date.now() + PARTY_GRACE_MS;
+    if (graceTimer) clearTimeout(graceTimer);
+    graceTimer = setTimeout(function () {
+      graceTimer = null;
+      if (!live && S.party) clearParty();
+    }, PARTY_GRACE_MS);
+  }
+
+  function dropGrace() {
+    partyGraceUntil = 0;
+    if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
   }
 
   // Server unreachable / offline. No fake riders — the map shows just the player
@@ -202,6 +255,14 @@
     live = true;
     myId = m.id;
     S.netMode = 'live';
+    // The seat resume (server-035). Keep the newest token for the next drop,
+    // and let the server's answer win over the client's optimism: a roster
+    // kept through the outage is only honest if the server says it resumed
+    // the seat — otherwise the seat expired (or was never held) and the
+    // `party` frame this client is waiting for will never come.
+    resumeToken = m.resume || resumeToken;
+    dropGrace();
+    if (S.party && m.resumed !== true) clearParty();
     if (A.telemetry) { A.telemetry.step('live'); A.telemetry.track('link_live', { reconnect: everConnected }); }
     A.sim.disableSolo();
     (m.riders || []).forEach(function (r) { A.sim.remoteAdd(r); });
@@ -371,10 +432,7 @@
     party: function (m) { applyParty(m.party); },
 
     'party:left': function () {
-      clearPartyFlags();
-      S.party = null;
-      A.mapview.setLinksData(null);
-      ST.emit('party');
+      clearParty();   // drops the grace too: never resurrect a convoy the rider left or was kicked from
       A.ui.toast('You left the convoy', 'info');
     },
 
@@ -527,12 +585,23 @@
     init: init,
     connect: connect,
     isLive: function () { return live; },
+    // The socket is down but the server may still be holding our seat: party
+    // actions queue behind the next hello instead of falling into the solo
+    // simulation (js/party.js).
+    isResuming: function () { return !live && !!S.party && Date.now() < partyGraceUntil; },
     myId: function () { return myId; },
     sendInvite: sendInvite,
     sendInviteAccount: sendInviteAccount,
     sendCreate: sendCreate,
     sendKick: function (id) { sendQueued({ t: 'party:kick', id: id }); },
-    sendLeave: function () { sendQueued({ t: 'party:leave' }); },
+    // A convoy the rider chose to leave is never kept warm: zero the grace so
+    // the next drop clears it, and inside a grace window show the leave now —
+    // the queued frame lands on the resumed seat and party:left confirms it.
+    sendLeave: function () {
+      dropGrace();
+      if (!live && S.party) clearParty();
+      sendQueued({ t: 'party:leave' });
+    },
     sendChat: function (text) { sendQueued({ t: 'chat', text: text }); }, // sys lines are server-only now
     // Queued like its siblings: a sys line minted while the socket is down used
     // to vanish with no trace (raw send no-ops offline), and the server — not

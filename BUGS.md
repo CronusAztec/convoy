@@ -133,16 +133,18 @@ Each bug has:
 - **Impact:** Ghost-Mode-off flickers stale aircraft; contradicts explicit disable.
 - **Fix:** Early-return in `publishAircraft` if `!running`; clear `acAdsbx`/`acOpenSky` before timers in `stop()`; use a generation counter to ignore stale poll results.
 
-### BUG frontend-012
+### BUG frontend-012 — FIXED (re-statused cycle 58 stage 50, 2026-09-03; fixed in an earlier cycle, never re-statused)
 - **Severity:** medium
+- **Status:** FIXED (re-verified 2026-09-03) — `js/net.js:157-163`: `onConnectFailed()` always calls `scheduleRetry()` (no budget, `RETRY_MIN` 2 s → `RETRY_MAX` 30 s, "we never stop trying"); `everConnected` only picks the toast wording. The cycle-57 review handed this to cycle 58 as OPEN — the cycle-57 improve stage caught the phantom (`stages/0048-c057-improve.md` §2.1)
 - **File:** `js/net.js:102-119`
 - **Title:** `onConnectFailed` requires `everConnected` to retry, so the very first connect failure strands the user in solo with no retry
 - **Repro:** Boot with the server briefly unreachable. `connect()` times out → `everConnected` false → `fallbackSolo(false)`, no retry.
 - **Impact:** Cold-start resilience gap; brief first-connect blip permanently strands the user without riders for the session.
 - **Fix:** Allow at least one retry on first connect (`if (retriesLeft-- > 0)`); gate `everConnected` only on the toast message, not the retry.
 
-### BUG frontend-013
+### BUG frontend-013 — FIXED as re-scoped (cycle 58 stage 50, 2026-09-03)
 - **Severity:** medium
+- **Status:** FIXED (re-verified 2026-09-03) — the prescription below ("keep `S.party` optimistically") was WRONG on the pre-C2 server: `ws.on('close')` really removed the seat, so an optimistic roster would have been the client lying (chat and rally going nowhere). The honest fix is server-035's seat hold plus a bounded client grace: `js/net.js` `holdParty()` / `teardownLive()` keep the roster only while `Date.now() < partyGraceUntil` (≤ the server's `PARTY_GRACE_MS`, pinned by `test/partyresume.test.js` R3) and `goLive()` clears it the moment a `welcome` answers `resumed:false`. See frontend-022
 - **File:** `js/net.js:94-100, 121-131`
 - **Title:** `teardownLive` nulls `S.party` on every socket drop → convoy markers flicker + "Connected" toast repeats on flaky links
 - **Repro:** Join a convoy, throttle network so the socket drops/reconnects 3× rapidly. Member markers flicker; toast repeats; voice re-acquires mic each cycle.
@@ -173,8 +175,9 @@ Each bug has:
 - **Impact:** Sky layer fails on legacy WebViews; console spam. (Modern Capacitor WebView is fine.)
 - **Fix:** `if (ctx.ellipse) ctx.ellipse(...); else { /* arc/bezier fallback */ }`
 
-### BUG frontend-017
+### BUG frontend-017 — FIXED (re-statused cycle 58 stage 50, 2026-09-03; fixed in an earlier cycle, never re-statused)
 - **Severity:** medium
+- **Status:** FIXED (re-verified 2026-09-03) — `js/race.js:174-190`: `fixSendTimer` relays only when the fix signature changed, with a 2 s maximum gap so a peer's `RaceTimer` cannot back-date a late launch ("Relay at ~10Hz ONLY while something is changing"). Caught as a phantom by the cycle-57 improve stage (`stages/0048-c057-improve.md` §2.1)
 - **File:** `js/race.js:160-181`
 - **Title:** `fixSendTimer` relays `race:fix` at 10 Hz even when GPS is stationary/no-fix — 9 of 10 packets are stale duplicates
 - **Repro:** Start a multiplayer race and leave the device still. Capture WS outgoing frames: ~10 identical `race:fix` messages/sec for the whole race.
@@ -207,11 +210,30 @@ Each bug has:
 
 ### BUG frontend-021
 - **Severity:** medium
+- **Status:** OPEN (re-verified 2026-09-03) — re-tagged **aspect C, milestone C3, cycle 59** by the cycle-57 improve stage; deliberately not touched in cycle 58 (C2 was the party-lifecycle change)
 - **File:** `js/ghost.js` (5 intervals: aircraft 8 s, Waze 60 s, police 90 s, hotspots 5 min, predict 200 ms), `js/overlays.js` (5: traffic 90 s, hazards 5 min, incidents 2 min, NWS 5 min, radar 5 min), `js/scanners.js` (OpenMHz calls, 6 s), `js/voice.js` (2), `js/radar.js`, `js/clock.js`, `js/state.js`, `js/ui.js`, `js/race.js` (1 each)
 - **Title:** Nine timer-owning modules never check `document.hidden` / `visibilitychange`, so a backgrounded app keeps polling the network at 6 s / 8 s cadence
 - **Repro:** measured by the cycle-56 improve stage (2026-09-03, `stages/0044-c056-improve.md` §2.5): 22 `setInterval` timers across 12 files; only `js/space.js`, `js/sim.js`, `js/telemetry.js`, `js/net.js` and `js/wake.js` gate on visibility. The nine that do not (hidden-refs = 0): `js/ghost.js` intervals=5 · `js/overlays.js` intervals=5 · `js/scanners.js` intervals=1 · `js/voice.js` 2 · `js/radar.js` 1 · `js/clock.js` 1 · `js/state.js` 1 · `js/ui.js` 1 · `js/race.js` 1. Background the app (or `document.hidden = true` in a harness) and count fetches: OpenMHz every 6 s and `/api/aircraft` every 8 s keep going.
 - **Impact:** battery and mobile data spent on polls nobody can see while the app is in the background; the visual-only layers (aircraft dots, radar, traffic, hazards, incidents, NWS, scanner call lists) repaint for nobody.
-- **Fix:** gate the visual-only pollers on `document.hidden` and resume on `visibilitychange` — **with a product carve-out recorded here on purpose:** `fetchPolice` / `fetchWaze` in `js/ghost.js` are the Ghost Mode alerting path, and a rider deliberately backgrounds the app while the foreground location service runs; blanket-pausing them would kill a safety feature. Pause aircraft/predict, radar, traffic, hazards, incidents, NWS and the scanner poll (when nothing is playing); keep police/Waze; pair it with the reconnect UX work (frontend-012/013) so a resumed app refreshes once, not once per timer. **Scheduled for aspect C, milestone C2 (cycle 58).** Filed OPEN and deliberately not fixed in cycle 57 (C1 was the fetch-deadline class fix).
+- **Fix:** gate the visual-only pollers on `document.hidden` and resume on `visibilitychange` — **with a product carve-out recorded here on purpose:** `fetchPolice` / `fetchWaze` in `js/ghost.js` are the Ghost Mode alerting path, and a rider deliberately backgrounds the app while the foreground location service runs; blanket-pausing them would kill a safety feature. Pause aircraft/predict, radar, traffic, hazards, incidents, NWS and the scanner poll (when nothing is playing); keep police/Waze; pair it with the reconnect UX work (frontend-012/013) so a resumed app refreshes once, not once per timer. **Scheduled for aspect C, milestone C3 (cycle 59)** — was C2 until the cycle-57 improve stage redefined C2 as the seat resume (server-035 / frontend-022). Filed OPEN and deliberately not fixed in cycles 57-58.
+
+### BUG frontend-022 — FIXED (cycle 58 stage 50, 2026-09-03)
+- **Severity:** high
+- **Status:** FIXED (re-verified 2026-09-03) — `js/net.js`: `PARTY_GRACE_MS` 90000 + `resumeToken` / `partyGraceUntil` / `graceTimer`; `hello` carries `resume`, `goLive()` keeps the newest token and clears a graced roster unless `welcome.resumed === true`, `onDisconnected()` → `holdParty()` before `teardownLive()`, which keeps `S.party` only while `Date.now() < partyGraceUntil`; `clearParty()` owns the one timer; `sendLeave()` / `party:left` drop the grace; `A.net.isResuming()` gates `js/party.js` delegations. Executed in `test/partyresume.test.js` R4 (real module, FakeWS); the cross-file pin client ≤ server is R3
+- **File:** `js/net.js:175-185` before the fix (`teardownLive()`: `clearPartyFlags(); S.party = null; A.mapview.setLinksData(null); ST.emit('party')` on EVERY drop) and `:108-120` (the `hello` frame, no resume field)
+- **Title:** `teardownLive()` discards the convoy roster, links and chat on every socket drop and the client has no way to resume, so a tunnel ends the convoy
+- **Repro:** cycle-57 improve stage, 2026-09-03 (`stages/0048-c057-improve.md` §2.2): join a convoy, drop the socket for 3 s (airplane mode). `onDisconnected()` → `teardownLive()` nulls `S.party` and wipes the link lines; the reconnect sends a plain `hello`; no client path ever re-sends `party:join` (`sendPartyJoin` is only reached from the UI, `js/ui.js:657` → `js/party.js joinByCode`) and the server refuses join-by-code for the default `invite` mode anyway. Pinned RED first in `test/partyresume.test.js`: 49 failed / 24 passed against the unfixed tree (`hello` had no `resume`, a drop nulled `S.party`, a superseded socket's `party:left` cleared the roster)
+- **Impact:** the single most rider-felt smoothness defect left: convoy gone, roster gone, chat panel empty, the other riders told you "left", and the only way back is someone re-inviting you — after every tunnel, cell handover or backgrounded app
+- **Fix (applied, cycle 58):** the client half of server-035 (above). The roster stays on screen for at most the client `PARTY_GRACE_MS` (90 s, ≤ the server's — R3 fails `npm test` by name if anyone tidies either side), the HUD link light (`js/radar.js:601`) is the stale-roster affordance (no new UI), the server's `resumed` answer always wins, and a rider who never reconnects sees the roster cleared by the one grace timer. **`js/party.js`** (a deviation from the directive's "net.js only", recorded here): its `isLive()` gate now reads "live or resuming", because with a real roster kept on screen the solo branches of `sendChat()` / `invite()` / `kick()` / `leave()` would have answered a rider's tunnel chat with a *fabricated reply from a real member* (`js/party.js:122-138`) — R4 executes `A.party.sendChat()` during the grace and asserts it is queued behind the next `hello`, never echoed locally. `joinByCode()` still needs a live socket
+
+### BUG frontend-023 — FIXED (cycle 58 stage 50, 2026-09-03)
+- **Severity:** medium
+- **Status:** FIXED (re-verified 2026-09-03) — `js/net.js` `socket.onmessage` now opens with the guard `socket.onclose` already had (`if (ws !== socket) return;`); executed in `test/partyresume.test.js` R4 ("stale socket": `party:left` and a `party` frame on a superseded FakeWS are ignored, the same frames on the current socket are honoured)
+- **File:** `js/net.js:130-137` before the fix (`socket.onmessage` dispatched straight into `handlers[m.t]`) vs `:142` (`socket.onclose`: `if (ws !== socket) return;`)
+- **Title:** `socket.onmessage` has no `ws !== socket` guard, so a late frame on a socket the client has already replaced is dispatched into the shared handler table
+- **Repro:** code-read by the cycle-57 improve stage (`stages/0048-c057-improve.md` §3.2 item 7), executed in R4: open two FakeWS sockets, make the second current, deliver `{t:'party:left'}` on the first → before the fix `S.party` was nulled and "You left the convoy" toasted
+- **Impact:** latent for every late frame on a superseded socket (the `auth:invalid` refresh path closes and replaces the socket in one tick); C2 turns it live: `claimSeat()`'s half-open branch calls `leaveParty(prev, true)`, which sends `party:left` to the OLD socket while unseating it — delivered late, it would clear the roster the new socket just restored
+- **Fix (applied):** one line, the onclose guard copied to onmessage, with the comment explaining why it is load-bearing now
 
 ---
 
@@ -498,6 +520,15 @@ Each bug has:
 - **Repro:** cycle-55 improve stage, 2026-09-03, `global.fetch` scripted (the `test/overpass.test.js` harness) so mirror 0 always times out and mirror 1 always serves — three consecutive queries: `overpass-api.de -> overpass.kumi.systems` ×3; `stats().byMirror = {"overpass-api.de":{"ok":0,"fail":3},"overpass.kumi.systems":{"ok":3,"fail":0}}`. A mirror with a 0 % success rate got first refusal three times out of three. Now pinned: after one timeout the next query asks the other mirror first (RED 18/72 before the fix, GREEN after; the original 66 checks unchanged).
 - **Impact:** `/api/overpass` (`server/server.js:1724`) `await`s `overpass.query()` inside the request, so every uncached enforcement / police / road lookup waited the full 30 s before the healthy mirror was even asked, for as long as the first mirror stayed down — and public Overpass instances go down and rate-limit routinely. `js/ghost.js:336` fetches the layer with no `AbortSignal`, so the client just sat there (filed as frontend-020, aspect C).
 - **Fix (applied):** demote, never skip. `mirrorOrder(now)` returns the mirror indices sorted by cooldown expiry — healthy first, ties in declaration order — and the loop iterates it; `failed()` sets `coolUntil[host] = Date.now() + COOL_MS` (one edit covers `timeout`, `net:*`, `http:*`, `body`, `shape`); a success deletes it. With two mirrors an open/closed breaker would take the layer down whenever both were cooling, so nothing is ever skipped: the worst case is exactly the old worst case. `stats()` gains `cooling` (a fresh array); `_coolReset()` is a documented test seam because the suite's groups share one module instance. `server/police-finder.js:265` has the same in-order loop on a slow sweep cadence, not a rider path — noted, left alone.
+
+### BUG server-035 — FIXED (cycle 58 stage 50, 2026-09-03)
+- **Severity:** high
+- **Status:** FIXED (re-verified 2026-09-03) — `server/server.js`: `PARTY_GRACE_MS` (default 90000, env-overridable, 0 disables) + `RESUME_MAX` 500 + `resumeSeats` / `seatOwner` at module scope beside `parties`; top-level `pruneSeats()` / `rememberSeat()` / `claimSeat()` / `restoreSeat()` after `leaveParty()`; `joinParty(rider, party, quiet)`; `c.resume` = `crypto.randomBytes(16)` in the connection literal, registered in `seatOwner` beside `clients.set`; `ws.on('close')` holds the seat before the (then silent) leave; `hello` claims BEFORE the `welcome` (`resume`, `resumed`) and restores AFTER it. Lifted and executed in `test/partyresume.test.js` R1 (the real close + hello handlers over fake maps), pinned in R2; documented in `server/.env.example`
+- **File:** `server/server.js:3987-3989` before the fix — `ws.on('close', () => { if (c.party) leaveParty(c, false); …` — with `leaveParty()` at `:2283` (splice, "left the convoy", leadership handover, disband when no human remains) and the ping reaper at `:4005-4011`
+- **Title:** A socket close is treated as leaving the convoy: `ws.on('close')` → `leaveParty(c, false)`, so a 3-second signal loss permanently removes a rider from their convoy and disbands a convoy whose last connected member blips
+- **Repro:** cycle-57 improve stage, 2026-09-03 (`stages/0048-c057-improve.md` §2.2-2.3): two riders in a convoy, one loses signal for 3 s. The server reaps dead sockets with a 30 s ping/terminate loop (`if (!c.isAlive) c.ws.terminate(); c.isAlive = false; c.ws.ping();`), so a vanished phone is noticed 30-60 s later; the client's backoff starts at 2 s (`RETRY_MIN`, `js/net.js:12`), so the reconnect almost always arrives while the OLD socket is still live server-side — a resume that only consulted a "seat remembered on close" map would almost never fire. Executed RED first: 49 failed / 24 passed (a new socket carrying the old socket's token → `members=A,B A2.party=null`; the close handler → `Ana left the convoy`, `held=false`)
+- **Impact:** every tunnel, cell handover or backgrounded app ended the convoy for that rider: "*X left the convoy*" to everyone else, roster/chat/rally gone on their own screen, no automatic way back (join-by-code is refused for the default invite-only mode). A leader's blip also handed leadership over; the last connected member's blip disbanded the convoy outright
+- **Fix (applied):** the seat hold. Two branches in `claimSeat()` on purpose — **half-open** (`seatOwner`: the old socket is still open; silently unseat it via `leaveParty(prev, true)`, close it, re-seat the new socket) is the common case; **reaped** (`resumeSeats`, written by the close handler with a "*X lost signal*" line instead of "*left*") covers the 30-60 s reaper window. The token is a 128-bit per-socket capability sent only inside that socket's own `welcome`: single use (spent even by a refused claim), expiring at `PARTY_GRACE_MS`, bound to the `userId` that was signed in when it was minted (both branches), good only for the seat it was minted for; `RESUME_MAX` caps the map and `pruneSeats()` runs on every write. `restoreSeat()` joins quietly and posts "*X reconnected*". Mutation-checked: reverting the close handler → 6 red (R1 reaped + both R2 close pins); default 0 → 16 red with the kill-switch check green. **Recorded follow-ups, not built (assumption A2 of the directive):** a convoy whose LAST connected member blips is still disbanded immediately (`leaveParty` runs before the resume can happen; holding empty parties needs a party-lifetime timer, C4+); a leader who blips comes back as a member (leadership was handed over by `leaveParty(prev, true)` — keeping the seat in place, index and leadership, is a seat-swap in the half-open branch, C4+); **races** — `if (c.raceId) leaveRace(c, false);` in the same close handler has the same shape and the same bug, deliberately not this cycle: a race is 10-20 s long, a resume is worth much less, and `endRace`/`abandonRace` have result/ledger side effects that deserve their own stage
 
 ---
 
@@ -1153,14 +1184,14 @@ this table ever drifts from what's actually here.
 
 | Area | critical | high | medium | low | total |
 |---|---:|---:|---:|---:|---:|
-| Frontend | 0 | 5 | 15 | 1 | 21 | (frontend-001/002/003/008/009 are the highs; frontend-019 + frontend-020 fixed; frontend-021 open — aspect C, milestone C2, cycle 58) |
-| Server | 5 | 10 | 15 | 1 | 31 | (server-003/006/008/011/032 critical — 003/008/032 FIXED, 006 STALE, 011 OPEN-latent; 5 OPEN / 23 FIXED / 3 STALE after the 2026-09-03 re-verification, the cycle-54 B3b fixes of 002 + 020, the cycle-55 fixes of 032 + 033 and the cycle-56 fixes of 017 + 034, roll-up below) |
+| Frontend | 0 | 6 | 16 | 1 | 23 | (frontend-001/002/003/008/009/022 are the highs; frontend-012/013/017/019/020/022/023 fixed — 012/013/017 re-statused in cycle 58 after the cycle-57 improve stage caught them as phantoms; frontend-021 open — aspect C, milestone C3, cycle 59) |
+| Server | 5 | 11 | 15 | 1 | 32 | (server-003/006/008/011/032 critical — 003/008/032 FIXED, 006 STALE, 011 OPEN-latent; 5 OPEN / 24 FIXED / 3 STALE after the 2026-09-03 re-verification, the cycle-54 B3b fixes of 002 + 020, the cycle-55 fixes of 032 + 033, the cycle-56 fixes of 017 + 034 and the cycle-58 seat hold 035, roll-up below) |
 | Android | 3 | 8 | 8 | 1 | 20 | (android-001/002/003 critical) |
 | UI/UX | 1 | 5 | 10 | 6 | 22 | (ui-001/004/006/013/014/015/016/017/018/019/003/003b fixed; ui-020/021 visual-verification-pending, unresolved without a browser) |
 | Runtime | 0 | 2 | 3 | 1 | 6 | (runtime-001 STALE, the other five FIXED — re-verified 2026-09-03) |
 | Add | 0 | 1 | 1 | 2 | 4 | |
 | Perf | 0 | 0 | 1 | 0 | 1 | |
-| **Total** | **9** | **31** | **53** | **12** | **105** |
+| **Total** | **9** | **33** | **54** | **12** | **108** |
 
 ### Open-status roll-up (Server + Runtime only — re-verified 2026-09-03)
 
@@ -1171,8 +1202,8 @@ OPEN entries marked *latent* describe a real risk whose premise production has n
 
 | Area | OPEN | FIXED | STALE | total |
 |---|---:|---:|---:|---:|
-| Server | 5 | 23 | 3 | 31 |
+| Server | 5 | 24 | 3 | 32 |
 | Runtime | 0 | 5 | 1 | 6 |
-| **Total** | **5** | **28** | **4** | **37** |
+| **Total** | **5** | **29** | **4** | **38** |
 
 Open after the pass (updated cycle 56 — `server-017` high FIXED as milestone B5 and `server-034` medium filed and fixed as milestone B4, both with executed tests; cycle 55 fixed `server-032` and `server-033`; cycle 54 fixed `server-002` and `server-020`): `server-009`, `server-011` (latent, **deferred with a trigger**), `server-014` (latent), `server-015`, `server-016`. No open HIGH or CRITICAL remains in the Server/Runtime ledger other than the deferred `server-011`.
