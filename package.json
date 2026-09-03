@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "test": "node test/run.js",
+    "test:frontend": "node test/frontend.test.js",
     "serve": "node server/server.js",
     "copy-web": "node scripts/copy-web.js",
     "android:add": "npm run copy-web && cap add android",
@@ -21,6 +22,9 @@
     "@capacitor/geolocation": "^8.0.0"
   },
   "devDependencies": {
-    "@capacitor/cli": "^8.4.0"
+    "@capacitor/cli": "^8.4.0",
+    "axe-core": "^4.13.0",
+    "html-validate": "^11.12.0",
+    "jsdom": "^30.0.1"
   }
 }

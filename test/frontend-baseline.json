@@ -1,0 +1,10 @@
+{
+  "_comment": "Ratchet down only — lower a number when a real fix reduces that count. Never raise one to make a red run green. Measured 2026-09-03 by test/frontend.test.js (Milestone 1, the harness itself); fixing these is Milestone 3 (accessibility) and later.",
+  "htmlValidateErrors": 57,
+  "axeViolations_shell": 1,
+  "axeViolations_nearby": 1,
+  "axeViolations_convoy": 2,
+  "axeViolations_profile": 5,
+  "axeViolations_auth": 5,
+  "detectorWarnings": 37
+}
