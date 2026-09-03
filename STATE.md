@@ -17,8 +17,8 @@ installed APKs, unlimited cycles). The push stage follows `deploy/PUSH-RUNBOOK.m
 ## Aspect roadmap (v2 — one aspect at a time; an aspect closes only with a shipped release)
 | # | Aspect | Status | Closes when |
 |---|---|---|---|
-| A | Front-end (cycles 0-4, closing in cycle 50) | **current** — code side done in cycle 50 stage 18 (fix + invariant matrix + toast scoping + browser smoke suite + `cy117`); waiting on review + push | `setShellInert` nesting fix + shell-restore invariant test + `#toasts` scoping landed ✔; stamp bumped to `cy117` ✔; review not BROKEN; push stage reports `cy117` served and `/api/ota` current = 1.0.117; livetest green |
-| B | Backend / server (`server/*.js`) | next | BUGS.md server+runtime truth pass (33 entries re-verified against current code, statuses updated, `bugstats` green); every open critical/high server bug fixed **with a regression test**; stamped assets cached `immutable`; shipped via Lane B/A |
+| A | Front-end (cycles 0-4, closed in cycle 50) | **done 2026-09-03** — released by the cycle-50 push stage at 06:56Z (`stages/0021-c050-push.md`). Closing facts, re-measured in cycle 51 at 07:00Z with one request each: (1) `/api/ota` → `"current":{"version":"1.0.117",…}` (was `null` since the mission began); (2) https://odoreeci.tech serves `45 v=cy117` (== local). `livetest` PASS in the push report | `setShellInert` nesting fix + shell-restore invariant test + `#toasts` scoping landed ✔; stamp bumped to `cy117` ✔; review not BROKEN; push stage reports `cy117` served and `/api/ota` current = 1.0.117; livetest green |
+| B | Backend / server (`server/*.js`) | **current** — B1 opened in cycle 51 with a *measured* Overpass truth pass (section "Aspect B — backend truth pass (cycle 51)" below); the 33-entry BUGS.md server re-verification is still ahead | BUGS.md server+runtime truth pass (33 entries re-verified against current code, statuses updated, `bugstats` green); every open critical/high server bug fixed **with a regression test**; stamped assets cached `immutable`; shipped via Lane B/A |
 | C | Smoothness (delivery + client runtime) | after B | request count ≤ 30 on first load; reduced-motion/idle-CPU audit (plan v1 M10); reconnect UX (frontend-012/013); measured with the headless Chromium recipe below; shipped |
 | D | Android native (code + compile-check only) | after C | android-002/003/004/009/011/014 fixed; compiles with a user-local JDK/SDK if that lands in 20 min, else code-reviewed; **shipping needs the human's keystore** |
 | E | Front-end round 2 | after D | plan v1 M7 (ui.js split), M8 (states), M9 (responsive), M11 (onboarding) |
@@ -53,7 +53,27 @@ if any shared key's value has been raised. New keys (e.g. this stage's `axeViola
 `axeViolations_authLogin` replacing `axeViolations_auth`) are exempt on the stage that introduces them.
 
 ## Current milestone
-**Cycle 50 stage 18 (IMPLEMENT, executing the cycle-4-stage-16 IMPROVE directive's Tasks 1-4 plus plan-v2
+**Cycle 51 stage 22 (IMPLEMENT, executing the cycle-50-stage-20 IMPROVE directive's Tasks 1-2) — DONE.
+Aspect A is closed (the mission's first release verified live), aspect B is open, and B1 started with a
+measured Overpass truth pass instead of a re-read of BUGS.md. No application code changed this cycle, on
+purpose: local stamp `cy117` == production stamp `cy117`, and operating-contract rule 7 below keeps it so.**
+
+1. **Task 1 — aspect A closed in this file.** Roadmap row A → done, with both closing facts re-measured at
+   07:00Z (one request each): `/api/ota` → `"current":{"version":"1.0.117","file":"bundle-1.0.117.zip",…}`,
+   served page → `45 v=cy117`, `/api/health` → `{"ok":true,"maintenance":false}`. The push stage also had to
+   fix `release.js` on the way (OTA bundle uploaded to `/var/lib/convoy/ota`, a directory the server never
+   reads — now `/opt/convoy/server/data/ota` — and a `.catch()` chained on ssh2's callback-style `sftp()`),
+   commit `5028570`; deploy tooling, not app code, so no stamp bump.
+2. **Task 2 — B1 measured truth pass.** Four questions answered with commands (4 of the ≤ 5 third-party
+   requests, 0 code changes) — see "Aspect B — backend truth pass (cycle 51)" below. Headline: both mirrors
+   answer `200` in ~1.5 s from the VPS *and* from this box; the 7 logged failures are the intro globe
+   animation's collapsed world-view boxes (5 of 7 at longitude exactly 0), not sim riders (disabled in
+   production) and not the span check (already epsilon-guarded and tested); their *reason* is unknowable
+   because `server/overpass.js:203-211` discards it. That is what cycle 52 fixes first.
+3. **Bookkeeping.** `git diff --stat` → `STATE.md` only; `graphify update .`; `npm test` 24 suites /
+   `frontend.test.js` 78 checks unchanged; `npm run test:frontend` 7 baseline keys unchanged.
+
+Previous milestone, for context — **Cycle 50 stage 18 (IMPLEMENT, executing the cycle-4-stage-16 IMPROVE directive's Tasks 1-4 plus plan-v2
 Task 5) — DONE. The cycle-4 BLOCKER (`ui-003b`, a chained `openOverlay()` leaving the whole shell
 `inert` until reload) is fixed, the class is covered by an invariant matrix, the `#toasts` gap is
 closed, a real-browser smoke suite exists, and the stamp is bumped for the mission's first release.**
@@ -294,6 +314,119 @@ or JS behaviour touched). Four tasks, all complete:
    was added above `#search-results`). `graphify update .` run — 3065 nodes, 5692 edges, 197
    communities.
 
+## Aspect B — backend truth pass (cycle 51)
+
+Anchor: the only Overpass lines production has ever logged are total failures, because
+`server/overpass.js:219` logs nothing on success and `:203-211` discard every per-mirror reason. The
+cycle-50 improve stage asked four questions; each is answered below with the literal command output
+(2026-09-03 06:59–07:03Z; 4 of the ≤ 5 third-party requests used, no loops, no retries; 0 code changes).
+
+### Q1 — Can the VPS reach the two mirrors?  YES — both `200` in ~1.5 s
+```
+$ deploy/live-deploy.sh diag   (remote cmd via B64=; one curl per mirror, --max-time 25, the proxy's own User-Agent)
+https://overpass-api.de/api/interpreter -> http=200 total=1.573110s dns=0.001249s connect=0.313888s ip=65.109.112.52
+  body: { "version": 0.6, "generator": "Overpass API 0.7.62.11 87bfad18", "osm3s": { "timestamp_osm_base": "2026-09-03T06:59:18Z", …
+https://overpass.kumi.systems/api/interpreter -> http=200 total=1.290653s dns=0.667484s connect=0.762545s ip=2a0d:f302:126:78ea::1
+  body: { "version": 0.6, "generator": "Overpass API 0.7.62.11 87bfad18", "osm3s": { "timestamp_osm_base": "2026-07-24T11:04:51Z", …
+--- node/proxy env on VPS ---        (grep for HTTP(S)_PROXY / OVERPASS_* in convoy.env, names only)
+(end env grep)                       → nothing set; node v22.22.3; IPv6 default route present
+```
+kumi is reached over IPv6 from the VPS and its data is six weeks stale (`timestamp_osm_base` 2026-07-24
+vs overpass-api.de's 06:59 today) — a data-quality note for B4, not a failure.
+
+### Q2 — Can this box reach them?  YES — both `200`
+```
+https://overpass-api.de/api/interpreter -> http=200 total=1.355130s dns=0.001411s connect=0.112368s ip=65.109.112.52
+https://overpass.kumi.systems/api/interpreter -> http=200 total=3.868494s dns=0.003032s connect=0.094057s ip=193.219.97.30
+  (this kumi node: timestamp_osm_base 2026-05-06 — four months stale)
+```
+⇒ Neither VPS egress nor the mirror list is broken *now*. Roadmap item B4 ("more mirrors") is not
+indicated by anything measured. Whatever failed at 03:44 and 04:22 was transient or load-related on the
+mirror side — and the current log cannot say which (Q4b).
+
+### Q3 — Are the failing bboxes real riders?  NO — they are the intro globe animation's frames (the rider was real)
+Full-precision journal (the directive quoted rounded values), plus who was online:
+```
+2026-09-03T03:44:12Z [overpass] all mirrors failed for enforcement 12.47951394968021,-2,16.47951394968021,2
+2026-09-03T03:44:17Z [overpass] all mirrors failed for enforcement 16.14639614656451,-63.33097117985977,20.14639614656451,-59.33097117985977
+2026-09-03T03:44:20Z [overpass] all mirrors failed for enforcement 12.81896281827137,-2,16.81896281827137,2
+2026-09-03T03:44:24Z [overpass] all mirrors failed for enforcement -5.626689220224549,-62.77382510444278,-1.6266892202245486,-58.77382510444278
+2026-09-03T03:44:25Z [overpass] all mirrors failed for enforcement -26.4808933627818,-2,-22.4808933627818,2
+2026-09-03T03:44:28Z [overpass] all mirrors failed for enforcement -45.28780932180025,-2,-41.28780932180025,2
+2026-09-03T04:22:48Z [overpass] all mirrors failed for enforcement 13.983772949840699,-2,17.9837729498407,2
+03:42:45 Started convoy.service · 03:42:53 [join]/[leave] DeployCheck · 03:43:42 [join] Ivy (guest) — 1 online
+03:46:45 [join] Ivy — 2 online · 03:47:15 [leave] Ivy — 1 online · 04:19:00 [leave] Ivy — 0 online
+overpass lines since the 06:55:47 restart: 0
+```
+- `graphify path "sim.js" "overpass.js"` → `No directed path found`. `js/sim.js:158-166`: solo simulation
+  is disabled in production (`enableSolo()` spawns nothing) and `js/ghost.js` never reads sim positions.
+  The sim-rider hypothesis is refuted.
+- The `enforcement` kind is sent only by `js/ghost.js` `fetchPolice()` (`grep -rn "api/overpass" js/` →
+  ghost.js:34, routing.js:14). Its box is `viewBBox()` — the **map viewport**, clamped to `MAX_BBOX_DEG`
+  (4°) around the view centre (ghost.js:98-110). When the viewport wraps the world, the clamped
+  longitude bounds are −180..180, the centre is exactly 0, and the box becomes `lng −2..2`. Five of the
+  seven failures have exactly that shape.
+- The app boots in intro mode (`js/mapview.js:87-93`: `zoom: 1.1`, centre `[playerStart.lng, 22]`),
+  drifts 8° east every 5 s (`startIntroSpin`, :1260-1274), and `landIntro` (:1278-1286) flies down to
+  the first GPS fix. Every `moveend` emits `mapmoved` → `fetchPolice()` (ghost.js:575-578);
+  `bboxChanged` passes whenever the collapsed centre moved > 0.6°, which the fly-down does on nearly
+  every frame. The two non-zero-longitude boxes (18.1 N then 3.6 S, both at lng ≈ −61, five seconds
+  apart) are mid-flight frames of that descent.
+- Timing fits: Ivy joined at 03:43:42; the first failure logged at 03:44:12 and five more within 16 s,
+  all inside the ~35 s intro. The 04:22:48 line is a fresh page open with 0 riders on the WebSocket
+  (`/api/overpass` is anonymous HTTP) — a lng-0 world-view box again.
+
+**User-facing severity: lower than the log volume suggests, but not zero.** Nobody was looking at the
+Sahel or the mid-Atlantic, so the seven queries cost riders nothing directly; they cost upstream quota
+(5–7 wasted 4°×4° queries per app open while the intro plays). The indirect cost is real: each failure
+calls `backoffFail('police', 90 s)` (ghost.js:366), doubling per failure up to `BACKOFF_MAX_MS` =
+15 min (ghost.js:280). Six failures in a row ⇒ the police/camera layer was silenced for up to
+**15 minutes of Ivy's ride after landing at street level** — inferred from code + log timing, not
+observed on the device.
+
+### Q4 — Does `MAX_SPAN_DEG` reject the 4.0° boxes?  NO — `> MAX_SPAN_DEG + EPS`, EPS = 1e-6, already tested
+```
+$ node -e "…require('./server/overpass.js').parseBbox on the three logged boxes…"
+[12.47,-2,16.47,2] latSpan= 3.9999999999999982 lngSpan= 4 parseBbox=> ACCEPTED
+[16.14,-63.33,20.14,-59.33] latSpan= 4 lngSpan= 4 parseBbox=> ACCEPTED
+[-5.62,-62.77,-1.62,-58.77] latSpan= 4 lngSpan= 4 parseBbox=> ACCEPTED
+MAX_SPAN_DEG= 4
+4.000000000000001 accepted? true
+4.00001 accepted? false
+```
+`server/overpass.js:160-167` is the comparison (`(b.maxLat - b.minLat) > MAX_SPAN_DEG + EPS`), and
+`test/overpass.test.js:85-101` ("The span limit is not tighter than what the callers clamp to") already
+pins it. Stronger than the probe: the `all mirrors failed` line is printed at `:219`, *after*
+`parseBbox` returned non-null at `:178-179` (a rejected box returns `bad-bbox` → HTTP 400, unlogged), so
+every logged box passed the span check by construction. The one-character-bug hypothesis is refuted;
+nothing to fix here in cycle 52.
+
+### Q4b — So why did all seven fail?  Unknown — and that is the finding
+`server/overpass.js:203-211`: a fetch exception → `continue` (reason dropped); `!res.ok` → `continue`
+(status dropped — 429 slot exhaustion, 504 query timeout, 400 and 5xx all look the same); JSON/shape
+failure → `continue` (dropped). The one log line carries kind and box but not which mirror, which
+status, or how long each attempt took. The 30 s between Ivy's join and the first failure equals
+`TIMEOUT_MS` (30 s), which *suggests* a mirror hung to timeout — a coincidence-grade inference, exactly
+the kind the log should make unnecessary.
+
+### What cycle 52 fixes first, and why
+**Server-only (Lane B): make `server/overpass.js` say why a mirror failed** — one `console.warn` per
+failed attempt (mirror index, HTTP status or error name, elapsed ms) and a per-kind ok/fail counter
+surfaced through `stats()`, with a mocked-`fetch` test in `test/overpass.test.js` (the harness already
+stubs `global.fetch` at `:113`). Because: production has logged 7 failures and 0 successes since the
+mission began and cannot tell "kumi was down" from "we were rate-limited" from "a 4° enforcement query
+takes > 30 s"; every other Overpass decision (B4 mirrors, timeouts, the client backoff) is a guess until
+that line exists. ≤ 5 real requests, mocked tests, no loops.
+
+**Second, an improve-stage decision (client, Lane A, needs a stamp bump):** skip static-POI fetches while
+the viewport is wider than the clamp (`viewBBox()` collapsing the world to a 4° box at lng 0 is never a
+view a rider is looking at) and stop the intro fly-down from queueing a burst — removes 5–7 wasted
+upstream queries per app open **and** the up-to-15-minute backoff it inflicts on the rider's real area.
+
+Also carried into aspect B from the cycle-50 review (LOW, real, un-fixed): `overlayDismissable`
+staleness (`js/ui.js:3089,3437`) and `#toasts` eviction of an inerted invite toast — both client-side,
+both wait for a Lane A cycle.
+
 ## Headless Chromium — working recipe (M2 UN-DROPPED cycle 3 stage 14; do not re-run the download,
 reuse what's already on this box)
 
@@ -426,6 +559,19 @@ canvas or behind `backdrop-filter`.
   fixed (was 11). `graphify update .`: 3089 nodes, 5742 edges, 198 communities.
 
 - 2026-09-03 cycle 50 stage 18 (IMPLEMENT): ui-003b fixed (`shellTrapped`), `#toasts` scoped, `testShellRestoreInvariant` (+22, proved-to-fail-first 18→0; row k = pending-close-timer gate blanking, one-line `cancelOverlayClose()` in `beginModalGate`), `test/browser.test.js` (24th suite, real Chromium hit-test), stamps `cy116→cy117`, OTA bundle 1.0.117 packed locally. Nothing deployed — push stage next.
+- 2026-09-03 cycle 50 stages 19-21 (REVIEW → IMPROVE → PUSH): review SHIP-QUALITY (reproduced the
+  18-stray-inert failure from a scratch clone, 0 BLOCKER/HIGH); improve pre-ran every runbook gate and
+  wrote the cycle-51 work order; **PUSH at 06:56Z — the first release of this mission.** GitHub
+  `a48c025..5028570`; Lane A `deploy/live-deploy.sh release -- --ota`. Attempt 1 deployed the site but the
+  OTA publish crashed (`release.js` uploaded to `/var/lib/convoy/ota`, which the server never reads, and
+  chained `.catch()` on ssh2's callback API) — fixed in `5028570`, attempt 2 `✓ Released in 10s`. **What
+  reached riders:** web `cy117` / OTA `1.0.117` = ui-003 focus trap, ui-003b lockout fix, ui-013 (133
+  phantom tab stops), ui-014 orphan markup, ui-015..019 (59 unnamed controls), the 12px typography floor,
+  the 5-site progress-bar transform fix. Verified: `/api/health` ok, `/api/ota` current 1.0.117, served
+  `cy117`, livetest PASS. Stray `/var/lib/convoy/ota` from attempt 1 removed on the VPS (never read).
+- 2026-09-03 cycle 51 stage 22 (IMPLEMENT): aspect A closed, aspect B opened; B1 Overpass truth pass
+  measured (4 third-party requests, 0 code changes) — see "Aspect B — backend truth pass (cycle 51)".
+  Standing rule added (operating contract rule 7): a shipping cycle ends with local stamp == production.
 
 ## How to run (solo mode — no Supabase needed)
 ```bash
@@ -433,7 +579,8 @@ cd /opt/data/convoy
 python3 -m http.server 5173     # open http://localhost:5173 (riders simulated on-device)
 ```
 `node server/server.js` exits with "Supabase Auth is not configured" without `server/.env`; do not fabricate keys.
-Production is https://odoreeci.tech (Caddy → Node). Never deploy from this box (human runs `node release.js --ota`).
+Production is https://odoreeci.tech (Caddy → Node). Only the Forge **push** stage deploys, via `deploy/live-deploy.sh`
+following `deploy/PUSH-RUNBOOK.md`; implement/review/improve never run `update`/`release` (read-only `diag` is fine).
 
 ## How to test
 ```bash
@@ -447,7 +594,7 @@ Test baseline: see "Test baseline" below.
 ## Skills to use (installed on this box)
 - `/opt/data/skills/creative/impeccable/` — design director; `reference/audit.md`, `polish.md`, `typeset.md`, `craft-floor.md`; detector `scripts/detect.mjs`; run `scripts/context.mjs --target <file>` once per session.
 - `/opt/data/skills/web-quality/accessibility/SKILL.md`, `/opt/data/skills/web-quality/performance/SKILL.md` (Addy Osmani, MIT).
-- `/opt/data/skills/playwright/` — browser CLI (blocked, no Chromium shared libs, no sudo; M2 formally dropped).
+- `/opt/data/skills/playwright/` — browser CLI; not needed here — a headless Chromium already runs on this box without it (see "Headless Chromium — working recipe"), and `playwright` must never enter `package.json` (plan v2 guardrail 5).
 - `/opt/data/skills/creative/{anti-ui-slop,ui-design,ui-radar}/` — one playbook per request; free UIZZE search.
 - `/opt/data/skills/software-development/headless-cli-setup/` — no-sudo/no-TTY installs.
 
@@ -459,14 +606,12 @@ Test baseline: see "Test baseline" below.
 - `test/frontend-baseline.json` is now ratchet-enforced by code (`testBaselineRatchet()`), not just convention.
 
 ## Human-only actions (surface every review)
-1. **`node release.js --ota` to ship web changes (needs VPS_KEY/VPS_HOST) — now the single largest
-   gap between work done and value delivered.** Production still serves the line-15 orphan-markup
-   defect (BUGS.md ui-014), the 59 previously-unnamed controls (ui-015..019), the entire typography
-   floor (76 declarations), the 5-site progress-bar performance fix, and — as of this stage — the
-   keyboard-accessibility focus trap (ui-003), the 133-phantom-tab-stop fix (ui-013), and — as of cycle 50
-   stage 18 — the `ui-003b` lockout fix that makes the ui-003 trap safe to ship. **18 stages, nothing
-   shipped; the cycle-50 push stage (runbook Lane A, `deploy/live-deploy.sh release -- --ota`) is the
-   first that can.**
+1. ~~`node release.js --ota` to ship web changes — 18 stages, nothing shipped.~~ **DONE 2026-09-03 06:56Z by the
+   cycle-50 push stage** (`stages/0021-c050-push.md`): `deploy/live-deploy.sh release -- --ota` published
+   `cy117` / OTA `1.0.117`. ui-003, ui-003b, ui-013, ui-014, ui-015..019, the typography floor and the
+   progress-bar fix are live at https://odoreeci.tech and offered to installed APKs via `/api/ota`. Shipping
+   no longer needs a human — the push stage runs every cycle. What still does: v2 items 1-2 (keystore,
+   `convoy.env`) and the 60-second real-browser look (v2 item 4), now that there is a release to look at.
 2. ~~Install Chromium's shared libraries (needs root).~~ **FALSIFIED, twice over, this stage.**
    Neither "needs root" (disproven cycle-3-stage-13) nor "20 missing shared libraries" (disproven
    this stage — the real count was **zero**) was true. A headless Chromium already runs on this box
@@ -511,6 +656,10 @@ checks (+22 `testShellRestoreInvariant`). `bugstats.test.js` 11/11 (98 bugs). `n
 measured counts **unchanged** on all 7 baseline keys (`htmlValidateErrors` 13, `axeViolations_*` 0 ×6,
 `detectorWarnings` 17) — expected: an `inert` bug is invisible to every static gate. Keep suite count
 (24), every per-suite check count, and the 7 baseline keys from going down.
+`npm test` on 2026-09-03 ~07:00Z (implementer stage 22, cycle 51, no app code changed): **All 24 suites passed**,
+`frontend.test.js` 78, `browser.test.js` 5/5, `bugstats.test.js` 11/11 — unchanged, as the directive required.
+`npm run test:frontend` 7 baseline keys unchanged (`htmlValidateErrors` 13, `axeViolations_*` 0 ×6,
+`detectorWarnings` 17). Nothing may go down from here.
 
 ## Operating contract (cycle 50+, plan v2) — every role reads this; it is the tail of this file on purpose
 1. **One aspect at a time.** Implement works only on the current aspect's next milestone from plan v2
@@ -521,7 +670,8 @@ measured counts **unchanged** on all 7 baseline keys (`htmlValidateErrors` 13, `
    read the current stamp (`grep -oE '\?v=cy[0-9]+' index.html | sort | uniq -c`, one value, 45×), then e.g.
    `sed -i 's/?v=cy117/?v=cy118/g' index.html && grep -oc '?v=cy118' index.html` (must print 45),
    then `node scripts/pack-ota.js --offline 2>&1 | tail -6` (must print the matching `version 1.0.NNN`).
-   Current stamp after cycle 50 stage 18: `cy117`.
+   Current stamp after cycle 50 stage 18: `cy117` — **production has served `cy117` since 2026-09-03 06:56Z**
+   (cycle-50 push); local == production at the end of cycle 51 (rule 7).
    Server-only stages do not bump. Never leave a mixed page. The bumped stamp is what the push stage
    uses to decide Lane A (web + OTA) vs Lane B (site only).
 3. **Push gates** (`deploy/PUSH-RUNBOOK.md`): review verdict BROKEN or any BLOCKER → nothing moves;
@@ -530,12 +680,18 @@ measured counts **unchanged** on all 7 baseline keys (`htmlValidateErrors` 13, `
 4. **Only the push stage deploys.** Implement/review/improve never run `update`/`release`; review may
    run `deploy/live-deploy.sh diag` once (read-only). `www/` and `ota-out/` are generated, gitignored.
 5. **Every stage:** `graphify query` before editing, `graphify update .` after; `npm test` and
-   `npm run test:frontend` green before ending; suite count (23), per-suite check counts and the 7
+   `npm run test:frontend` green before ending; suite count (24), per-suite check counts and the 7
    `test/frontend-baseline.json` keys never go the wrong way; a consistent tree at the end.
 6. **Never:** build or upload an APK (no JDK/SDK/keystore here or on the VPS — verified 2026-09-03);
    `--force` an OTA; edit `/var/lib/convoy/*` by hand; touch CSP allowlists, auth or the two CDN pins
    without the milestone saying so and `test/serverpolicy.test.js` passing; add a bundler/framework;
    rename the product; loop health checks against production (shared IP with live riders).
+7. **Stamp parity (standing rule, added cycle 51).** Every cycle ends with the push stage, and the cycle that
+   ships must end with local stamp == production stamp (one request:
+   `curl -s https://odoreeci.tech/ | grep -oE 'v=cy[0-9]+' | sort | uniq -c` vs
+   `grep -oE '\?v=cy[0-9]+' index.html | sort | uniq -c`). If a push is held back or fails, the next implement
+   stage does **not** bump again — the pending bump ships first (`LOCAL > PROD` stays exactly one), then new
+   web edits. No stage other than implement ever edits `index.html`/`css/`/`js/`/`legal/`.
 
 ## Human-only actions (v2 — surface in every review and every push report)
 1. **Android signing keystore** (`android/key.properties` + `convoy-release.keystore`) or running
@@ -544,5 +700,14 @@ measured counts **unchanged** on all 7 baseline keys (`htmlValidateErrors` 13, `
    characters, and `SUPABASE_DB_CA` is unset (Postgres TLS verification disabled). Agents must not
    edit that file; the human should set both.
 3. Product name (Slipstream in UI vs Convoy in repo) — still not an agent's call.
-4. A 60-second look at the live app in a real browser after the first cycle-50 release (ui-021).
+4. A 60-second look at the live app in a real browser **now that the cycle-50 release is live (06:56Z)**: the
+   routing/drag progress bars at phone width (ui-021), and open a race lobby, let the countdown tick, tap the
+   dock (the ui-003b scenario).
 5. Supabase keys in `server/.env` only if live-mode local testing is ever wanted.
+6. **`release.js` OTA path** (raised by the cycle-50 push stage): `OTA_DIR_REMOTE` now defaults to
+   `/opt/convoy/server/data/ota` because that is what the running server reads (`DATA_DIR` is unset in
+   `convoy.env`). If the long-term intent was `/var/lib/convoy` as `DATA_DIR`, the right fix is
+   `DATA_DIR=/var/lib/convoy` in `convoy.env` plus reverting `OTA_DIR_REMOTE` — an infra-layout call.
+7. **Forge push-stage configuration** (raised by the cycle-50 improve stage): `claude-sonnet-5` at
+   `reasoning: low`, default 1200 s budget, one-line role prompt that says "apk"; consider pointing
+   `prompts/push.md` at `deploy/PUSH-RUNBOOK.md`. Lives under `/opt/data/forge/`, outside the workspace.
