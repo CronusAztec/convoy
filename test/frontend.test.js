@@ -19,6 +19,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const zlib = require('zlib');
 const { JSDOM } = require('jsdom');
 const axeSource = fs.readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
 const { HtmlValidate } = require('html-validate');
@@ -576,6 +577,50 @@ function testStamps() {
   H.ok('every ?v= stamp is identical', unique.size === 1, 'found: ' + Array.from(unique).join(', '));
 }
 
+/* ---------------- 4a. boot cost — pinned, ratchet-down (aspect C, cycle 57) ----------------
+   Deterministic, no browser: what index.html makes a first-time visitor
+   download before the app can run. Measured in a real headless Chromium by
+   the cycle-56 improve stage (2026-09-03): 46 same-origin asset requests,
+   ~348 KB gzip, 705 ms to DOMContentLoaded over localhost, 2 long tasks.
+   Pinned here so it cannot creep; from the cycle after these keys landed they
+   can only go DOWN. Reducing them is plan v1 M7 / aspect E1 (the ui.js split)
+   — never a bundler (plan guardrail). */
+function testBootCost() {
+  H.group('index.html — first-load cost is pinned (requests, gzip bytes, external origins), ratchet-down only');
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  const tags = Array.from(html.matchAll(/<(script|link)\b[^>]*?(?:src|href)="([^"]+)"[^>]*>/g));
+  const sameOrigin = [];
+  const hosts = new Set();
+  for (const m of tags) {
+    const url = m[2];
+    if (/^https?:\/\//.test(url)) { hosts.add(new URL(url).host); continue; } // any rel: stylesheet, preconnect, dns-prefetch, preload
+    if (/^data:/.test(url)) continue;                                            // the inline SVG favicon is not a request
+    if (m[1] === 'link' && !/rel="stylesheet"/.test(m[0])) continue;            // a same-origin icon/manifest link would load lazily
+    sameOrigin.push(url.replace(/\?v=cy\d+$/, ''));
+  }
+  const missing = sameOrigin.filter((p) => !fs.existsSync(path.join(ROOT, p)));
+  H.ok('every same-origin <script src> / stylesheet <link href> in index.html exists on disk (' + sameOrigin.length + ' assets)',
+    missing.length === 0, 'missing: ' + missing.join(', '));
+  const scriptTags = Array.from(html.matchAll(/<script\b[^>]*src="js\/[^"]+"[^>]*>/g));
+  H.ok('every same-origin script is `defer` (' + scriptTags.length + ' tags) — nothing render-blocking',
+    scriptTags.length > 0 && scriptTags.every((m) => /\bdefer\b/.test(m[0])));
+  let raw = 0, gz = 0, css = 0, js = 0;
+  for (const p of sameOrigin) {
+    const b = fs.readFileSync(path.join(ROOT, p));
+    raw += b.length; gz += zlib.gzipSync(b, { level: 9 }).length;
+    if (/\.css$/.test(p)) css++; else if (/\.js$/.test(p)) js++;
+  }
+  // index.html with its ?v= stamps normalised: the stamp changes every web
+  // cycle and would otherwise move this number by a few bytes per bump.
+  const indexGz = zlib.gzipSync(Buffer.from(html.replace(/\?v=cy\d+/g, '?v=cy000')), { level: 9 }).length;
+  atOrBelowBaseline('boot asset requests — index.html + every same-origin script/stylesheet it references (external origins and map tiles excluded)',
+    'bootAssetRequests', 1 + sameOrigin.length, '1 html + ' + css + ' css + ' + js + ' js');
+  atOrBelowBaseline('boot asset gzip bytes — zlib level 9 over those assets + index.html with its ?v= stamps normalised',
+    'bootAssetGzipBytes', gz + indexGz, 'assets raw ' + raw + ' / gzip ' + gz + ', index.html gzip ' + indexGz + ' → ' + Math.round((gz + indexGz) / 1024) + ' KB');
+  atOrBelowBaseline('boot external origins — distinct hosts across every <script src> and <link href> in index.html, preconnect/dns-prefetch hints included',
+    'bootExternalOrigins', hosts.size, Array.from(hosts).sort().join(', '));
+}
+
 /* ---------------- 4b. typography floor (source text, not computed style) ---------------- */
 // Functional text below 12px fails legibility in a windscreen-mounted HUD.
 // Any exception needs a one-line justification here, not a silent lowering.
@@ -632,6 +677,7 @@ function testDetector() {
   await testShellRestoreInvariant();
   testThemes();
   testStamps();
+  testBootCost();
   testFontSizeFloor();
   testDetector();
   console.log('\nMeasured counts (compare against test/frontend-baseline.json):');

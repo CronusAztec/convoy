@@ -43,7 +43,7 @@
     var url = 'https://api.open-meteo.com/v1/forecast?latitude=' + r.dest[1] + '&longitude=' + r.dest[0] +
       '&hourly=temperature_2m,precipitation_probability,weather_code' +
       (f ? '&temperature_unit=fahrenheit' : '') + '&forecast_days=2&timezone=auto';
-    fetch(url).then(function (res) { return res.json(); }).then(function (j) {
+    U.fetchT(url).then(function (res) { return res.json(); }).then(function (j) {
       var h = j && j.hourly;
       if (!h || !h.time || !h.time.length) throw new Error('no data');
       // pick the forecast hour closest to the arrival time

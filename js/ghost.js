@@ -154,13 +154,13 @@
   function ownerOf(a) { return OWNER_NAMES[a && a.owner] ? a.owner : 'unknown'; }
 
   function fetchAircraft(bb) {
-    return fetch(AIRCRAFT_PROXY, {
+    return U.fetchT(AIRCRAFT_PROXY, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         bbox: { minLat: bb.minLat, minLng: bb.minLng, maxLat: bb.maxLat, maxLng: bb.maxLng }
       })
-    }).then(function (r) {
+    }, U.FETCH_TIMEOUT.aircraft).then(function (r) {
       if (!r.ok) throw new Error('aircraft ' + r.status);
       return r.json();
     }).then(function (j) {
@@ -333,14 +333,14 @@
     // tagged man_made=surveillance in OSM). One query, one fetch — they are all
     // static enforcement POIs on the same cadence. The query itself lives in
     // server/overpass.js so it can be cached and shared between riders.
-    fetch(OVERPASS_PROXY, {
+    U.fetchT(OVERPASS_PROXY, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         kind: 'enforcement',
         bbox: { minLat: bb.minLat, minLng: bb.minLng, maxLat: bb.maxLat, maxLng: bb.maxLng }
       })
-    }).then(function (r) {
+    }, U.FETCH_TIMEOUT.overpass).then(function (r) {
       if (!r.ok) throw new Error('overpass ' + r.status);
       return r.json();
     }).then(function (j) {
@@ -382,7 +382,10 @@
       // Overpass is flaky (frequent 504s). lastPoliceBbox was set BEFORE the fetch,
       // which would gate out a retry for this exact view — clear it so a later
       // tick / map move tries this area again instead of showing a stale city.
-      // The backoff keeps that retry polite during a real outage.
+      // The backoff keeps that retry polite during a real outage. A stalled
+      // socket lands here too: fetchT's deadline (FETCH_TIMEOUT.overpass) rejects
+      // it, so a hang can no longer leave this latch set for the whole ride
+      // (frontend-020; test/fetchtimeout.test.js runs this path).
       lastPoliceBbox = null;
       backoffFail('police', POLICE_MS);
     });
@@ -410,7 +413,7 @@
     if (lastWazeBbox && !wazeBboxChanged(bb) && Date.now() - lastWazeAt < WAZE_MS - 5000) return;
     lastWazeBbox = bb;
     lastWazeAt = Date.now();
-    fetch((A.config ? A.config.base : '') + '/api/waze', {
+    U.fetchT((A.config ? A.config.base : '') + '/api/waze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ bottomLeft: [bb.minLng, bb.minLat], topRight: [bb.maxLng, bb.maxLat] })
@@ -499,7 +502,7 @@
     // Pass the viewer's LOCAL hour (or a previewed hour) — police patterns are
     // local ("morning rush" = local morning), not UTC. The server folds ±1h.
     var hour = hotHour();
-    fetch((A.config ? A.config.base : '') + '/api/hotspots', {
+    U.fetchT((A.config ? A.config.base : '') + '/api/hotspots', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ bottomLeft: [bb.minLng, bb.minLat], topRight: [bb.maxLng, bb.maxLat], hour: hour })

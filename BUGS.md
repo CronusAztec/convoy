@@ -24,7 +24,7 @@ Each bug has:
 
 **Severity legend:** `critical` = security hole / data loss / hard crash · `high` = broken feature / resource leak · `medium` = degraded UX / latent bug · `low` = polish / a11y.
 
-**Jump to a section:** [Frontend (19)](#frontend) · [Server (30)](#server) · [Android (20)](#android) · [UI/UX (22)](#uiux) · [Runtime (6)](#runtime)
+**Jump to a section:** [Frontend (21)](#frontend) · [Server (30)](#server) · [Android (20)](#android) · [UI/UX (22)](#uiux) · [Runtime (6)](#runtime)
 
 ### Top priorities (fix first — Server/Runtime rows re-verified 2026-09-03, see each entry's `- **Status:**` line; Android rows not yet re-verified)
 
@@ -43,7 +43,7 @@ Each bug has:
 ---
 
 ## Frontend
-*Client-side JS (`js/*.js`) — 20 bugs*
+*Client-side JS (`js/*.js`) — 21 bugs*
 
 ### BUG frontend-001
 - **Severity:** high
@@ -197,13 +197,21 @@ Each bug has:
 - **Impact:** 5–7 wasted Overpass queries per app open against a shared community resource (and our IP's budget), and `backoffFail('police', 90 s)` per failure, doubling to the 15-minute cap — the real police/camera layer can stay silent for the first quarter-hour of a ride. (Inferred from code + log timing, not a device trace.)
 - **Fix (applied):** the clamp is a pure `clampBBox(rawBounds, lim)` (exported on `A.ghost` for tests) that returns `null` — "skip this tick", which all four callers already handle — for a view wider than `WIDE_VIEW_FACTOR × lim` (4 × 4° = 16° for aircraft/police/Waze, 320° for hotspots) or for degenerate bounds. A regional 12° view still clamps to 4° and is queried exactly as before. `test/ghostbbox.test.js` (18 checks) pins the world-wrapped view → `null`, the `-2 … 2` signature it kills, and the no-regression band.
 
-### BUG frontend-020
+### BUG frontend-020 — FIXED (cycle 57 stage 46, 2026-09-03)
 - **Severity:** medium
 - **File:** `js/ghost.js:336` (the enforcement-layer `fetch(OVERPASS_PROXY, …)`) and `:386` (the `lastPoliceBbox = null` + `backoffFail('police', …)` recovery, which only runs on rejection); also `js/routing.js:835` (the `road` lookup for stops/signals — same call, same missing `signal`); compare `js/routing.js:243-245` (the `police` lookup, which does carry an `AbortController` + `signal`)
 - **Title:** The enforcement-layer fetch (and routing.js's `road` lookup) has no `AbortSignal.timeout()` — a slow or hung proxy leaves the promise pending indefinitely, and the recovery path only runs on rejection
 - **Repro:** code-read, 2026-09-03 (cycle-55 improve stage): `js/ghost.js:336` passes no `signal`; `js/routing.js:245` does (`signal: ctrl.signal`). While the proxy's upstream call was paying a dead first mirror's full 30 s timeout (server-034, fixed server-side in cycle 56) the layer's request sat pending with nothing to cancel it; a proxy that never answers at all (a stalled TCP session) leaves it pending for good.
 - **Impact:** the police / camera layer can silently stop refreshing for the rest of a ride: `lastPoliceBbox` is set BEFORE the fetch, so no retry is scheduled for that view until the promise settles, and the `.catch` that clears it never fires for a promise that never settles.
-- **Fix:** `AbortSignal.timeout(…)` (or an `AbortController`, as routing.js does) on the fetch, with the timeout counted as a failure so `backoffFail('police', …)` still runs. **Scheduled for aspect C (cycle 57, milestone C1)** — a `js/` edit forces a 45-stamp bump and flips the push stage to Lane A + OTA, so it ships with the rest of the smoothness work rather than alone. Not fixed in cycle 56 on purpose.
+- **Fix (applied, cycle 57 — as a class, not two lines):** the cycle-56 improve stage's AST scan found the same defect at **22 of 23** `fetch` call sites in `js/` (only `js/routing.js:261` carried a signal) and five layers with the same set-before / clear-in-catch latch (police, Waze, hotspots, incidents, NWS). New `A.util.fetchT(url, opts, ms)` in `js/util.js` gives every client fetch a deadline — `AbortSignal.timeout`, an `AbortController` + `setTimeout` fallback for older WebViews, a caller-supplied signal honoured (combined through `AbortSignal.any` where present) — and a load-bearing `A.util.FETCH_TIMEOUT` table: `overpass` **75 s** (the proxy tries 2 mirrors × 30 s before it answers, so a shorter client deadline would abort working requests), `aircraft` 20 s, everything else 15 s. All 20 bare sites route through it; `js/telemetry.js:327` keeps an inline `signal:` because it loads before `js/util.js`. New suite **`test/fetchtimeout.test.js`** (39 checks): the real `fetchPolice()` executed with a stalling transport (1 fetch for the session before; `1,2,2,3,3` fetches over five 90 s ticks after — the doubling backoff owns ticks 3 and 5), an acorn class gate that fails `npm test` on the 23rd bare `fetch()` by name (two justified allowlist entries, anti-rot checked), and the cross-file floor `FETCH_TIMEOUT.overpass >= MIRRORS.length × server TIMEOUT_MS` read from `server/overpass.js` each run. RED first: 16 failed / 17 passed against the unfixed tree (`bare fetch sites: 22`, ticks `1,1,1,1,1`).
+
+### BUG frontend-021
+- **Severity:** medium
+- **File:** `js/ghost.js` (5 intervals: aircraft 8 s, Waze 60 s, police 90 s, hotspots 5 min, predict 200 ms), `js/overlays.js` (5: traffic 90 s, hazards 5 min, incidents 2 min, NWS 5 min, radar 5 min), `js/scanners.js` (OpenMHz calls, 6 s), `js/voice.js` (2), `js/radar.js`, `js/clock.js`, `js/state.js`, `js/ui.js`, `js/race.js` (1 each)
+- **Title:** Nine timer-owning modules never check `document.hidden` / `visibilitychange`, so a backgrounded app keeps polling the network at 6 s / 8 s cadence
+- **Repro:** measured by the cycle-56 improve stage (2026-09-03, `stages/0044-c056-improve.md` §2.5): 22 `setInterval` timers across 12 files; only `js/space.js`, `js/sim.js`, `js/telemetry.js`, `js/net.js` and `js/wake.js` gate on visibility. The nine that do not (hidden-refs = 0): `js/ghost.js` intervals=5 · `js/overlays.js` intervals=5 · `js/scanners.js` intervals=1 · `js/voice.js` 2 · `js/radar.js` 1 · `js/clock.js` 1 · `js/state.js` 1 · `js/ui.js` 1 · `js/race.js` 1. Background the app (or `document.hidden = true` in a harness) and count fetches: OpenMHz every 6 s and `/api/aircraft` every 8 s keep going.
+- **Impact:** battery and mobile data spent on polls nobody can see while the app is in the background; the visual-only layers (aircraft dots, radar, traffic, hazards, incidents, NWS, scanner call lists) repaint for nobody.
+- **Fix:** gate the visual-only pollers on `document.hidden` and resume on `visibilitychange` — **with a product carve-out recorded here on purpose:** `fetchPolice` / `fetchWaze` in `js/ghost.js` are the Ghost Mode alerting path, and a rider deliberately backgrounds the app while the foreground location service runs; blanket-pausing them would kill a safety feature. Pause aircraft/predict, radar, traffic, hazards, incidents, NWS and the scanner poll (when nothing is playing); keep police/Waze; pair it with the reconnect UX work (frontend-012/013) so a resumed app refreshes once, not once per timer. **Scheduled for aspect C, milestone C2 (cycle 58).** Filed OPEN and deliberately not fixed in cycle 57 (C1 was the fetch-deadline class fix).
 
 ---
 
@@ -1145,14 +1153,14 @@ this table ever drifts from what's actually here.
 
 | Area | critical | high | medium | low | total |
 |---|---:|---:|---:|---:|---:|
-| Frontend | 0 | 5 | 14 | 1 | 20 | (frontend-001/002/003/008/009 are the highs; frontend-019 fixed; frontend-020 open — aspect C, cycle 57) |
+| Frontend | 0 | 5 | 15 | 1 | 21 | (frontend-001/002/003/008/009 are the highs; frontend-019 + frontend-020 fixed; frontend-021 open — aspect C, milestone C2, cycle 58) |
 | Server | 5 | 10 | 15 | 1 | 31 | (server-003/006/008/011/032 critical — 003/008/032 FIXED, 006 STALE, 011 OPEN-latent; 5 OPEN / 23 FIXED / 3 STALE after the 2026-09-03 re-verification, the cycle-54 B3b fixes of 002 + 020, the cycle-55 fixes of 032 + 033 and the cycle-56 fixes of 017 + 034, roll-up below) |
 | Android | 3 | 8 | 8 | 1 | 20 | (android-001/002/003 critical) |
 | UI/UX | 1 | 5 | 10 | 6 | 22 | (ui-001/004/006/013/014/015/016/017/018/019/003/003b fixed; ui-020/021 visual-verification-pending, unresolved without a browser) |
 | Runtime | 0 | 2 | 3 | 1 | 6 | (runtime-001 STALE, the other five FIXED — re-verified 2026-09-03) |
 | Add | 0 | 1 | 1 | 2 | 4 | |
 | Perf | 0 | 0 | 1 | 0 | 1 | |
-| **Total** | **9** | **31** | **52** | **12** | **104** |
+| **Total** | **9** | **31** | **53** | **12** | **105** |
 
 ### Open-status roll-up (Server + Runtime only — re-verified 2026-09-03)
 

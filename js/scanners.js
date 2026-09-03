@@ -23,7 +23,7 @@
   function reverseGeocode(pos) {
     var url = NOMINATIM + '?format=jsonv2&zoom=8&addressdetails=1&lat=' +
       pos[1].toFixed(4) + '&lon=' + pos[0].toFixed(4);
-    return fetch(url).then(function (r) { if (!r.ok) throw 0; return r.json(); })
+    return U.fetchT(url).then(function (r) { if (!r.ok) throw 0; return r.json(); })
       .then(function (j) {
         var a = (j && j.address) || {};
         var iso = a['ISO3166-2-lvl4'] || ''; // e.g. "US-CA"
@@ -47,7 +47,7 @@
     if (loading) return loading;
     loading = Promise.all([
       reverseGeocode(pos),
-      fetch(OPENMHZ).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; })
+      U.fetchT(OPENMHZ).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; })
     ]).then(function (res) {
       loading = null;
       var loc = res[0], systems = (res[1] && res[1].systems) || [];
@@ -114,7 +114,7 @@
 
     // best-effort talkgroup names (so we show "FIRE DISPATCH" not "TG 1451")
     P.tg = {};
-    fetch(API + encodeURIComponent(sys.shortName) + '/talkgroups')
+    U.fetchT(API + encodeURIComponent(sys.shortName) + '/talkgroups')
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (j) {
         var list = j && (j.talkgroups || j);
@@ -128,7 +128,7 @@
   function pollCalls(seed) {
     if (!P.sys) return;
     var sn = P.sys.shortName;
-    fetch(API + encodeURIComponent(sn) + '/calls')
+    U.fetchT(API + encodeURIComponent(sn) + '/calls')
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (j) {
         if (!P.sys || P.sys.shortName !== sn || !j) return; // switched systems mid-flight

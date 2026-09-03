@@ -330,7 +330,11 @@
           body: body,
           keepalive: body.length < 60000,
           mode: 'cors',
-          credentials: 'omit'
+          credentials: 'omit',
+          // Inline, not A.util.fetchT(): this file loads before util.js (index.html,
+          // second on purpose) and must still report when util.js never loaded.
+          // test/fetchtimeout.test.js accepts a static `signal` here for that reason.
+          signal: (typeof AbortSignal === 'function' && AbortSignal.timeout) ? AbortSignal.timeout(15000) : undefined
         }).catch(function () { /* telemetry must never surface an error to the rider */ });
         return;
       }

@@ -292,6 +292,55 @@
     return (r <= s) ? (t >= r && t < s) : (t >= r || t < s);
   }
 
+  /* ---------------- every client fetch gets a deadline ----------------
+     A fetch with no signal never rejects when the socket stalls — a tunnel, a
+     captive portal, a dropped TCP session with no RST: a phone on a motorcycle.
+     Five map layers set a bbox latch BEFORE their fetch and clear it only in
+     .catch() (js/ghost.js fetchPolice/fetchWaze/fetchHotspots, js/overlays.js
+     incidents/NWS), so one stalled response killed that layer for the rest of
+     the ride with no error, no toast and no log line (BUGS.md frontend-020).
+     Every fetch in js/ now goes through fetchT(); test/fetchtimeout.test.js
+     fails the build on a bare fetch(). Mirrors the server's own guard shape
+     (server/waze.js, server/tomtom.js withTimeout) including the fallback for
+     engines without AbortSignal.timeout. A caller-supplied signal is honoured:
+     combined with the deadline through AbortSignal.any where the engine has
+     it, otherwise the caller's wins (every such caller arms its own timer).
+
+     The table is load-bearing, not a style choice. server/overpass.js tries
+     MIRRORS.length (2) mirrors at TIMEOUT_MS (30 s) each before it answers,
+     so a cold-cache enforcement lookup legitimately takes up to 60 s; a client
+     deadline below the server's own budget aborts WORKING requests and makes
+     the police layer worse, not better. test/fetchtimeout.test.js group C pins
+     overpass >= MIRRORS × TIMEOUT_MS and aircraft > UPSTREAM_TIMEOUT_MS
+     (server/aircraft.js, 12 s) — change the server first, then this table. */
+  var FETCH_TIMEOUT = {
+    overpass: 75000,  // /api/overpass: 2 mirrors × 30 s, plus 15 s for the proxy and the pipe
+    aircraft: 20000,  // /api/aircraft: server UPSTREAM_TIMEOUT_MS 12 s, plus slack
+    api: 15000        // every other same-origin /api/* and every direct third-party call
+  };
+  function deadlineSignal(ms) {
+    if (typeof AbortSignal === 'function' && typeof AbortSignal.timeout === 'function') return AbortSignal.timeout(ms);
+    if (typeof AbortController === 'function') {
+      var c = new AbortController();
+      setTimeout(function () { c.abort(); }, ms);
+      return c.signal;
+    }
+    return null; // no way to abort on this engine: a plain fetch, exactly as before
+  }
+  function fetchT(url, opts, ms) {
+    var o = {}, k;
+    if (opts) for (k in opts) if (own(opts, k)) o[k] = opts[k]; // never mutate the caller's object
+    var t = (typeof ms === 'number' && ms > 0) ? ms : FETCH_TIMEOUT.api;
+    if (!o.signal) {
+      var d = deadlineSignal(t);
+      if (d) o.signal = d;
+    } else if (typeof AbortSignal === 'function' && typeof AbortSignal.any === 'function') {
+      var d2 = deadlineSignal(t);
+      if (d2) o.signal = AbortSignal.any([o.signal, d2]);
+    }
+    return fetch(url, o);
+  }
+
   A.util = {
     haversine: haversine, bearing: bearing, destPoint: destPoint,
     relBearing: relBearing, crossTrack: crossTrack,
@@ -300,6 +349,7 @@
     fmtDist: fmtDist, fmtDur: fmtDur, fmtClock: fmtClock,
     hexToRgb: hexToRgb, luma: luma, relLuma: relLuma, contrast: contrast, bestInk: bestInk, esc: esc, safePaint: safePaint, safeFinish: safeFinish, el: el, debounce: debounce, deepClone: deepClone,
     sunTimes: sunTimes, isDaylight: isDaylight,
+    fetchT: fetchT, FETCH_TIMEOUT: FETCH_TIMEOUT,
     iconKey: iconKey, riderIcon: riderIcon, convoyFlag: convoyFlag, ICON_COUNT: ICON_PATHS.length
   };
 })();

@@ -44,7 +44,7 @@
     var headers = { 'Content-Type': 'application/json' };
     if (token) headers['Authorization'] = 'Bearer ' + token;
     // A.config.base is '' on the web (same-origin) and the deployed origin inside Capacitor.
-    return fetch(A.config.base + path, {
+    return A.util.fetchT(A.config.base + path, {
       method: method,
       headers: headers,
       body: body ? JSON.stringify(body) : undefined

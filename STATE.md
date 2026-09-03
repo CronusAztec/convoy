@@ -19,7 +19,7 @@ installed APKs, unlimited cycles). The push stage follows `deploy/PUSH-RUNBOOK.m
 |---|---|---|---|
 | A | Front-end (cycles 0-4, closed in cycle 50) | **done 2026-09-03** — released by the cycle-50 push stage at 06:56Z (`stages/0021-c050-push.md`). Closing facts, re-measured in cycle 51 at 07:00Z with one request each: (1) `/api/ota` → `"current":{"version":"1.0.117",…}` (was `null` since the mission began); (2) https://odoreeci.tech serves `45 v=cy117` (== local). `livetest` PASS in the push report | `setShellInert` nesting fix + shell-restore invariant test + `#toasts` scoping landed ✔; stamp bumped to `cy117` ✔; review not BROKEN; push stage reports `cy117` served and `/api/ota` current = 1.0.117; livetest green |
 | B | Backend / server (`server/*.js`) | **done in code (pending the cycle-56 push, Lane B)** — B1 **done** (cycle 51, section "Aspect B — backend truth pass (cycle 51)" below); B2 **done and shipped** (cycle 52: server-031 + frontend-019, live as `cy118` / OTA `1.0.118` since 2026-09-03 07:46Z, `stages/0029-c052-push.md`); **B3 done in code (cycle 53 stage 30)**: all **34** Server + Runtime entries re-verified against the current tree with a machine-checked `- **Status:**` line each — **8 OPEN / 22 FIXED / 4 STALE** (Server 8/17/3, Runtime 0/5/1; `test/bugstats.test.js` 11→20 checks incl. the anti-rot path check) and the two really-open ones fixed with tests: server-024 (global per-connection `WS_MSG_BUDGET` gate, O(1)) and server-022 (TTS callback dead-response guard), `test/serverpolicy.test.js` 39→55 (group W1). Server-only cycle → **no stamp bump** (`45 × cy118` == production); the push stage runs **Lane B**. **B3b + static cache policy done in code (cycle 54 stage 34)**: server-002 (`defer()` try/catch around all five deferred bodies) and server-020 (leadership goes to the earliest member whose socket is still OPEN) **FIXED with executed tests** (`test/serverpolicy.test.js` 55→77, group D1 lifts `defer()` and `leaveParty()` out of server.js and runs them); server-011 **deferred with a recorded trigger** (tick > 50 ms or > 60 concurrent humans) and server-017 **scheduled as milestone B5, cycle 55** — both decisions written into their BUGS.md entries; ledger now **6 OPEN / 24 FIXED / 4 STALE** (Server 6/19/3, Runtime 0/5/1). The cache policy: new `server/httpcache.js` — stamped `?v=cyNNN` assets `public, max-age=31536000, immutable`, everything unstamped (`index.html`, legal, `/convoy.apk`) `no-cache` **+ ETag + Last-Modified**, the static handler stats before it reads and answers a matching `If-None-Match` with a body-less 304 before any `fs.readFile`; `STATIC_IMMUTABLE=0` kill switch (documented in `server/.env.example` with `WS_MSG_BUDGET`); new suite `test/httpcache.test.js` (41 checks: real round-trips over a temp dir + the production static tail lifted verbatim and executed). Server-only cycle → **no stamp bump** (`45 × cy118` == production); the push stage runs **Lane B**. **Cycle 55 stage 38 (server-only, no bump): the chat outage.** The cycle-54 improve stage's one `diag` showed `[handler chat] now is not defined` on every rider chat line — the `server/server.js` fan-out sent `t2: now`, undefined since the initial commit, so no live convoy chat message was ever delivered, the sender's own echo included (server-032, critical, **FIXED** `t2: entry.t` + executed group X1 with a mutation guard), and a mid-boot `systemctl restart` was logged as a `SUPABASE_DB_URL` failure with exit 1 (server-033, low, **FIXED**, group X2). New class gate `test/globals.test.js` (acorn-globals free-identifier scan over 112 files, 130 checks; RED on `server/server.js: now` before the fix, and it caught `ReferenceError` missing from its own allowlist on the first green attempt). `deploy/livetest.js` now asserts chat delivery both ways; `deploy/PUSH-RUNBOOK.md` §2 reads the journal for `[handler …]` after every restart. Ledger **6 OPEN / 26 FIXED / 4 STALE** (102 bugs). `npm test` 26 → **27** suites. **Closing criterion still open on:** server-017 (high → B5) and B4 Overpass mirrors; server-011 is closed *by decision* (critical-latent, re-open trigger recorded). **B5 + B4 done in code (cycle 56 stage 42, server-only, no bump):** server-017 (high) **FIXED** — the shared `auth:<ip>` bucket is split into a pre-body `authflood:<ip>` ceiling (240/10 min across all eleven routes) and per-route `auth:<route>:<ip>` attempt budgets charged only after `readBody()` produced a well-formed body (`ANON_AUTH_BUDGET` at module scope, `ANON_AUTH_ROUTES` derived from it, `AUTH_FLOOD_MAX >= sum` pinned), `test/serverpolicy.test.js` 95 → **120** (group Y1: RED 15/105 first, mutation guard, three real mutations caught); server-034 (medium, filed + **FIXED**) — `server/overpass.js` demotes a mirror that just failed to the back of the try order for `OVERPASS_COOL_MS` (120 s) and never skips it, `test/overpass.test.js` 66 → **96** (RED 18/72 first, the original 66 unchanged); frontend-020 filed OPEN for aspect C. Ledger **5 OPEN / 28 FIXED / 4 STALE** (104 bugs). **Aspect B closes when the cycle-56 push (Lane B) is live; aspect C opens cycle 57 with C1, the cycle that bumps `cy118 → cy119`.** | BUGS.md server+runtime truth pass (33 entries re-verified against current code, statuses updated, `bugstats` green); every open critical/high server bug fixed **with a regression test**; ~~stamped assets cached `immutable`~~ ✔ cycle 54 (`server/httpcache.js`, pending the cycle-54 push); shipped via Lane B/A |
-| C | Smoothness (delivery + client runtime) | **next — opens cycle 57 with C1** (measured audit: request count on first load, reduced-motion / idle-CPU, reconnect UX frontend-012/013, and frontend-020's missing `AbortSignal` on the enforcement fetch); the first web edit since cycle 52, so C1 bumps `cy118 → cy119` | request count ≤ 30 on first load; reduced-motion/idle-CPU audit (plan v1 M10); reconnect UX (frontend-012/013); measured with the headless Chromium recipe below; shipped |
+| C | Smoothness (delivery + client runtime) | **in progress — C1 done in code (cycle 57 stage 46), pending the cycle-57 push (Lane A, `cy119` / OTA `1.0.119`).** C1 = the measured audit (done by the cycle-56 improve stage; numbers in "C1 measured baseline" below) + frontend-020 fixed **as a class**: `A.util.fetchT(url, opts, ms)` + the load-bearing `A.util.FETCH_TIMEOUT` table in `js/util.js` (overpass 75 s ≥ 2 mirrors × 30 s, aircraft 20 s, api 15 s), all 20 bare `fetch` sites converted, `js/telemetry.js` inline (loads before util.js); new 28th suite `test/fetchtimeout.test.js` (39 checks — the real `fetchPolice()` executed with a stalling transport, an acorn class gate with a two-entry anti-rot allowlist, the cross-file `overpass >= MIRRORS × TIMEOUT_MS` floor; **RED 16 failed / 17 passed first**, two mutations caught); 3 boot-cost keys pinned in `test/frontend-baseline.json` (46 / 357743 / 5, ratchet-down from cycle 58). frontend-021 (`document.hidden` pollers; police/Waze carve-out recorded) filed for **C2 (cycle 58)** with frontend-012/013. Stamp bumped `cy118 → cy119` | request count ≤ 30 on first load; reduced-motion/idle-CPU audit (plan v1 M10); reconnect UX (frontend-012/013); measured with the headless Chromium recipe below; shipped |
 | D | Android native (code + compile-check only) | after C | android-002/003/004/009/011/014 fixed; compiles with a user-local JDK/SDK if that lands in 20 min, else code-reviewed; **shipping needs the human's keystore** |
 | E | Front-end round 2 | after D | plan v1 M7 (ui.js split), M8 (states), M9 (responsive), M11 (onboarding) |
 
@@ -53,7 +53,35 @@ if any shared key's value has been raised. New keys (e.g. this stage's `axeViola
 `axeViolations_authLogin` replacing `axeViolations_auth`) are exempt on the stage that introduces them.
 
 ## Current milestone
-**Cycle 56 stage 42 (IMPLEMENT, executing the cycle-55-stage-40 IMPROVE directive's Tasks 1-4) — DONE, server-only, NO STAMP BUMP. Aspect B is done in code; the cycle-56 push (Lane B) is its release.**
+**Cycle 57 stage 46 (IMPLEMENT, executing the cycle-56-stage-44 IMPROVE directive's Tasks 1-4) — DONE, WEB EDIT, STAMP BUMPED `cy118 → cy119` (OTA `1.0.119`). Aspect C opened with C1; the cycle-57 push runs Lane A.**
+The client never learned the lesson the server learned in cycle 56: one stalled `/api/overpass` response and the police /
+camera / ALPR layer was dead for the rest of the ride, silently — 22 of 23 client `fetch` sites had no deadline (frontend-020).
+
+1. **Task 1 — `test/fetchtimeout.test.js`, the 28th suite (39 checks), written and run RED first: 16 failed / 17 passed**
+   against the unfixed tree — `bare fetch sites: 22 (allowlisted 2, violations 20)`, the real `fetchPolice()` issuing
+   `1,1,1,1,1` fetches over five 90 s ticks with a stalling transport. Four groups: A1 the lifted `bboxChanged()`
+   mechanism; A2 the real module executed in the harness (`setInterval` recorded instead of armed, `fetch` +
+   `AbortSignal.timeout` + `Date.now` stubbed, deadlines fired by hand); B the acorn class gate (the helper / a static
+   `signal` / a two-entry allowlist with anti-rot and reason re-checks, no `fetch` aliasing, the table bound to the
+   `OVERPASS_PROXY` / `AIRCRAFT_PROXY` sites); C the cross-file floor parsed from `server/overpass.js` and
+   `server/aircraft.js` each run; D the helper's own contract (default deadline, caller signal via `AbortSignal.any`,
+   opts never mutated, the `AbortController` fallback, the no-abort engine).
+2. **Task 2 — `js/util.js`: `fetchT(url, opts, ms)` + `FETCH_TIMEOUT` {overpass 75000, aircraft 20000, api 15000},
+   exported on `A.util`.** 20 sites converted (`auth` 1, `dragy` 1, `ghost` 4, `net` 1, `overlays` 4, `routing` 5 — the
+   police lookup keeps its own `AbortController`, combined with the deadline through `AbortSignal.any` — `scanners` 4,
+   `tripextras` 1); `js/telemetry.js:327` carries an inline `signal:` because it loads before `js/util.js`. GREEN 39/39,
+   `bare fetch sites: 2`. Mutations: (a) `js/ghost.js:336` back to a bare `fetch` → 7 red (5 executed A2 checks + the
+   gate naming `js/ghost.js:336` + the table binding); (b) `overpass: 15000` → exactly 1 red, `15000 >= 2 × 30000 = 60000`.
+3. **Task 3 — `testBootCost()` in `test/frontend.test.js` (+5 checks, 78 → 83) and three new baseline keys**
+   `bootAssetRequests` 46 / `bootAssetGzipBytes` 357743 / `bootExternalOrigins` 5 (definitions in the check names; the 7
+   old keys unchanged; `index.html` stamps normalised before gzip so a bump cannot move the byte count).
+4. **Task 4 — ledger, state, stamp.** BUGS.md 104 → **105** (frontend-020 FIXED as a class, naming the suite;
+   frontend-021 filed medium / OPEN / C2 with §2.5's table and the police/Waze carve-out); roadmap row C, this block,
+   the "C1 measured baseline" section, the test-baseline line; stamp `cy118 → cy119` (45×), `node scripts/pack-ota.js
+   --offline` → `1.0.119`. Report: `stages/0046-c057-implement.md`.
+
+---
+**Previous: Cycle 56 stage 42 (IMPLEMENT, executing the cycle-55-stage-40 IMPROVE directive's Tasks 1-4) — DONE, server-only, NO STAMP BUMP. Aspect B is done in code; the cycle-56 push (Lane B) is its release.**
 Two defects a rider experiences as "this app is flaky": a locked-out rider who could not reach password recovery, and map
 lookups that waited 30 s on a mirror everybody already knew was down.
 
@@ -638,6 +666,37 @@ Also carried into aspect B from the cycle-50 review (LOW, real, un-fixed): `over
 staleness (`js/ui.js:3089,3437`) and `#toasts` eviction of an inerted invite toast — both client-side,
 both wait for a Lane A cycle.
 
+## C1 measured baseline (aspect C — measured 2026-09-03 by the cycle-56 improve stage, `stages/0044-c056-improve.md` §2; pinned in cycle 57)
+Measure C2 / C3 against these, not against estimates. Method: the real tree served by a logging static server on `:5199`,
+loaded by the headless Chromium below with `--host-resolver-rules="MAP * 127.0.0.1, EXCLUDE localhost"` (every external
+origin blackholed, only same-origin traffic counted); the CSP `<meta>` stripped for the timing probe (the
+`test/browser.test.js` `buildFixture()` trick). Scratch lived in `/tmp/c1meas/`, outside the repo.
+- **First load:** **46 same-origin asset requests** (1 HTML + 1 CSS + 44 JS, all `defer`, nothing render-blocking) plus
+  **3 API calls fired during boot** before the rider touches anything (`/api/tts/health` ×1, `/api/telemetry` ×2).
+  External: ~5 more (`fonts.googleapis.com` CSS + 2 `fonts.gstatic.com` woff2, `cdn.jsdelivr.net` MapLibre CSS + JS) plus
+  map tiles.
+- **Bytes:** 45 stamped assets raw 1111998 / gzip ~349.8 KB + `index.html` ~6.4 KB gzip → **~348 KB compressed** on a
+  first visit (plan v1 M-C target ≤ 300 KB). `js/ui.js` alone is 217854 raw / 61236 gzip — 17 % of the payload; its
+  split is plan v1 M7 / aspect E1, never a bundler.
+- **Boot timing (desktop container, localhost, zero latency):** DOMContentLoaded **705 ms**, load 726 ms, **2 long
+  tasks**; several times worse on a mid-range phone over mobile data. A first-time visitor downloads and executes 100 %
+  of the app to be shown a login form.
+- **Fetch deadlines — fixed in cycle 57:** 22 of 23 client `fetch` sites had no `AbortSignal` while 5 of 5 server
+  upstream families were guarded; five map layers set a bbox latch before the fetch and clear it only in `.catch()`, so a
+  stalled response killed that layer for the session. Now 0 bare sites outside the two allowlisted (`test/fetchtimeout.test.js`).
+- **Idle cost — filed as frontend-021 for C2:** 22 `setInterval` timers in 12 files; nine timer-owning files never read
+  `document.hidden` (`ghost.js` 5, `overlays.js` 5, `scanners.js` 1, `voice.js` 2, `radar.js` / `clock.js` / `state.js` /
+  `ui.js` / `race.js` 1 each). Product carve-out: `fetchPolice` / `fetchWaze` are the alerting path — never blanket-pause them.
+- **Reduced motion:** correct as written (`js/state.js:30-31` seeds `settings.anim` from `prefers-reduced-motion`;
+  `css/styles.css:74-94` covers `[data-anim="off"]` and the pre-`data-anim` window). Do not "fix" it.
+- **Pinned in `test/frontend-baseline.json` (cycle 57, `testBootCost()`):** `bootAssetRequests` 46,
+  `bootAssetGzipBytes` 357743 (zlib level 9, `index.html` stamps normalised — the number the suite computes; +1.5 KB over
+  the audit's figure for the `fetchT` helper and its comment), `bootExternalOrigins` 5. Ratchet-down only from cycle 58.
+- **Restated target (cycle-56 improve §6):** since cycle 54 the 45 stamped assets are `immutable`, so a repeat visit is
+  1 request; the rider-felt number is time-to-interactive on a phone. "≤ 30 requests" stays aspect C's closing
+  criterion, but the stage that spends a cycle on it should optimise the 348 KB / 705 ms and let the request count fall
+  out of that — never by adding a bundler.
+
 ## Headless Chromium — working recipe (M2 UN-DROPPED cycle 3 stage 14; do not re-run the download,
 reuse what's already on this box)
 
@@ -794,6 +853,10 @@ canvas or behind `backdrop-filter`.
   New class gate `test/globals.test.js` (acorn-globals, 112 files, 130 checks; RED on `now` first), `serverpolicy`
   77→95 (X1 executed chat lift + mutation guard, X2), `livetest` asserts chat delivery, runbook §2 reads the journal.
   `npm test` 26→27 suites, BUGS.md 100→102, no stamp bump (`cy118` == production), nothing deployed.
+- 2026-09-03 stage 46 (IMPLEMENT, cycle 57, aspect C / C1): `A.util.fetchT()` + `FETCH_TIMEOUT` table in `js/util.js`,
+  20 `fetch` sites converted (+ `telemetry.js` inline), `test/fetchtimeout.test.js` (28th suite, RED 16/17 first, 39/39 after,
+  two mutations caught), `testBootCost()` + 3 baseline keys, BUGS.md 105 (frontend-020 FIXED, frontend-021 filed for C2),
+  stamp `cy118 → cy119` / OTA `1.0.119`. Report: `stages/0046-c057-implement.md`.
 
 ## How to run (solo mode — no Supabase needed)
 ```bash
@@ -806,7 +869,7 @@ following `deploy/PUSH-RUNBOOK.md`; implement/review/improve never run `update`/
 
 ## How to test
 ```bash
-npm test                 # 27 Node suites, no network (includes frontend.test.js; globals.test.js is the undefined-identifier gate)
+npm test                 # 28 Node suites, no network (frontend.test.js; globals.test.js = undefined-identifier gate; fetchtimeout.test.js = every client fetch has a deadline)
 npm run test:frontend    # jsdom + axe-core + html-validate + detector + ratchet guard, gated on test/frontend-baseline.json
 node /opt/data/skills/creative/impeccable/scripts/detect.mjs --json index.html css/styles.css js/ui.js | grep -c '"antipattern"'
 graphify query "<area>"  # before editing;  graphify update .  # after editing
@@ -921,6 +984,15 @@ pins, a regression pin; 18 failed / 72 passed against the unfixed module; the or
 (`htmlValidateErrors` 13, `axeViolations_*` 0 ×6, `detectorWarnings` 17) — expected: no web file touched. Stamp
 deliberately **not** bumped: `45 ?v=cy118` == production `cy118`. Keep suite count (27), every per-suite check count,
 and the 7 baseline keys from going down.
+`npm test` on 2026-09-03 (implementer stage 46, cycle 57, after Tasks 1-4, WEB edit): **All 28 suites passed** (27 → 28:
+new `test/fetchtimeout.test.js`, **39/39**, registered after `ghostbbox.test.js`; 16 failed / 17 passed against the unfixed
+tree). `frontend.test.js` 78 → **83** (+5: `testBootCost()` — 2 structural + 3 new baseline keys). `globals.test.js`
+130 → **131** (one more file scanned). `bugstats.test.js` 20/20 (**105** bugs; roll-up 5/28/4 unchanged — Server/Runtime
+untouched). `serverpolicy.test.js` 120, `overpass.test.js` 96, `httpcache.test.js` 41, `ghostbbox.test.js` 18,
+`browser.test.js` 5/5 — unchanged. `npm run test:frontend` 7 old keys **unchanged** (`htmlValidateErrors` 13,
+`axeViolations_*` 0 ×6, `detectorWarnings` 17) + 3 new keys (`bootAssetRequests` 46, `bootAssetGzipBytes` 357743,
+`bootExternalOrigins` 5). Stamp bumped `cy118 → cy119` (45×), OTA `1.0.119`; production is `cy118` → LOCAL > PROD by
+exactly one, Lane A. Keep suite count (28), every per-suite check count, and the 10 baseline keys from going the wrong way.
 
 ## Operating contract (cycle 50+, plan v2) — every role reads this; it is the tail of this file on purpose
 1. **One aspect at a time.** Implement works only on the current aspect's next milestone from plan v2
@@ -931,10 +1003,10 @@ and the 7 baseline keys from going down.
    read the current stamp (`grep -oE '\?v=cy[0-9]+' index.html | sort | uniq -c`, one value, 45×), then e.g.
    `sed -i 's/?v=cy117/?v=cy118/g' index.html && grep -oc '?v=cy118' index.html` (must print 45),
    then `node scripts/pack-ota.js --offline 2>&1 | tail -6` (must print the matching `version 1.0.NNN`).
-   Current stamp after cycle 56 stage 42: `cy118` **== production** (`cy118` served since 2026-09-03 07:46Z, the
-   cycle-52 push). Cycles 53, 54, 55 and 56 were server-only — no bump, Lane B each time. The next web edit (aspect C,
-   cycle 57, milestone C1) bumps to `cy119`; until then `LOCAL == PROD` is the expected state. If a push is held back, the next implement stage
-   does not bump again.
+   Current stamp after cycle 57 stage 46: `cy119` **> production `cy118`** by exactly one (`cy118` served since
+   2026-09-03 07:46Z, the cycle-52 push; cycles 53-56 were server-only, Lane B). Cycle 57 is the first web edit since
+   cycle 52 → the cycle-57 push runs **Lane A** (`release -- --ota`) and expects `45 v=cy119` served and `/api/ota` →
+   `1.0.119`. If that push is held back or fails, the next implement stage does not bump again — the pending bump ships first.
    Server-only stages do not bump. Never leave a mixed page. The bumped stamp is what the push stage
    uses to decide Lane A (web + OTA) vs Lane B (site only).
 3. **Push gates** (`deploy/PUSH-RUNBOOK.md`): review verdict BROKEN or any BLOCKER → nothing moves;

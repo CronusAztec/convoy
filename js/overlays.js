@@ -63,7 +63,7 @@
 
   // Fetch the newest radar frame and point the source's tiles at it.
   function refreshRadar() {
-    return fetch(RAINVIEWER).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+    return U.fetchT(RAINVIEWER).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
       var past = j && j.radar && j.radar.past;
       if (!past || !past.length) return false;
       rvHost = j.host || rvHost;
@@ -397,7 +397,7 @@
     lastHazPos = pos.slice();
     var url = FORECAST + '?latitude=' + pos[1].toFixed(4) + '&longitude=' + pos[0].toFixed(4) +
       '&current=weather_code,precipitation,snowfall,wind_speed_10m,temperature_2m';
-    fetch(url).then(function (r) { if (!r.ok) throw new Error('w ' + r.status); return r.json(); })
+    U.fetchT(url).then(function (r) { if (!r.ok) throw new Error('w ' + r.status); return r.json(); })
       .then(function (j) {
         var cur = j && j.current;
         weatherHazards = scanHazards(cur, pos); // refresh weather set only; reports persist
@@ -471,7 +471,7 @@
     var bb = viewBBox(); if (!bb) return;
     if (lastIncidentBbox && !movedFar(lastIncidentBbox, bb, 0.2)) return;
     lastIncidentBbox = bb;
-    fetch((A.config ? A.config.base : '') + '/api/incidents', {
+    U.fetchT((A.config ? A.config.base : '') + '/api/incidents', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ bottomLeft: [bb.minLng, bb.minLat], topRight: [bb.maxLng, bb.maxLat] })
     }).then(function (r) { if (!r.ok) throw new Error('incidents ' + r.status); return r.json(); })
@@ -486,7 +486,7 @@
     lastNwsBbox = bb;
     var cLat = (bb.minLat + bb.maxLat) / 2, cLng = (bb.minLng + bb.maxLng) / 2;
     // NWS is US-only + keyless (CORS '*'); query by the view centre. Non-US → empty.
-    fetch(NWS_URL + '?point=' + cLat.toFixed(4) + ',' + cLng.toFixed(4), { headers: { 'Accept': 'application/geo+json' } })
+    U.fetchT(NWS_URL + '?point=' + cLat.toFixed(4) + ',' + cLng.toFixed(4), { headers: { 'Accept': 'application/geo+json' } })
       .then(function (r) { if (!r.ok) throw new Error('nws ' + r.status); return r.json(); })
       .then(function (j) {
         var feats = (j && j.features) || [];

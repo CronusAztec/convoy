@@ -240,15 +240,15 @@
     // Cross-country routes would make a huge Overpass query — skip avoidance there.
     if ((maxLat - minLat) > 3 || (maxLng - minLng) > 3) return Promise.resolve(null);
     if (lastPolice) { try { lastPolice.abort(); } catch (e) {} }
-    var ctrl = new AbortController(); lastPolice = ctrl;
-    return fetch(OVERPASS_PROXY, {
+    var ctrl = new AbortController(); lastPolice = ctrl; // a newer route supersedes this lookup; fetchT adds the deadline on top
+    return U.fetchT(OVERPASS_PROXY, {
       method: 'POST', signal: ctrl.signal,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         kind: 'police',
         bbox: { minLat: minLat, minLng: minLng, maxLat: maxLat, maxLng: maxLng }
       })
-    }).then(function (r) { if (!r.ok) throw new Error('overpass ' + r.status); return r.json(); })
+    }, U.FETCH_TIMEOUT.overpass).then(function (r) { if (!r.ok) throw new Error('overpass ' + r.status); return r.json(); })
       .then(function (j) {
         var pts = [], els = (j && j.elements) || [];
         for (var i = 0; i < els.length; i++) {
@@ -407,7 +407,7 @@
 
   function probeTts() {
     if (typeof fetch !== 'function' || !navAudio) { ttsServer = false; return; }
-    fetch(ttsBase() + '/api/tts/health').then(function (r) { return r.ok ? r.json() : null; })
+    U.fetchT(ttsBase() + '/api/tts/health').then(function (r) { return r.ok ? r.json() : null; })
       .then(function (j) { ttsServer = !!(j && j.ok); })
       .catch(function () { ttsServer = false; });
   }
@@ -426,7 +426,7 @@
 
   function serverSpeak(text) {
     if (!navAudio) { synthSpeak(text); return; }
-    fetch(ttsBase() + '/api/tts?text=' + encodeURIComponent(text))
+    U.fetchT(ttsBase() + '/api/tts?text=' + encodeURIComponent(text))
       .then(function (r) { if (!r.ok) throw new Error('tts ' + r.status); return r.blob(); })
       .then(function (blob) {
         try { navAudio.pause(); } catch (e) { }
@@ -832,14 +832,14 @@
     var pad = 0.005;
     minLat -= pad; minLng -= pad; maxLat += pad; maxLng += pad;
     if ((maxLat - minLat) > 2 || (maxLng - minLng) > 2) return Promise.resolve(null);
-    return fetch(OVERPASS_PROXY, {
+    return U.fetchT(OVERPASS_PROXY, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         kind: 'road',
         bbox: { minLat: minLat, minLng: minLng, maxLat: maxLat, maxLng: maxLng }
       })
-    }).then(function (r) { if (!r.ok) throw new Error('overpass ' + r.status); return r.json(); })
+    }, U.FETCH_TIMEOUT.overpass).then(function (r) { if (!r.ok) throw new Error('overpass ' + r.status); return r.json(); })
       .then(function (j) {
         var out = { police: [], stops: [], signals: [] };
         ((j && j.elements) || []).forEach(function (e) {

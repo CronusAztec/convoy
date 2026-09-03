@@ -241,7 +241,7 @@
   function uploadPB(modeId, time, trap) {
     if (typeof fetch !== 'function') return;
     var base = (A.config && A.config.base) || '';
-    fetch(base + '/api/dragy/pb', {
+    U.fetchT(base + '/api/dragy/pb', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

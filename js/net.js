@@ -231,7 +231,7 @@
   // cached on A.config.routeCaps.
   function probeRoutingCaps() {
     if (A.config.routeCaps !== undefined) return;
-    fetch(A.config.base + '/api/route/caps')
+    U.fetchT(A.config.base + '/api/route/caps')
       .then(function (r) { return r.ok ? r.json() : { routing: false, waze: false, hotspots: false }; })
       // Carry ALL caps through: ghost.js gates the live Waze police layer on
       // routeCaps.waze and the probability-hotspots layer on routeCaps.hotspots.
