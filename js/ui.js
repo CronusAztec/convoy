@@ -1660,6 +1660,12 @@
     if (v === 'main') buildSettings(document.getElementById('settings-host'));
   }
 
+  // Bumped on every buildProfilePanel() call; a pending ensure().then()/.catch()
+  // from an earlier call checks its own snapshot against this and no-ops if it
+  // is stale — the fix for two overlapping garage opens (a click that beats a
+  // debounce, or closeAuthEnter() re-rendering mid-load) both queuing into the
+  // same cached promise and double-appending into `body`.
+  var profileGen = 0;
   function buildProfilePanel() {
     var body = document.getElementById('profile-body');
     if (!body) return; // absent panel must not desync openName from the DOM
@@ -1670,9 +1676,18 @@
     // empty-dropdown panel — wait for the (cached, near-instant once loaded)
     // ensure() before building the garage page specifically.
     if (profileView === 'garage') {
+      var gen = ++profileGen;
       A.data.ensure().then(function () {
-        if (profileView !== 'garage' || document.getElementById('profile-body') !== body) return;
+        if (gen !== profileGen || document.getElementById('profile-body') !== body) return;
         buildGaragePage(body);
+      }).catch(function () {
+        if (gen !== profileGen || document.getElementById('profile-body') !== body) return;
+        // A failed load must not trap the rider on the blank panel body.innerHTML
+        // was cleared to at the top of this call — fall back to the main page
+        // (which still offers the My Garage button, i.e. a retry) and correct
+        // profileView so it matches what is actually on screen.
+        toast('Could not load the garage — try again', 'warn');
+        showProfileView('main');
       });
     } else {
       buildProfileMain(body);
@@ -2255,7 +2270,10 @@
       'Go invisible and reveal nearby aircraft and police', ghostToggle));
 
     /* ---- Voice chat ---- */
-    buildVoiceSettings(body);
+    var voiceHost = U.el('div', 'voice-settings-host');
+    voiceHost.id = 'voice-settings-host';
+    body.appendChild(voiceHost);
+    buildVoiceSettings(voiceHost);
 
     /* ---- Routing ---- */
     body.appendChild(U.el('div', 'section-label', 'Routing'));
@@ -2557,8 +2575,25 @@
      is not desktop Chrome: output-sink selection and device enumeration may
      simply not exist there, and a switch that silently does nothing is worse
      than no switch at all — so a missing capability removes the row. */
-  function buildVoiceSettings(body) {
-    var V = A.voice;
+  // Bumped on every buildVoiceSettings() call; the same re-entrancy shape as
+  // buildProfilePanel()'s profileGen (task 2) — a stale pending ensure() call
+  // (settings panel closed and reopened while voice was still loading) becomes
+  // a no-op instead of rendering into a host that has already moved on.
+  var voiceGen = 0;
+  function buildVoiceSettings(host) {
+    var gen = ++voiceGen;
+    // js/voice.js is lazy now (task 3). A failed load degrades exactly like a
+    // voice module that was never present — the caps-stripped section below
+    // already handles that (guardrail: a missing capability drops the row
+    // rather than crashing), so the rejection is swallowed here on purpose.
+    A.voiceLoader.ensure().catch(function () { return null; }).then(function (V) {
+      if (gen !== voiceGen || document.getElementById('voice-settings-host') !== host) return;
+      host.innerHTML = '';
+      renderVoiceSettings(host, V);
+    });
+  }
+
+  function renderVoiceSettings(body, V) {
     var caps = (V && V.capabilities) ? V.capabilities() : {
       devices: false, inputPicker: false, outputPicker: false,
       echoCancellation: false, noiseSuppression: false, autoGainControl: false,

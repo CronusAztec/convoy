@@ -1200,6 +1200,13 @@
     setInterval(reconcile, PROX_POLL_MS);
     // Ghost mode change: going invisible silences proximity voice immediately.
     ST.on('ghost', reconcile);
+    // Now lazy-loaded (T-voice, cycle 3): init() can run seconds into a
+    // session, after a convoy has already formed. Without this, a late init
+    // would silently ignore that convoy until the next PROX_POLL_MS tick.
+    // reconcile() is idempotent by construction (it's the function that makes
+    // voice match membership), so calling it immediately here is also safe
+    // when voice loads early, as it always used to.
+    reconcile();
   }
 
   // Local helpers reading app state without a hard import cycle.

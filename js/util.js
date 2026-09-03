@@ -181,6 +181,28 @@
     });
   }
 
+  // Cache-by-key wrapper around any promise-returning factory (loadScript, but
+  // the shape is generic). Concurrent callers for the same key share one
+  // in-flight promise/injected <script>; once it settles successfully the
+  // cached resolved promise keeps answering instantly with no further calls.
+  // On REJECTION the cache entry is cleared so the next call retries the
+  // factory instead of replaying the same failure forever — a lazy loader that
+  // caches a rejected promise for the rest of the session (the shape
+  // A.data.ensure() used to have) turns one flaky idle-warm fetch into a
+  // permanently broken panel. Not bounded: the default path always retries on
+  // the next call; callers that want a ceiling can count their own attempts.
+  var onceCache = {};
+  function loadOnce(key, factory) {
+    var cached = onceCache[key];
+    if (cached) return cached;
+    var p = factory().catch(function (e) {
+      delete onceCache[key];
+      throw e;
+    });
+    onceCache[key] = p;
+    return p;
+  }
+
   /* ---------- rider identity icons ----------
      Flat-color geometric SVG insignias (solid fills, no stroke). A "key" is a
      small integer (0..7); we coerce anything legacy (an emoji char, undefined)
@@ -380,7 +402,7 @@
     lerp: lerp, lerpPos: lerpPos, lerpAngle: lerpAngle,
     clamp: clamp, rand: rand, randInt: randInt, pick: pick, chance: chance, uid: uid, own: own,
     fmtDist: fmtDist, fmtDur: fmtDur, fmtClock: fmtClock,
-    hexToRgb: hexToRgb, luma: luma, relLuma: relLuma, contrast: contrast, bestInk: bestInk, esc: esc, safePaint: safePaint, safeFinish: safeFinish, el: el, loadScript: loadScript, debounce: debounce, deepClone: deepClone,
+    hexToRgb: hexToRgb, luma: luma, relLuma: relLuma, contrast: contrast, bestInk: bestInk, esc: esc, safePaint: safePaint, safeFinish: safeFinish, el: el, loadScript: loadScript, loadOnce: loadOnce, debounce: debounce, deepClone: deepClone,
     sunTimes: sunTimes, isDaylight: isDaylight,
     fetchT: fetchT, FETCH_TIMEOUT: FETCH_TIMEOUT, poll: poll, unpoll: unpoll,
     iconKey: iconKey, riderIcon: riderIcon, convoyFlag: convoyFlag, ICON_COUNT: ICON_PATHS.length

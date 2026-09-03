@@ -163,9 +163,210 @@ group('A.data.ensure() — the injected <script> src carries index.html\'s curre
   }, 10);
 }
 
-/* ---------------- async finish: two groups above resolve on a timer ---------------- */
-let pending = 2;
-function finish() {
-  pending--;
-  if (pending === 0) process.exit(report());
+// (c) and (d) above finish through their own setTimeout callbacks, which
+// never trigger a second document.createElement() call and so are immune to
+// the global-window reassignment the (e)/(f) checks below perform — they just
+// need this no-op so their trailing finish() call doesn't throw. Both settle
+// (0ms, 10ms) well before the sequential async work below reaches the final
+// report(), so their ok() results are always counted.
+function finish() {}
+
+/* ---------------- (e)/(f): everything below shares Node's single `global.window`/
+   `global.document` (H.installBrowser()/bootRealUi() both reassign them), so
+   these three checks MUST run strictly one after another — a callback from an
+   earlier check firing while a later check has already reassigned the globals
+   would silently corrupt both. Each phase below is fully awaited (including
+   its own setTimeout-driven script "loads") before the next one calls
+   installBrowser()/bootRealUi() again. */
+
+/* ---------------- (e) task 1: a rejected load is retried, not replayed forever ----------------
+   cycle 2's A.data.ensure() cached the promise from loadScript() even when it
+   REJECTED, so one flaky fetch during the idle warm permanently broke the
+   garage for the rest of the session — retrying (garage panel reopened,
+   network back) never fired a second request. `n.onload()` is all the old
+   stub at (c)/(d) above ever calls; the failure branch was not merely
+   untested, it was unrepresentable in that harness. This one can fail: it
+   fires `n.onerror()` first. */
+async function checkRetryAfterRejection() {
+  group('A.util.loadOnce() / A.data.ensure() — a rejected load is retried, not cached forever');
+  const win = H.installBrowser();
+  win.document.head = H.makeEl('head');
+  let attempt = 0;
+  const injected = [];
+  win.document.createElement = function (tag) {
+    const n = H.makeEl(tag);
+    if (tag === 'script') {
+      injected.push(n);
+      attempt++;
+      const isFirst = attempt === 1;
+      setTimeout(function () {
+        if (isFirst) { if (n.onerror) n.onerror(); return; }
+        // Attempt 2 "succeeds": simulate js/data.js's own real effect the same
+        // way (c) above does, then fire onload.
+        win.App.data.CONVOY_NAMES = ['Retry Run'];
+        win.App.data.loaded = true;
+        if (n.onload) n.onload();
+      }, 0);
+    }
+    return n;
+  };
+  H.loadModule('js/config.js');
+  H.loadModule('js/util.js');
+  const A = win.App;
+
+  let firstRejected = false, firstErr = null;
+  try { await A.data.ensure(); } catch (e) { firstRejected = true; firstErr = e; }
+  ok('the first attempt (onerror) rejects the promise A.data.ensure() returned', firstRejected,
+    firstErr && firstErr.message);
+  ok('exactly one <script> was injected for the failed attempt', injected.length === 1,
+    'injected ' + injected.length);
+
+  const p2 = A.data.ensure();
+  ok('calling A.data.ensure() again after the rejection injects a NEW <script> (cache was cleared, not replayed)',
+    injected.length === 2, 'injected ' + injected.length);
+  try {
+    await p2;
+    ok('the retried ensure() call resolves once the second attempt "loads"', true);
+    ok('A.data.loaded is true after the retry actually succeeds', A.data.loaded === true);
+  } catch (e2) {
+    ok('the retried ensure() call should resolve, not reject', false, e2 && e2.message);
+  }
 }
+
+/* ---------------- (f) task 2: the REAL buildProfilePanel(), driven through the
+   real A.ui API in a full jsdom window — not A.data.ensure() in isolation,
+   which was the other half of the (c)/(d) test gap. Reuses the exact module
+   chain/order test/frontend.test.js drives (jsdom + the real index.html), so
+   this is the same "what a WebView actually renders" guarantee, not a second
+   hand-written fixture that can drift from it. ---------------- */
+function bootRealUi() {
+  const { JSDOM } = require('jsdom');
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  const dom = new JSDOM(html, { url: 'http://localhost/', pretendToBeVisual: true, runScripts: 'outside-only' });
+  const win = dom.window;
+  win.matchMedia = win.matchMedia || function () {
+    return { matches: false, media: '', addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} };
+  };
+  win.Capacitor = undefined;
+  win.fetch = function () { return Promise.reject(new Error('network disabled in test harness')); };
+
+  // jsdom's runScripts:'outside-only' never fetches or executes a dynamically
+  // injected <script src>, so A.data.ensure()'s real loadScript() would hang
+  // forever without this. Intercept just the `src` setter on <script>
+  // elements: queue an outcome per injection, and on "success" actually eval
+  // the real file's source in this window (the same effect a browser's own
+  // fetch+execute-then-fire-onload would have) so D.MAKE_LIST etc. are real,
+  // not empty. Every other tag goes through the unmodified real jsdom path.
+  const scriptOutcomes = [];
+  const realCreateElement = win.document.createElement.bind(win.document);
+  win.document.createElement = function (tag) {
+    const el = realCreateElement(tag);
+    if (String(tag).toLowerCase() === 'script') {
+      Object.defineProperty(el, 'src', {
+        get() { return el.getAttribute('src') || ''; },
+        set(v) {
+          el.setAttribute('src', v);
+          const outcome = scriptOutcomes.length ? scriptOutcomes.shift() : 'ok';
+          setTimeout(function () {
+            if (outcome === 'fail') { if (el.onerror) el.onerror(new win.Event('error')); return; }
+            try { win.eval(fs.readFileSync(path.join(ROOT, String(v).split('?')[0]), 'utf8')); }
+            catch (e) { if (el.onerror) el.onerror(new win.Event('error')); return; }
+            if (el.onload) el.onload(new win.Event('load'));
+          }, 0);
+        }
+      });
+    }
+    return el;
+  };
+
+  function put(name, value) {
+    try { global[name] = value; }
+    catch (e) { Object.defineProperty(global, name, { value, writable: true, configurable: true }); }
+  }
+  put('window', win);
+  put('document', win.document);
+  put('localStorage', win.localStorage);
+  put('navigator', win.navigator);
+  put('requestAnimationFrame', win.requestAnimationFrame ? win.requestAnimationFrame.bind(win) : (fn) => setTimeout(() => fn(Date.now()), 0));
+  put('cancelAnimationFrame', win.cancelAnimationFrame ? win.cancelAnimationFrame.bind(win) : clearTimeout);
+  put('fetch', win.fetch);
+
+  // test/frontend.test.js's own MODULE_ORDER (for jsdom UI-rendering
+  // completeness) still evals js/data.js and js/voice.js unconditionally at
+  // boot — deliberately, per STATE.md: that list is the app's module SET for
+  // jsdom, not a mirror of what index.html currently <script>-tags. Loading
+  // it here too would set A.data.loaded/A.voice before a single test ran,
+  // permanently taking the fast path and making the lazy/failure branch this
+  // file exists to test unreachable. So: everything else index.html loads,
+  // MINUS 'data' and 'voice' — those two are loaded lazily, on demand, by the
+  // real A.data.ensure() / A.voiceLoader.ensure() calls under test.
+  const MODULE_ORDER = ['config', 'telemetry', 'util', 'state', 'themes', 'detectors', 'space',
+    'mapview', 'sim', 'net', 'routing', 'ghost', 'radar', 'overlays', 'scanners',
+    'racetimer', 'dragy', 'wake', 'places', 'triplog', 'speedo', 'hud', 'compass',
+    'clock', 'tripmeter', 'gmeter', 'quest', 'weathernow', 'battery', 'coords',
+    'destarrow', 'riderarrows', 'speedalert', 'dimmer', 'tripextras', 'party',
+    'ui', 'auth', 'native', 'ota', 'race'];
+  MODULE_ORDER.forEach(function (name) {
+    win.eval(fs.readFileSync(path.join(ROOT, 'js', name + '.js'), 'utf8'));
+  });
+  return { win, doc: win.document, A: win.App, scriptOutcomes };
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function checkFailedGarageLeavesAWayBack() {
+  group('js/ui.js buildProfilePanel() — a failed garage load leaves a usable panel (reviewer MEDIUM #1)');
+  const { doc, A, scriptOutcomes } = bootRealUi();
+  A.ui.openPanel('profile');
+  await sleep(0);
+  const garageBtn = doc.getElementById('profile-body').querySelector('.pf-garage-btn');
+  ok('the main profile page renders a "My Garage" button to reach the garage', !!garageBtn);
+
+  scriptOutcomes.push('fail'); // js/data.js's injected <script> fires onerror
+  garageBtn.click();
+  await sleep(10);
+
+  const body = doc.getElementById('profile-body');
+  ok('#profile-body is non-empty after the garage load fails (not stranded blank)', body.children.length > 0);
+  const retryBtn = body.querySelector('.pf-garage-btn');
+  ok('a way back is left on screen: the main page (with "My Garage" to retry) is shown, not a blank panel',
+    !!retryBtn, 'children: ' + Array.from(body.children).map((c) => c.className).join(', '));
+  const toasts = doc.getElementById('toasts');
+  ok('a toast told the rider the garage could not load',
+    !!toasts && / garage/i.test(toasts.textContent), toasts && toasts.textContent);
+
+  A.ui.openPanel(null);
+}
+
+async function checkOverlappingOpensRenderOnce() {
+  group('js/ui.js buildProfilePanel() — two overlapping opens render the garage exactly once (reviewer MEDIUM #2)');
+  const { doc, A, scriptOutcomes } = bootRealUi();
+  A.ui.openPanel('profile');
+  await sleep(0);
+  const garageBtn = doc.getElementById('profile-body').querySelector('.pf-garage-btn');
+
+  scriptOutcomes.push('ok'); // one real load: js/data.js actually runs (see bootRealUi)
+  // No debounce on this button (js/ui.js:1698) and no re-entrancy guard used
+  // to exist on buildProfilePanel() — two rapid opens before ensure()
+  // resolves used to both append into the same cleared body.
+  garageBtn.click();
+  garageBtn.click();
+  await sleep(15);
+
+  const body = doc.getElementById('profile-body');
+  const backTitles = body.querySelectorAll('.pf-back-title');
+  const makeSelects = body.querySelectorAll('select');
+  ok('exactly one "My Garage" back header rendered, not two', backTitles.length === 1,
+    'found ' + backTitles.length);
+  ok('at least one garage <select> rendered (the make/model/etc. dropdowns) and none are duplicated',
+    makeSelects.length > 0, 'found ' + makeSelects.length + ' selects');
+
+  A.ui.openPanel(null);
+}
+
+(async function runRemainingGroupsInSequence() {
+  await checkRetryAfterRejection();
+  await checkFailedGarageLeavesAWayBack();
+  await checkOverlappingOpensRenderOnce();
+  process.exit(report());
+})();

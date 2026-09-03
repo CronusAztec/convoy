@@ -1,5 +1,9 @@
 # HISTORY — Convoy (append-only narrative; STATE.md is the map)
 
+## Older §9 history lines trimmed from STATE.md by cycle 3's implementer (hygiene, not required this stage — STATE.md was within budget)
+- Previous mission cycle 59: visual pollers pause when hidden (`test/visibility.test.js`), shipped `cy121`.
+- Previous mission cycle 58: convoy seat resume across reconnects (`test/partyresume.test.js`), shipped `cy120`.
+
 ## Archived STATE.md of the previous mission (20260903-002914-ce0d, cycles 0–61), moved here verbatim by the 2026-09-03 planner of mission 20260903-173653-75d3
 
 # STATE — Convoy front-end improvement mission

@@ -33,7 +33,6 @@
       if (A.telemetry) A.telemetry.step('map_ready');
       A.sim.start();   // player marker + render loop (map runs under the auth screen)
       A.ui.init();     // wire panels/dock/search (no modal yet)
-      A.voice.init();  // walkie-talkie: listen for convoy membership to start/stop voice
       if (A.overlays) A.overlays.init(); // weather/traffic/hazard map overlays
       if (A.native) A.native.init();     // native bridge: bg location + BLE radar + SABRE (no-op on web)
       if (A.wake) A.wake.init();         // keep-screen-awake setting
@@ -79,5 +78,20 @@
   window.addEventListener('load', function () {
     var ric = window.requestIdleCallback || function (cb) { setTimeout(cb, 1); };
     ric(function () { if (A.data && A.data.ensure) A.data.ensure().catch(function () {}); });
+  }, { once: true });
+
+  // Task 3 (cycle 3): js/voice.js (walkie-talkie) is off the boot path too —
+  // same warm-then-init shape as A.data above. No convoy can exist in the
+  // first seconds of boot, and every A.voice consumer except this init call
+  // is already `if (A.voice)`-guarded and already degrades to a silent no-op
+  // when voice hasn't loaded, so warming it at idle and initing it once
+  // loaded costs nothing a rider can notice.
+  window.addEventListener('load', function () {
+    var ric = window.requestIdleCallback || function (cb) { setTimeout(cb, 1); };
+    ric(function () {
+      if (A.voiceLoader && A.voiceLoader.ensure) {
+        A.voiceLoader.ensure().then(function (v) { if (v && v.init) v.init(); }).catch(function () {});
+      }
+    });
   }, { once: true });
 })();

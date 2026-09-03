@@ -42,22 +42,41 @@
     // the server confirms it has a key. No client key → automatic OSRM fallback.
   };
 
+  // Both lazy loaders below read the live ?v= stamp off config.js's own
+  // <script> tag rather than hardcoding it, so the next stamp bump can't
+  // silently break the fetch.
+  function liveStamp() {
+    var tag = document.querySelector('script[src*="config.js?v="]');
+    var i = tag ? tag.src.indexOf('?v=') : -1;
+    return i >= 0 ? tag.src.slice(i) : '';
+  }
+
   // T1.5a: js/data.js (car/paint/name/city catalog, ~16 KB gzip) is off the
   // boot path — every consumer site (js/ui.js, js/party.js) reads it inside
   // a function, never at parse time. ensure() injects the script once and
-  // caches the promise so repeat callers (idle warm + panel opens) share one
-  // load. The ?v= stamp is read off this very script's own tag rather than
-  // hardcoded, so the next stamp bump can't silently break the fetch.
-  var dataPromise = null;
+  // caches the promise (via A.util.loadOnce, which also retries on a failed
+  // load — see js/util.js) so repeat callers (idle warm + panel opens) share
+  // one load.
   A.data.ensure = function () {
     if (A.data.loaded) return Promise.resolve(A.data);
-    if (dataPromise) return dataPromise;
-    var tag = document.querySelector('script[src*="config.js?v="]');
-    var i = tag ? tag.src.indexOf('?v=') : -1;
-    var stamp = i >= 0 ? tag.src.slice(i) : '';
-    dataPromise = A.util.loadScript('js/data.js' + stamp).then(function () {
-      return A.data;
+    // The whole chain (script load + map-to-A.data) is the thing cached by
+    // loadOnce, not just the loadScript() half — two overlapping callers must
+    // get back the SAME promise object, and a bare .then() on a shared cached
+    // promise would hand each caller a distinct derived promise instead.
+    return A.util.loadOnce('data', function () {
+      return A.util.loadScript('js/data.js' + liveStamp()).then(function () { return A.data; });
     });
-    return dataPromise;
+  };
+
+  // Task 3: js/voice.js (walkie-talkie, ~15.6 KB gzip) is lazy too. Unlike
+  // A.data, nothing captures a `var V = A.voice;` at parse time, so there is
+  // no object to seed ahead of time — this just resolves to A.voice once the
+  // injected script has run and defined it.
+  A.voiceLoader = A.voiceLoader || {};
+  A.voiceLoader.ensure = function () {
+    if (A.voice) return Promise.resolve(A.voice);
+    return A.util.loadOnce('voice', function () {
+      return A.util.loadScript('js/voice.js' + liveStamp()).then(function () { return A.voice; });
+    });
   };
 })();
