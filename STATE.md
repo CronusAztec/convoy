@@ -1,7 +1,7 @@
 # STATE — Convoy (the map, not the diary)
 
 > Rewritten 2026-09-03 18:45Z by the planner of mission **20260903-173653-75d3** ("make Convoy load faster, render smoother, use fewer resources").
-> Plan: `/opt/data/forge/missions/20260903-173653-75d3/stages/0001-c000-plan.md` (§4 = the prioritized action plan, §6 = milestones).
+> Plan: `/opt/data/forge/missions/20260903-173653-75d3/stages/0002-c000-plan.md` (v2, 19:05Z; §3 = measurement protocol, §4 = the prioritized action plan, §6 = milestones). v1 (`0001-c000-plan.md`) is the long-form reference.
 > The previous mission's 136 KB STATE.md (cycles 0–61, aspects A–C) is archived verbatim in `HISTORY.md`. Owner of this file: the implementer; ≤ 400 lines / 30 KB.
 
 ## 1. What this app is
@@ -22,8 +22,8 @@ python3 -m http.server 5173          # solo mode (riders simulated); node server
 npm test                             # green = "All 32 suites passed." (frontend.test.js 102 checks; bootAssetGzipBudget measured ≤ 358400)
 npm run test:frontend                # the ratchet suite alone; prints the measured baseline keys
 graphify query "<question>"          # before editing;   graphify update .   # after editing (AST-only, no key)
-# lab performance bench (milestone P0 builds it): node test/perf-bench.js [--idle] → JSON; skips with exit 0 if no browser
-# browser on this box: ~/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome (--headless --no-sandbox --disable-gpu); scratch playwright in /tmp/pw-scratch — never in package.json. Full recipe: HISTORY.md "Headless Chromium — working recipe" (test/browser.test.js still names STATE.md for it)
+# lab performance bench (milestone P0a builds it): node test/perf-bench.js [--cpu 4] [--idle] → one JSON line; SKIP + exit 0 if no browser
+# browser on this box: ~/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome (--headless --no-sandbox --disable-gpu --dump-dom, see test/browser.test.js runChromium()); no playwright anywhere (/tmp/pw-scratch is gone; raw CDP over Node 26's built-in WebSocket if throttling is needed). Full recipe: HISTORY.md "Headless Chromium — working recipe"
 deploy/live-deploy.sh diag           # read-only production status (any stage, once)
 deploy/live-deploy.sh release -- --ota   # PUSH STAGE ONLY, per deploy/PUSH-RUNBOOK.md (Lane A = web + OTA; Lane B = site only)
 ```
@@ -40,8 +40,9 @@ Stamp rule: a stage that edits `index.html`/`css/`/`js/`/`legal/` bumps all 45 `
 | — | Previous mission's aspects A (front-end), B (backend), C (smoothness C1–C4b) | closed / archived in `HISTORY.md` | C5 (≤ 30 requests) is absorbed by P-B |
 
 ## 5. Current milestone
-**P0 — Lab bench + field vitals (aspect P-A).** Build `test/perf-bench.js` (copy `test/browser.test.js`'s `buildFixture()/runChromium()` pattern; drive the full Chromium via CDP with the scratch playwright in `/tmp/pw-scratch`; logging static server with `--host-resolver-rules="MAP * 127.0.0.1, EXCLUDE localhost"` so only same-origin traffic counts; record DCL, load, long tasks, total JS execution, requests, bytes; `--idle` = 30 s on the map shell counting long tasks + rAF callbacks/s; run 1× and 4× CPU throttle; JSON to stdout; exit 0 + SKIP when the browser is absent). Add the `vitals` event to `js/telemetry.js` (LCP/CLS/INP-approx via `PerformanceObserver`, `boot_ms`, `map_ready_ms`, 10 s dropped-frame sample; one event per session; respects the opt-out) and accept it in `server/telemetry.js` with a test in `test/telemetry.test.js`. Record the baseline JSON in the report and in §6 below. Web edit → stamp bump (see §3). Write the stage report at 60 % of budget.
-Then: P1 (fonts/CSS non-blocking, 0 boot API calls, `A.util.loadScript` + `data.js`/themes on demand, define `bootCriticalGzipBytes`/`bootCriticalRequests`) → P2 (parked rAF, `#hud-scan` compositor-only, `test/leaks.test.js` RED) → P3 (leaks GREEN) → P4 (lazy feature manifest) → P5 (`ui.js` split) → P6 (WS payload measurement + deltas) → P7 (containment + blur budget + throttles) → re-plan → P8 (Tier 3).
+**P0a — Lab bench (aspect P-A); then P0b — field vitals.** P0a: build `test/perf-bench.js` (copy `test/browser.test.js`'s `buildFixture()/runChromium()` pattern; zero new dependencies: in-process logging static server that strips the CSP meta and injects counters + a `<pre id="__probe">` JSON probe (cycle-56 recipe, `/tmp/c1meas/srv2.js` — copy, don't require) + `--dump-dom --virtual-time-budget=1500` + `--host-resolver-rules="MAP * 127.0.0.1, EXCLUDE localhost"` so only same-origin traffic counts; CPU throttle / idle via raw CDP on Node's built-in `WebSocket`; record DCL, load, long tasks, total JS execution, requests, gzip bytes, API calls; `--idle` = 30 s on the map shell counting long tasks + rAF callbacks/s; run 1× and 4× CPU throttle; JSON to stdout; exit 0 + SKIP when the browser is absent). Stretch: `--pan`, `--heap`. Record the baseline JSON in the report and in §6. No web edit → no stamp bump. **Write the stage report at 60 % of budget.**
+P0b (next run, or this run only after the P0a report is written): the `vitals` event in `js/telemetry.js` (LCP/CLS/INP-approx via `PerformanceObserver`, `boot_ms`, `map_ready_ms`, 10 s dropped-frame sample; one event per session; respects the opt-out), accepted in `server/telemetry.js`, executed case in `test/telemetry.test.js`. Web edit → stamp rule (§3: bump only if production already serves `cy123`).
+Then: P1 (fonts/CSS non-blocking + font-metric fallback, 0 boot API calls, `A.util.loadScript` + `data.js`/themes on demand, define `bootCriticalGzipBytes`/`bootCriticalRequests`) → P2 (parked rAF, `#hud-scan` compositor-only, timer audit, `test/leaks.test.js` RED) → P3 (leaks + WebRTC peer cleanup GREEN) → P4 (lazy feature manifest) → P5 (`ui.js` split) → P6 (WS payload deltas, server profiling, login/DB audit) → P7 (containment + blur budget + throttles) → re-plan → P8 (Tier 3).
 
 ## 6. Metrics (baseline → current → target; ratchet-down keys live in `test/frontend-baseline.json`)
 | Metric | Baseline 2026-09-03 | Current | Target | Command |
@@ -80,7 +81,7 @@ Then: P1 (fonts/CSS non-blocking, 0 boot API calls, `A.util.loadScript` + `data.
 7. Forge configuration (outside the workspace, `/opt/data/forge/`): give the implement stage a guaranteed report reserve (two report-less stages in the previous mission); point the push prompt at `deploy/PUSH-RUNBOOK.md`.
 
 ## 9. Recent history (one line per cycle; older in `HISTORY.md`)
-- 2026-09-03 cycle 0 (this mission): plan v1 written; STATE.md rewritten to the map format; no code changed; 32 suites green; local `cy123` > production `cy122`.
+- 2026-09-03 cycle 0 (this mission): plan v1 written (18:50Z) and re-planned as v2 (19:05Z, operator re-ran the stage: P0 split into P0a/P0b, measurement protocol, T1.8/T1.9/T2.8/T2.9 added); STATE.md rewritten to the map format; no code changed; 32 suites green; local `cy123` > production `cy122`.
 - Previous mission cycle 61: chat-log freeze at line 100 fixed (`test/chatlog.test.js`), UI/UX truth pass, `cy122 → cy123` (push pending — never ran).
 - Previous mission cycle 60: Frontend truth pass, `test/domids.test.js`, dead solo physics deleted (−1.6 KB gzip), shipped `cy122`.
 - Previous mission cycle 59: visual pollers pause when hidden (`test/visibility.test.js`), shipped `cy121`.
