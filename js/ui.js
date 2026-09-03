@@ -108,9 +108,12 @@
   }
 
   /* ============================== form helpers ============================== */
+  var fieldSeq = 0;
   function mkField(label, child) {
     var w = U.el('div', 'field');
-    w.innerHTML = '<label>' + U.esc(label) + '</label>';
+    var cid = child && child.id ? child.id : 'field-ctl-' + (++fieldSeq);
+    if (child && child.setAttribute && !child.id) child.id = cid;
+    w.innerHTML = '<label for="' + cid + '">' + U.esc(label) + '</label>';
     w.appendChild(child);
     return w;
   }
@@ -268,9 +271,12 @@
         b.type = 'button';
         b.dataset.key = String(key);
         b.innerHTML = U.riderIcon(key, { size: 18 });
+        b.setAttribute('aria-label', 'Rider insignia ' + (key + 1));
+        b.setAttribute('aria-pressed', String(key === active));
         b.addEventListener('click', function () {
-          w.querySelectorAll('.emoji-btn').forEach(function (x) { x.classList.remove('active'); });
+          w.querySelectorAll('.emoji-btn').forEach(function (x) { x.classList.remove('active'); x.setAttribute('aria-pressed', 'false'); });
           b.classList.add('active');
+          b.setAttribute('aria-pressed', 'true');
           if (onChange) onChange(key);
         });
         w.appendChild(b);
@@ -586,9 +592,12 @@
           var b = U.el('button', 'emoji-btn' + (idx === 0 ? ' active' : ''));
           b.type = 'button';
           b.innerHTML = U.convoyFlag(idx);
+          b.setAttribute('aria-label', 'Convoy flag ' + (idx + 1));
+          b.setAttribute('aria-pressed', String(idx === 0));
           b.addEventListener('click', function () {
-            flagRow.querySelectorAll('.emoji-btn').forEach(function (x) { x.classList.remove('active'); });
+            flagRow.querySelectorAll('.emoji-btn').forEach(function (x) { x.classList.remove('active'); x.setAttribute('aria-pressed', 'false'); });
             b.classList.add('active');
+            b.setAttribute('aria-pressed', 'true');
             chosen = idx;
           });
           flagRow.appendChild(b);
@@ -2020,6 +2029,7 @@
         inp.type = 'color';
         inp.value = draft[f.key];
         inp.title = f.label;
+        inp.setAttribute('aria-label', f.label);
         inp.addEventListener('input', function () { draft[f.key] = inp.value; });
         body.appendChild(mkField(f.label, inp));
       });
@@ -2068,6 +2078,7 @@
       inp.type = 'color';
       inp.value = /^#[0-9a-fA-F]{6}$/.test(dc[d.key]) ? dc[d.key] : '#2f80ff';
       inp.title = d.label + ' dot color';
+      inp.setAttribute('aria-label', d.label + ' dot color');
       inp.addEventListener('input', function () { ST.setDotColor(d.key, inp.value); });
       body.appendChild(mkField(d.label, inp));
     });
@@ -2411,9 +2422,20 @@
     }
   }
 
+  var rowSeq = 0;
   function mkRow(title, sub, control) {
     var r = U.el('div', 'setting-row');
-    r.innerHTML = '<div class="setting-text"><b>' + U.esc(title) + '</b>' + (sub ? '<span>' + U.esc(sub) + '</span>' : '') + '</div>';
+    var lid = 'row-lbl-' + (++rowSeq);
+    r.innerHTML = '<div class="setting-text"><b id="' + lid + '">' + U.esc(title) + '</b>' + (sub ? '<span>' + U.esc(sub) + '</span>' : '') + '</div>';
+    // The visible <b> is the control's name. Only wire it when the control is a real
+    // control and has no name of its own — mkSegmented returns a plain wrapper div,
+    // and some callers pass a pre-labelled control.
+    if (control && control.setAttribute
+        && !control.getAttribute('aria-label') && !control.getAttribute('aria-labelledby')
+        && (control.tagName === 'BUTTON' || control.tagName === 'INPUT'
+            || control.tagName === 'SELECT' || control.getAttribute('role'))) {
+      control.setAttribute('aria-labelledby', lid);
+    }
     r.appendChild(control);
     return r;
   }

@@ -35,6 +35,10 @@ function atOrBelowBaseline(label, key, count, detail) {
   H.ok(label + ' (' + count + ') is at or below the stored baseline (' + cap + ')',
     count <= cap,
     (detail ? detail + ' — ' : '') + 'baseline is ratchet-down-only: fix the issue, then lower "' + key + '" in test/frontend-baseline.json');
+  // Print the detail even on a passing run — this is what lets a stage see
+  // the actual per-surface violation id/nodeCount list without guessing or
+  // writing a throwaway probe script.
+  console.log('    ' + key + ': ' + (detail || 'none'));
   measured[key] = count;
 }
 
@@ -199,6 +203,31 @@ async function testSurfaces() {
   A.ui.openPanel(null);
 }
 
+/* ---------------- 2b. generated ids stay unique across repeated opens ----------------
+   The profile panel is destroyed and rebuilt on every open (see mkRow/mkField in
+   js/ui.js). Both use never-resetting module-level counters instead of resetting
+   per-build state, specifically so that opening the panel twice in one session
+   cannot produce two elements with the same id — a duplicate id is itself an
+   axe/html-validate violation, which would silently trade one fixed defect for a
+   new one. */
+function testGeneratedIdsUnique() {
+  H.group('js/ui.js — mkRow/mkField ids stay unique across repeated panel opens');
+  const dom = buildWindow();
+  const win = dom.window;
+  installAsGlobals(win);
+  const A = loadModules(win);
+  A.ui.openPanel('profile');
+  A.ui.openPanel(null);
+  A.ui.openPanel('profile');
+  const rowIds = Array.from(win.document.querySelectorAll('[id^="row-lbl-"]')).map((n) => n.id);
+  const fieldIds = Array.from(win.document.querySelectorAll('[id^="field-ctl-"]')).map((n) => n.id);
+  H.ok('no duplicate "row-lbl-" ids after opening the profile panel twice',
+    new Set(rowIds).size === rowIds.length, 'ids: ' + rowIds.join(', '));
+  H.ok('no duplicate "field-ctl-" ids after opening the profile panel twice',
+    new Set(fieldIds).size === fieldIds.length, 'ids: ' + fieldIds.join(', '));
+  A.ui.openPanel(null);
+}
+
 /* ---------------- 0. baseline ratchet guard: a stage may only LOWER the
    committed caps by fixing a real issue, never raise one to make a red run
    green. Compares the working-tree baseline file against the version last
@@ -214,6 +243,7 @@ function testBaselineRatchet() {
     return;
   }
   for (const key of Object.keys(committed)) {
+    if (typeof committed[key] !== 'number') continue; // e.g. _comment — not a ratcheted metric
     if (!(key in baseline)) continue; // a key may be retired, never silently reappear higher
     H.ok('baseline["' + key + '"] (' + baseline[key] + ') not raised above the committed value (' + committed[key] + ')',
       baseline[key] <= committed[key],
@@ -276,6 +306,7 @@ function testDetector() {
   await testShell();
   testDocumentStructure();
   await testSurfaces();
+  testGeneratedIdsUnique();
   testThemes();
   testStamps();
   testDetector();

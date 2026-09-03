@@ -715,6 +715,72 @@ Each bug has:
   inside `<head>`, and there are no top-level `<path>` elements under `<body>`.
 - **Ships to users when:** the human runs `node release.js --ota` (not done by any agent this mission).
 
+### BUG ui-015 — FIXED (cycle 2 stage 8, 2026-09-03)
+- **Severity:** low
+- **File:** `index.html:241` (was `<div id="radar-dock" role="group" ...>`)
+- **Title:** `#radar-dock` sat outside every ARIA landmark → axe `region` violation on all six tested surfaces
+- **Found by:** cycle-1 IMPROVE stage ran axe directly (the harness only prints violation detail on
+  failure, and every surface was at baseline) and traced the identical `region (1)` violation on
+  shell/nearby/convoy/profile/authWelcome/authLogin to one shared element.
+- **Repro (pre-fix):** any surface, run axe-core WCAG tags — `region` fires on `#radar-dock` because
+  `role="group"` is not a landmark role, so its content (recenter/mute/speed/limit/stop/mic/hazard
+  controls) was never contained by any region/nav/main/etc.
+- **Fix:** `<div role="group">` → `<section aria-label="Radar controls">` (mirrors the same pattern
+  stage 5 used for `#race-hud`/`#radar-alerts`). Verified CSS/JS only ever select it by `#id`, never
+  by tag, so the swap is style- and behaviour-neutral.
+- **Ships to users when:** `node release.js --ota` (not done by any agent this mission).
+
+### BUG ui-016 — FIXED (cycle 2 stage 8, 2026-09-03)
+- **Severity:** high
+- **File:** `js/ui.js` — `mkToggle()` (~line 199) via `mkRow()` (~line 2417), 42 call sites
+- **Title:** Every settings toggle switch had no accessible name — axe `button-name`, 43 nodes on
+  the profile panel alone
+- **Repro (pre-fix):** open Settings, inspect any toggle row with a screen reader — announces
+  "switch, on" or "switch, off" with no indication of which setting it controls; 43 identical,
+  indistinguishable announcements in one panel.
+- **Fix:** `mkRow(title, sub, control)` now gives its visible `<b>` label a unique, never-reused id
+  (module-level counter, since the panel is rebuilt on every open) and points the control at it via
+  `aria-labelledby`, but only when the control has no name of its own — `mkSegmented()` wrapper divs
+  and any pre-labelled control are left untouched.
+- **Ships to users when:** `node release.js --ota` (not done by any agent this mission).
+
+### BUG ui-017 — FIXED (cycle 2 stage 8, 2026-09-03)
+- **Severity:** medium
+- **File:** `js/ui.js:111` (`mkField()`), 66 call sites
+- **Title:** Form fields rendered a visible `<label>` that was never associated with its control —
+  axe `label` (3 nodes, range sliders) + `select-name` (2 nodes)
+- **Repro (pre-fix):** any settings dropdown/slider built via `mkField()` — the label text is on
+  screen but a screen reader announces the bare control ("slider", "combo box") with no name.
+- **Fix:** `mkField()` now gives the control an id (its existing id if it has one, else a
+  never-reused counter) and points a real `<label for>` at it, the native HTML association.
+  Non-control children (e.g. `mkSegmented()` wrappers) still get an id — harmless, `label[for]`
+  pointing at a non-labelable element is not an axe violation.
+- **Ships to users when:** `node release.js --ota` (not done by any agent this mission).
+
+### BUG ui-018 — FIXED (cycle 2 stage 8, 2026-09-03)
+- **Severity:** medium
+- **File:** `js/ui.js` — custom-theme color inputs (~line 2022) and map-dot color inputs (~line 2070)
+- **Title:** `.dot-color` swatch inputs relied on `title` alone for a name — axe `label-title-only`,
+  11 nodes
+- **Repro (pre-fix):** the 6 custom-theme swatches and 5 map-dot swatches on the profile panel each
+  only had `title="Accent"` etc.; `title` is a weak WCAG fallback name, not a real accessible name.
+- **Fix:** added `aria-label` with the same text the `title` already carried at both sites; `title`
+  kept for the mouse tooltip.
+- **Ships to users when:** `node release.js --ota` (not done by any agent this mission).
+
+### BUG ui-019 — FIXED (cycle 2 stage 8, 2026-09-03)
+- **Severity:** medium
+- **File:** `js/ui.js` — `mkIconGrid()` (~line 270, rider insignia picker) and the convoy flag row
+  (~line 592)
+- **Title:** Icon-picker buttons had no accessible name at all — axe `button-name`, 3 nodes on the
+  convoy panel
+- **Repro (pre-fix):** each button's only content was an `aria-hidden="true"` SVG glyph, so the
+  button had zero discernible text.
+- **Fix:** added `aria-label="Rider insignia N"` / `"Convoy flag N"` (abstract geometric glyphs with
+  no established names — no product name invented) and `aria-pressed` mirroring the existing
+  `.active` class toggle, so the picker also announces its current selection.
+- **Ships to users when:** `node release.js --ota` (not done by any agent this mission).
+
 ---
 
 ## Runtime
@@ -839,9 +905,9 @@ Convoy server → http://localhost:5173  (ws: /ws, bots: 0, nearby: 30km)
 
 | Area | critical | high | medium | low | total |
 |---|---:|---:|---:|---:|---:|
-| Frontend | 0 | 4 | 10 | 1 | 18 | (note: frontend-002/003/008/009 are the highs)
-| Server | 4 | 9 | 11 | 0 | 27 | (server-003/006/008/011 critical)
-| Android | 4 | 8 | 7 | 1 | 20 | (android-001/002/003 + ui-014-class)
-| UI/UX | 0 | 4 | 7 | 3 | 14 | (ui-001/004/006/014 fixed; ui-014 added cycle 0 stage 5)
-| Runtime | 0 | 2 | 3 | 1 | 6 |
-| **Total** | **8** | **27** | **38** | **6** | **85** |
+| Frontend | 0 | 4 | 10 | 1 | 15 | (note: frontend-002/003/008/009 are the highs; row total corrected cycle 2 stage 8, was mis-added as 18) |
+| Server | 4 | 9 | 11 | 0 | 24 | (server-003/006/008/011 critical; row total corrected cycle 2 stage 8, was mis-added as 27) |
+| Android | 4 | 8 | 7 | 1 | 20 | (android-001/002/003 + ui-014-class) |
+| UI/UX | 0 | 5 | 10 | 4 | 19 | (ui-001/004/006/014/015/016/017/018/019 fixed; ui-015..019 added cycle 2 stage 8 — #radar-dock landmark, toggle/field/color-swatch/icon-picker accessible names) |
+| Runtime | 0 | 2 | 3 | 1 | 6 | |
+| **Total** | **8** | **28** | **41** | **7** | **84** |
