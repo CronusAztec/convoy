@@ -1,10 +1,11 @@
 {
-  "_comment": "Ratchet down only — lower a number when a real fix reduces that count. Never raise one to make a red run green. Measured 2026-09-03 by test/frontend.test.js (Milestone 1, the harness itself); fixing these is Milestone 3 (accessibility) and later.",
-  "htmlValidateErrors": 57,
+  "_comment": "Ratchet down only — lower a number when a real fix reduces that count. Never raise one to make a red run green (enforced by testBaselineRatchet() against the git HEAD-committed copy of this file). Originally measured 2026-09-03 by test/frontend.test.js (Milestone 1, the harness itself). Re-measured cycle 0 stage 5, two steps: (1) htmlValidateErrors 57->49 by deleting the orphan <path> fragment at index.html:15 that broke the <head>/<body> boundary; axeViolations_auth (5, contaminated by a leaked profile panel behind an unclosed modal, and mislabelled since showAuth('login') actually rendered 'welcome') replaced by axeViolations_authWelcome/authLogin (1/1, the real numbers once the surface actually opens A.ui.openPanel(null) first and clicks through to the login form). (2) htmlValidateErrors 49->13 by adding type=button to all 32 static buttons, aria-label to #btn-avatar, role=region/group -> converted to <section>/kept role=group on #race-hud and #radar-dock, and converting #radar-alerts to <section>; #search-results stayed a div[role=listbox] on purpose (real keyboard-driven ARIA combobox, see the comment in index.html). Per plan amendment §5(b), the remaining 13 (7 void-style self-closing tags, 5 no-inline-style, 1 prefer-native-element for the intentional listbox) are lint-preset taste, not defects, and are the new floor for this rule-class metric. Fixing axeViolations_* further is Milestone 3 and later.",
+  "htmlValidateErrors": 13,
   "axeViolations_shell": 1,
   "axeViolations_nearby": 1,
   "axeViolations_convoy": 2,
   "axeViolations_profile": 5,
-  "axeViolations_auth": 5,
+  "axeViolations_authWelcome": 1,
+  "axeViolations_authLogin": 1,
   "detectorWarnings": 37
 }

@@ -124,6 +124,23 @@ async function testShell() {
     summarizeViolations(violations));
 }
 
+/* ---------------- 1b. document structure sanity (regression for the line-15
+   orphan-markup defect: a leftover favicon fragment terminated <head> early,
+   pushing every stylesheet/script tag and a stray text node into <body>) ---------------- */
+function testDocumentStructure() {
+  H.group('index.html — <head>/<body> boundary is intact');
+  const dom = buildWindow();
+  const doc = dom.window.document;
+  const first = doc.body.firstChild;
+  const firstIsStrayText = !!first && first.nodeType === 3 && first.textContent.trim().length > 0;
+  H.ok('document.body.firstChild is not a non-whitespace text node', !firstIsStrayText,
+    first ? first.nodeName + ' ' + JSON.stringify(first.textContent.slice(0, 20)) : 'body is empty');
+  H.ok('css/styles.css link parses into <head>', !!doc.head.querySelector('link[href*="styles.css"]'),
+    'stylesheet link is missing from <head> — it likely parsed into <body> instead');
+  H.ok('no stray top-level <path> elements in <body>', doc.body.querySelectorAll(':scope > path').length === 0,
+    'found ' + doc.body.querySelectorAll(':scope > path').length + ' — a leftover SVG fragment escaped into body');
+}
+
 /* ---------------- 2. live surfaces: real A.ui panels under jsdom ---------------- */
 async function testSurfaces() {
   H.group('js/ui.js — panels render under jsdom (real A.ui API)');
@@ -140,16 +157,36 @@ async function testSurfaces() {
     return;
   }
 
+  // showAuth(onDone) takes a completion CALLBACK, not a mode string — the mode
+  // is always 'welcome' on open. To reach the login form for real, the surface
+  // below drives the same click path a rider does: close any open panel first
+  // (mirrors the real caller at js/ui.js:426, renderFriendsInto's "Log in"
+  // button), open the welcome screen, let its async config() probe settle,
+  // then click the rendered "Log in" button to render the login form.
   const surfaces = [
     ['nearby', 'nearby panel', () => A.ui.openPanel('nearby')],
     ['convoy', 'convoy panel', () => A.ui.openPanel('convoy')],
     ['profile', 'profile panel', () => A.ui.openPanel('profile')],
-    ['auth', 'auth screen', () => A.ui.showAuth && A.ui.showAuth('login')]
+    ['authWelcome', 'auth screen — welcome', () => {
+      A.ui.openPanel(null);
+      if (!A.ui.showAuth) throw new Error('A.ui.showAuth is not exported');
+      A.ui.showAuth(function () { });
+    }],
+    ['authLogin', 'auth screen — login form', () => {
+      const loginBtn = Array.from(win.document.querySelectorAll('#onboarding button'))
+        .find((b) => b.textContent.trim() === 'Log in');
+      if (!loginBtn) throw new Error('"Log in" button not found on the rendered welcome screen');
+      loginBtn.click();
+    }]
   ];
 
   for (const [key, label, open] of surfaces) {
     try {
       open();
+      // buildAuth()/renderAuth() render behind A.auth.config().then(...) — even
+      // with fetch stubbed to reject, that resolves via a fallback .catch a few
+      // microtasks later. A macrotask tick flushes the whole chain before axe runs.
+      await new Promise((resolve) => setTimeout(resolve, 0));
       H.ok(label + ' opens without throwing', true);
     } catch (e) {
       H.ok(label + ' opens without throwing', false, e.stack.split('\n').slice(0, 3).join(' | '));
@@ -160,6 +197,28 @@ async function testSurfaces() {
       summarizeViolations(violations));
   }
   A.ui.openPanel(null);
+}
+
+/* ---------------- 0. baseline ratchet guard: a stage may only LOWER the
+   committed caps by fixing a real issue, never raise one to make a red run
+   green. Compares the working-tree baseline file against the version last
+   committed to HEAD (new keys — e.g. a surface split into two — are allowed). ---------------- */
+function testBaselineRatchet() {
+  H.group('test/frontend-baseline.json — committed values are a ceiling, never raised');
+  let committed;
+  try {
+    const out = execFileSync('git', ['show', 'HEAD:test/frontend-baseline.json'], { cwd: ROOT, encoding: 'utf8' });
+    committed = JSON.parse(out);
+  } catch (e) {
+    H.ok('baseline ratchet check skipped (git or committed baseline unavailable)', true, e.message);
+    return;
+  }
+  for (const key of Object.keys(committed)) {
+    if (!(key in baseline)) continue; // a key may be retired, never silently reappear higher
+    H.ok('baseline["' + key + '"] (' + baseline[key] + ') not raised above the committed value (' + committed[key] + ')',
+      baseline[key] <= committed[key],
+      'a stage may only LOWER this by fixing a real issue, never raise it to turn a red run green');
+  }
 }
 
 /* ---------------- 3. themes still parse after any CSS/token edit ---------------- */
@@ -213,7 +272,9 @@ function testDetector() {
 }
 
 (async () => {
+  testBaselineRatchet();
   await testShell();
+  testDocumentStructure();
   await testSurfaces();
   testThemes();
   testStamps();

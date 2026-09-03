@@ -24,7 +24,7 @@ Each bug has:
 
 **Severity legend:** `critical` = security hole / data loss / hard crash · `high` = broken feature / resource leak · `medium` = degraded UX / latent bug · `low` = polish / a11y.
 
-**Jump to a section:** [Frontend (18)](#frontend) · [Server (27)](#server) · [Android (20)](#android) · [UI/UX (13)](#uiux) · [Runtime (6)](#runtime)
+**Jump to a section:** [Frontend (18)](#frontend) · [Server (27)](#server) · [Android (20)](#android) · [UI/UX (14)](#uiux) · [Runtime (6)](#runtime)
 
 ### Top priorities (fix first)
 
@@ -577,15 +577,22 @@ Each bug has:
 ---
 
 ## UI/UX
-*HTML + CSS + DOM wiring — 13 bugs*
+*HTML + CSS + DOM wiring — 14 bugs (4 fixed: ui-001, ui-004, ui-006, ui-014)*
 
-### BUG ui-001
+### BUG ui-001 — FIXED (verified cycle 0 stage 5, 2026-09-03)
 - **Severity:** high
-- **File:** `css/styles.css:1467-1473`
+- **File:** `css/styles.css:1810` (was `:1467-1473` when filed; line numbers drift as the file grows — re-verify before trusting any BUGS.md line number)
 - **Title:** Stray duplicate line in `.m-player .m-dot` `box-shadow` corrupts the rule (orphan token after the `;`)
-- **Repro:** Inspect the player marker in DevTools; one intended shadow layer is silently dropped, and the orphan is a parse error.
-- **Impact:** Player dot's intended shadow stack is wrong; future edits risk being swallowed by the invalid declaration.
-- **Fix:** Remove the duplicate line 1472; keep the single `0 2px 6px rgba(0,0,0,.5)` inside the `box-shadow:` value.
+- **Status:** Already fixed by the time this was re-checked; the rule reads clean:
+  ```
+  .m-player .m-dot {
+    box-shadow:
+      0 0 0 2.5px var(--accent),
+      0 0 12px rgba(var(--accent-rgb), .7),
+      0 2px 6px rgba(0, 0, 0, .5);
+  }
+  ```
+  No orphan line, no duplicate. Left in the file as a record that this was checked, not assumed.
 
 ### BUG ui-002
 - **Severity:** high
@@ -597,35 +604,36 @@ Each bug has:
 
 ### BUG ui-003
 - **Severity:** high
-- **File:** `index.html:249` (cross-ref `js/ui.js:97-104`)
+- **File:** `index.html:275` (was `:249`; cross-ref `js/ui.js:97-104`)
 - **Title:** `#onboarding` modal has no Escape handler, no backdrop-click close, no focus trap, body scroll not locked
 - **Repro:** Open the auth screen; press Escape (nothing); click the dimmed backdrop (nothing); Tab repeatedly — focus leaks into the map behind.
 - **Impact:** Modal is a keyboard/focus dead-end; fails WAI-ARIA modal dialog requirements.
 - **Fix:** Add Escape + click-on-backdrop handlers in `openOverlay`/`showAuth`; confine focus within the dialog.
 
-### BUG ui-004
+### BUG ui-004 — FIXED (verified cycle 0 stage 5, not this stage's work)
 - **Severity:** medium
-- **File:** `index.html:50-54`
+- **File:** `index.html:58-60` (was `:50-54`)
 - **Title:** Search input behaves as a combobox but lacks `role="combobox"`, `aria-expanded`, `aria-controls`
-- **Repro:** With a screen reader, focus the search box and type — no "expanded, N results" announcement; arrow-key moves not surfaced.
-- **Impact:** Search incomprehensible to AT; fails WCAG 1.3.1 / 4.1.2.
-- **Fix:** Add `role="combobox" aria-expanded="false" aria-controls="search-results" aria-autocomplete="list"`; toggle `aria-expanded`.
+- **Status:** `#search-input` carries `role="combobox" aria-expanded="false" aria-controls="search-results" aria-autocomplete="list" aria-label="Search a destination"`, and `js/ui.js:2789` toggles `aria-expanded` on the input whenever the results list's `hidden` state changes (the surrounding comment there notes this was itself a prior fix — "bare `results.hidden = x` left aria-expanded stuck"). Both the markup and the runtime behaviour match the fix this bug asked for.
 
 ### BUG ui-005
 - **Severity:** medium
-- **File:** `index.html:51-53`
+- **File:** `index.html:61-63` (was `:51-53`)
 - **Title:** `#search-clear` is a 30×30 px tap target (below the 44×44 minimum) with no keyboard equivalent
 - **Repro:** On mobile, type in search; the × button is hard to tap; no keyboard shortcut to clear.
 - **Impact:** Poor mobile usability; fails WCAG 2.5.5 (target size).
 - **Fix:** Increase clickable area to ≥ 44 px; ensure keyboard-reachable once revealed.
 
-### BUG ui-006
+### BUG ui-006 — FIXED (cycle 0 stage 5, 2026-09-03)
 - **Severity:** medium
-- **File:** `index.html:192`
+- **File:** `index.html:218` (was `:192`)
 - **Title:** `#radar-alerts` has no `role`/`aria-live`; radar alerts never announced to AT (safety-critical)
-- **Repro:** With a screen reader, enter Ghost Mode; new radar alerts stack up visually but nothing is announced.
-- **Impact:** Radar alerts invisible to AT.
-- **Fix:** `role="region"` (or `role="list"`) + `aria-live="polite"` (or `role="alert"` on each `.raalert`).
+- **Status:** `aria-live="polite"` was already present when re-checked this stage. The element was still a
+  `<div>`, which html-validate's `prefer-native-element` rule flagged (no explicit `role` was set at the
+  time, so it also had no landmark role at all for non-live-region purposes) — converted to
+  `<section id="radar-alerts" aria-live="polite" aria-label="Radar alerts">`, which carries the implicit
+  ARIA `region` role for free once it has an accessible name. Radar alerts are now both a landmark and a
+  live region.
 
 ### BUG ui-007
 - **Severity:** medium
@@ -661,7 +669,7 @@ Each bug has:
 
 ### BUG ui-011
 - **Severity:** low
-- **File:** `index.html:156-174`
+- **File:** `index.html:179-197` (was `:156-174`)
 - **Title:** Dock `aria-expanded` is wrong semantics for nav tabs; "Map" never marked `aria-current`
 - **Repro:** With a screen reader, navigate the dock — no tab announced as the current page.
 - **Impact:** Navigation semantics incorrect.
@@ -669,7 +677,7 @@ Each bug has:
 
 ### BUG ui-012
 - **Severity:** low
-- **File:** `index.html:249` (cross-ref `js/ui.js:2366-2407`)
+- **File:** `index.html:275` (was `:249`; cross-ref `js/ui.js:2366-2407`)
 - **Title:** Register/guest form: pledge checkbox has no `aria-required`; errors not `aria-describedby`/`aria-invalid` linked to inputs
 - **Repro:** Open Create account, leave fields empty, check pledge, click Create — error appears but inputs aren't marked invalid for AT.
 - **Impact:** Form errors not programmatically associated; pledge-required state invisible to AT.
@@ -677,11 +685,35 @@ Each bug has:
 
 ### BUG ui-013
 - **Severity:** low
-- **File:** `css/styles.css:482-524` (cross-ref `index.html:124-147`)
+- **File:** `css/styles.css:482-524` (cross-ref `index.html:146-170`, was `:124-147`)
 - **Title:** Closed panels translate off-screen but are not `inert`/`aria-hidden` initially → off-screen focusable tab stops
 - **Repro:** Boot the app, Tab repeatedly — focus lands on invisible off-screen panel controls (settings gear, close).
 - **Impact:** Off-screen focusable elements confuse keyboard users; fails WCAG 2.4.3.
 - **Fix:** Add `inert` (or `aria-hidden="true"` + `tabindex="-1"` on focusable children) to closed panels, or use `visibility:hidden`.
+
+### BUG ui-014 — FIXED (found and fixed cycle 0 stage 5, 2026-09-03)
+- **Severity:** high
+- **File:** `index.html:15` (single line)
+- **Title:** Orphan SVG-favicon fragment terminates `<head>` early, pushing every stylesheet/script into `<body>`
+- **Found by:** `test/frontend.test.js` (Milestone 1's jsdom harness) surfaced this indirectly via inflated
+  `html-validate` error counts (`element-name`/`no-self-closing`/`close-order`/`attr-quotes` all firing on
+  one line); a stage 4 (IMPROVE) review traced it to the actual root cause by parsing `index.html` with
+  jsdom directly and inspecting `document.head`/`document.body`.
+- **Repro (pre-fix):** `<link rel="icon" href="data:image/svg+xml,...">` legitimately closed at its first
+  `</svg>"/>`, but a second, older, never-deleted favicon fragment (`<path d='M12 8 16 10.3...'/></svg>"/>`)
+  followed on the same line with no owning tag. Per the HTML parsing algorithm this orphan content and the
+  literal text `"/>` became the first children of `<body>`, and everything meant for `<head>` — both font
+  preconnects, the Google Fonts stylesheet, `css/styles.css`, the MapLibre CDN CSS/JS, and all 43
+  `<script defer>` tags — parsed into `<body>` instead.
+- **Impact:** Was shipped in production (`cy116`); every browser and the Android WebView built the DOM with
+  scripts/styles outside `<head>`, and a stray text node opened `<body>`. No visually obvious symptom (browsers
+  are lenient about this), which is exactly why three earlier manual passes over `index.html` missed it — only
+  a jsdom `document.head`/`document.body` inspection catches it directly.
+- **Fix:** Deleted the orphan fragment; `index.html:15` now ends cleanly at the real favicon's `</svg>"/>`.
+  `test/frontend.test.js`'s new `testDocumentStructure()` group asserts this can't regress silently: it checks
+  `document.body.firstChild` isn't a stray non-whitespace text node, `css/styles.css`'s `<link>` is actually
+  inside `<head>`, and there are no top-level `<path>` elements under `<body>`.
+- **Ships to users when:** the human runs `node release.js --ota` (not done by any agent this mission).
 
 ---
 
@@ -810,6 +842,6 @@ Convoy server → http://localhost:5173  (ws: /ws, bots: 0, nearby: 30km)
 | Frontend | 0 | 4 | 10 | 1 | 18 | (note: frontend-002/003/008/009 are the highs)
 | Server | 4 | 9 | 11 | 0 | 27 | (server-003/006/008/011 critical)
 | Android | 4 | 8 | 7 | 1 | 20 | (android-001/002/003 + ui-014-class)
-| UI/UX | 0 | 3 | 7 | 3 | 13 |
+| UI/UX | 0 | 4 | 7 | 3 | 14 | (ui-001/004/006/014 fixed; ui-014 added cycle 0 stage 5)
 | Runtime | 0 | 2 | 3 | 1 | 6 |
-| **Total** | **8** | **26** | **38** | **6** | **84** |
+| **Total** | **8** | **27** | **38** | **6** | **85** |
