@@ -182,7 +182,7 @@
       acMerged.push({ key: k, a: a });
     }
     predictTick(); // push the fresh set immediately (no 200ms wait)
-    if (running && !predTimer) predTimer = setInterval(predictTick, PREDICT_MS);
+    if (running && !predTimer) predTimer = U.poll(predictTick, PREDICT_MS);
   }
 
   // Re-extrapolate every aircraft forward to "now" from its last real fix, then
@@ -618,13 +618,13 @@
     // aircraft layer and reveals the hotspot legend. Ensure both are live here too.
     startPolice();
     if (hotspotsOn()) { startHotspots(); showLegend(true); }
-    acTimer = setInterval(pollAircraft, AIRCRAFT_MS);
+    acTimer = U.poll(pollAircraft, AIRCRAFT_MS);
   }
 
   function stop() {
     running = false;
-    if (acTimer) { clearInterval(acTimer); acTimer = null; }
-    if (predTimer) { clearInterval(predTimer); predTimer = null; }
+    acTimer = U.unpoll(acTimer);
+    predTimer = U.unpoll(predTimer);
     showLegend(false);   // hide the legend, but the hotspot layer stays (always-on)
     // Drop any scrubbed preview hour so the always-on layer tracks "now" again —
     // otherwise the heatmap freezes at the previewed hour with no legend to fix it.

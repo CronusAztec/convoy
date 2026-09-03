@@ -293,26 +293,19 @@
   }
 
   /* ---------------- every client fetch gets a deadline ----------------
-     A fetch with no signal never rejects when the socket stalls — a tunnel, a
-     captive portal, a dropped TCP session with no RST: a phone on a motorcycle.
-     Five map layers set a bbox latch BEFORE their fetch and clear it only in
-     .catch() (js/ghost.js fetchPolice/fetchWaze/fetchHotspots, js/overlays.js
-     incidents/NWS), so one stalled response killed that layer for the rest of
-     the ride with no error, no toast and no log line (BUGS.md frontend-020).
-     Every fetch in js/ now goes through fetchT(); test/fetchtimeout.test.js
-     fails the build on a bare fetch(). Mirrors the server's own guard shape
-     (server/waze.js, server/tomtom.js withTimeout) including the fallback for
-     engines without AbortSignal.timeout. A caller-supplied signal is honoured:
-     combined with the deadline through AbortSignal.any where the engine has
-     it, otherwise the caller's wins (every such caller arms its own timer).
+     A fetch with no signal never rejects when the socket stalls (a tunnel, a
+     captive portal — a phone on a motorcycle), and five map layers set a bbox
+     latch BEFORE their fetch that only .catch() clears, so one stalled response
+     killed the layer for the rest of the ride, silently (BUGS.md frontend-020).
+     Every fetch in js/ goes through fetchT(); test/fetchtimeout.test.js fails
+     the build on a bare fetch(). A caller's own signal is honoured (combined
+     with the deadline through AbortSignal.any where the engine has it).
 
-     The table is load-bearing, not a style choice. server/overpass.js tries
-     MIRRORS.length (2) mirrors at TIMEOUT_MS (30 s) each before it answers,
-     so a cold-cache enforcement lookup legitimately takes up to 60 s; a client
-     deadline below the server's own budget aborts WORKING requests and makes
-     the police layer worse, not better. test/fetchtimeout.test.js group C pins
-     overpass >= MIRRORS × TIMEOUT_MS and aircraft > UPSTREAM_TIMEOUT_MS
-     (server/aircraft.js, 12 s) — change the server first, then this table. */
+     The table is load-bearing: server/overpass.js tries MIRRORS.length (2)
+     mirrors at TIMEOUT_MS (30 s) each before it answers, so a client deadline
+     below 60 s aborts WORKING enforcement lookups. test/fetchtimeout.test.js
+     group C pins overpass >= MIRRORS × TIMEOUT_MS and aircraft >
+     UPSTREAM_TIMEOUT_MS (server/aircraft.js) — change the server first. */
   var FETCH_TIMEOUT = {
     overpass: 75000,  // /api/overpass: 2 mirrors × 30 s, plus 15 s for the proxy and the pipe
     aircraft: 20000,  // /api/aircraft: server UPSTREAM_TIMEOUT_MS 12 s, plus slack
@@ -325,7 +318,7 @@
       setTimeout(function () { c.abort(); }, ms);
       return c.signal;
     }
-    return null; // no way to abort on this engine: a plain fetch, exactly as before
+    return null; // no abort on this engine: a plain fetch, as before
   }
   function fetchT(url, opts, ms) {
     var o = {}, k;
@@ -341,6 +334,34 @@
     return fetch(url, o);
   }
 
+  /* Visual-only pollers (BUGS.md frontend-021): a hidden page paints nothing,
+     so the tick is skipped (document.hidden read at tick time) and no request
+     is made; on the way back ONE coalesced refresh runs per poller, only if it
+     is due — no storm when flicking between apps. Timers that alert, speak or
+     transmit stay plain setInterval: test/visibility.test.js lists each with
+     its reason. Returns the interval id; unpoll(id) clears it, returns null. */
+  var polls = [];
+  function poll(fn, ms) {
+    var e = { fn: fn, ms: ms, at: Date.now() };
+    e.id = setInterval(function () {
+      if (document.hidden) return;
+      e.at = Date.now();
+      fn();
+    }, ms);
+    polls.push(e);
+    return e.id;
+  }
+  function unpoll(id) {
+    clearInterval(id);
+    for (var i = 0; i < polls.length; i++) if (polls[i].id === id) { polls.splice(i, 1); break; }
+    return null;
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) return;
+    var now = Date.now();
+    for (var i = 0; i < polls.length; i++) if (now - polls[i].at >= polls[i].ms) { polls[i].at = now; polls[i].fn(); }
+  });
+
   A.util = {
     haversine: haversine, bearing: bearing, destPoint: destPoint,
     relBearing: relBearing, crossTrack: crossTrack,
@@ -349,7 +370,7 @@
     fmtDist: fmtDist, fmtDur: fmtDur, fmtClock: fmtClock,
     hexToRgb: hexToRgb, luma: luma, relLuma: relLuma, contrast: contrast, bestInk: bestInk, esc: esc, safePaint: safePaint, safeFinish: safeFinish, el: el, debounce: debounce, deepClone: deepClone,
     sunTimes: sunTimes, isDaylight: isDaylight,
-    fetchT: fetchT, FETCH_TIMEOUT: FETCH_TIMEOUT,
+    fetchT: fetchT, FETCH_TIMEOUT: FETCH_TIMEOUT, poll: poll, unpoll: unpoll,
     iconKey: iconKey, riderIcon: riderIcon, convoyFlag: convoyFlag, ICON_COUNT: ICON_PATHS.length
   };
 })();

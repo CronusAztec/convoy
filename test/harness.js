@@ -50,6 +50,19 @@ function makeEl(tag) {
   return el;
 }
 
+/* A real listener registry for window and document, so a test can fire a DOM
+   event (visibilitychange, resize …) and prove the module's handler ran. These
+   were no-op stubs until cycle 59: a test of a visibilitychange listener passed
+   before the listener existed. `_listeners(type)` is the assertion surface. */
+function eventTarget(obj) {
+  const listeners = new Map();
+  obj.addEventListener = function (type, fn) { if (!listeners.has(type)) listeners.set(type, []); listeners.get(type).push(fn); };
+  obj.removeEventListener = function (type, fn) { const a = listeners.get(type) || []; const i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); };
+  obj.dispatchEvent = function (ev) { (listeners.get(ev && ev.type) || []).slice().forEach((fn) => fn.call(obj, ev)); return true; };
+  obj._listeners = (type) => (listeners.get(type) || []).slice();
+  return obj;
+}
+
 function installBrowser() {
   const store = new Map();
   const win = {
@@ -64,7 +77,6 @@ function installBrowser() {
     requestAnimationFrame: (fn) => setTimeout(() => fn(Date.now()), 0),
     cancelAnimationFrame: (id) => clearTimeout(id),
     setTimeout, clearTimeout, setInterval, clearInterval,
-    addEventListener() {}, removeEventListener() {},
     speechSynthesis: null,
     AudioContext: null,
     navigator: { geolocation: null, userAgent: 'node' },
@@ -78,9 +90,10 @@ function installBrowser() {
     createElement: makeEl,
     getElementById: () => null,
     querySelector: () => null,
-    querySelectorAll: () => [],
-    addEventListener() {}, removeEventListener() {}
+    querySelectorAll: () => []
   };
+  eventTarget(win);
+  eventTarget(doc);
   win.document = doc;
 
   // Node ≥21 defines `navigator` and `performance` as getter-only globals, so

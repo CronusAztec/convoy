@@ -283,10 +283,10 @@
       refreshRadar().then(function () {
         if (rvPath && S.settings.showWeather) setVisible('weather', true);
       });
-      if (!rvTimer) rvTimer = setInterval(refreshRadar, 5 * 60 * 1000);
+      if (!rvTimer) rvTimer = U.poll(refreshRadar, 5 * 60 * 1000);
     } else {
       setVisible('weather', false);
-      if (rvTimer) { clearInterval(rvTimer); rvTimer = null; }
+      rvTimer = U.unpoll(rvTimer);
     }
   }
 
@@ -295,20 +295,18 @@
     m.setLayoutProperty(id, 'visibility', show ? 'visible' : 'none');
   }
 
-  // Traffic is a live layer, so toggling it on also arms the refresh timer (which
-  // re-fetches visible tiles every TRAFFIC_REFRESH_MS); toggling off stops it.
-  // Keeps the gate on trafficOn() (server must have a TomTom key) so we never
-  // arm refreshes against an unavailable layer.
+  // A live layer: on also arms the TRAFFIC_REFRESH_MS tile refresh, off stops it;
+  // gated on trafficOn() so nothing is armed against a keyless server.
   function setTrafficOn(on) {
     on = !!(on && trafficOn());
     setVisible('traffic', on);
     if (on) {
       if (!trafficTimer) {
         refreshTraffic();
-        trafficTimer = setInterval(refreshTraffic, TRAFFIC_REFRESH_MS);
+        trafficTimer = U.poll(refreshTraffic, TRAFFIC_REFRESH_MS);
       }
     } else if (trafficTimer) {
-      clearInterval(trafficTimer); trafficTimer = null;
+      trafficTimer = U.unpoll(trafficTimer);
     }
   }
 
@@ -326,15 +324,14 @@
     pollHazards();
     fetchIncidents();            // live TomTom incidents for the current view
     fetchNwsAlerts();            // NWS weather warnings for the current view
-    hazardTimer = setInterval(pollHazards, HAZARD_POLL_MS);
-    if (hazardTimer.unref) hazardTimer.unref();
-    if (!incidentTimer) { incidentTimer = setInterval(fetchIncidents, INCIDENT_MS); if (incidentTimer.unref) incidentTimer.unref(); }
-    if (!nwsTimer) { nwsTimer = setInterval(fetchNwsAlerts, NWS_MS); if (nwsTimer.unref) nwsTimer.unref(); }
+    hazardTimer = U.poll(pollHazards, HAZARD_POLL_MS);
+    if (!incidentTimer) incidentTimer = U.poll(fetchIncidents, INCIDENT_MS);
+    if (!nwsTimer) nwsTimer = U.poll(fetchNwsAlerts, NWS_MS);
   }
   function stopHazards() {
-    if (hazardTimer) { clearInterval(hazardTimer); hazardTimer = null; }
-    if (incidentTimer) { clearInterval(incidentTimer); incidentTimer = null; }
-    if (nwsTimer) { clearInterval(nwsTimer); nwsTimer = null; }
+    hazardTimer = U.unpoll(hazardTimer);
+    incidentTimer = U.unpoll(incidentTimer);
+    nwsTimer = U.unpoll(nwsTimer);
     weatherHazards = []; incidentHazards = []; alertHazards = [];
     lastIncidentBbox = null; lastNwsBbox = null; lastHazPos = null;
     var m = map(); if (m && m.getSource('hazards')) m.getSource('hazards').setData(emptyFC());

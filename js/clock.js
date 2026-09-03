@@ -46,8 +46,8 @@
 
   function sync() {
     if (box) box.style.display = S.settings.showClock ? '' : 'none';
-    if (S.settings.showClock) { render(); if (!timer) timer = setInterval(render, 20000); }
-    else if (timer) { clearInterval(timer); timer = null; }
+    if (S.settings.showClock) { render(); if (!timer) timer = U.poll(render, 20000); }
+    else timer = U.unpoll(timer);
   }
 
   function init() {
