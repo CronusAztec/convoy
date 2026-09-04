@@ -1651,6 +1651,11 @@
     // Detach the listener when the overlay closes (closeOverlay clears #onboarding).
     var root = document.getElementById('onboarding');
     var pollClose = setInterval(function () {
+      if (profileOverlayId !== subject.id) { // superseded: detach now (frontend-015)
+        clearInterval(pollClose);
+        if (typeof off === 'function') off();
+        return;
+      }
       if (!root.hidden) return;
       clearInterval(pollClose);
       if (typeof off === 'function') off();

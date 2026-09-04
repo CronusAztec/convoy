@@ -29,7 +29,7 @@
 const fs = require('fs');
 const path = require('path');
 const H = require('./harness');
-const { group, ok, report, ROOT } = H;
+const { group, ok, report, ROOT, bootRealUi, sleep, waitFor } = H;
 
 /* ---------------- (a) index.html no longer references js/data.js ---------------- */
 group('index.html — js/data.js is off the boot path');
@@ -251,96 +251,9 @@ async function checkRetryAfterRejection() {
    chain/order test/frontend.test.js drives (jsdom + the real index.html), so
    this is the same "what a WebView actually renders" guarantee, not a second
    hand-written fixture that can drift from it. ---------------- */
-function bootRealUi(opts) {
-  const scriptDelayMs = (opts && opts.scriptDelayMs) || 0;
-  const { JSDOM } = require('jsdom');
-  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
-  const dom = new JSDOM(html, { url: 'http://localhost/', pretendToBeVisual: true, runScripts: 'outside-only' });
-  const win = dom.window;
-  win.matchMedia = win.matchMedia || function () {
-    return { matches: false, media: '', addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} };
-  };
-  win.Capacitor = undefined;
-  win.fetch = function () { return Promise.reject(new Error('network disabled in test harness')); };
-
-  // jsdom's runScripts:'outside-only' never fetches or executes a dynamically
-  // injected <script src>, so A.data.ensure()'s real loadScript() would hang
-  // forever without this. Intercept just the `src` setter on <script>
-  // elements: queue an outcome per injection, and on "success" actually eval
-  // the real file's source in this window (the same effect a browser's own
-  // fetch+execute-then-fire-onload would have) so D.MAKE_LIST etc. are real,
-  // not empty. Every other tag goes through the unmodified real jsdom path.
-  const scriptOutcomes = [];
-  const realCreateElement = win.document.createElement.bind(win.document);
-  win.document.createElement = function (tag) {
-    const el = realCreateElement(tag);
-    if (String(tag).toLowerCase() === 'script') {
-      Object.defineProperty(el, 'src', {
-        get() { return el.getAttribute('src') || ''; },
-        set(v) {
-          el.setAttribute('src', v);
-          const outcome = scriptOutcomes.length ? scriptOutcomes.shift() : 'ok';
-          setTimeout(function () {
-            if (outcome === 'fail') { if (el.onerror) el.onerror(new win.Event('error')); return; }
-            try { win.eval(fs.readFileSync(path.join(ROOT, String(v).split('?')[0]), 'utf8')); }
-            catch (e) { if (el.onerror) el.onerror(new win.Event('error')); return; }
-            if (el.onload) el.onload(new win.Event('load'));
-          }, scriptDelayMs);
-        }
-      });
-    }
-    return el;
-  };
-
-  function put(name, value) {
-    try { global[name] = value; }
-    catch (e) { Object.defineProperty(global, name, { value, writable: true, configurable: true }); }
-  }
-  put('window', win);
-  put('document', win.document);
-  put('localStorage', win.localStorage);
-  put('navigator', win.navigator);
-  put('requestAnimationFrame', win.requestAnimationFrame ? win.requestAnimationFrame.bind(win) : (fn) => setTimeout(() => fn(Date.now()), 0));
-  put('cancelAnimationFrame', win.cancelAnimationFrame ? win.cancelAnimationFrame.bind(win) : clearTimeout);
-  put('fetch', win.fetch);
-
-  // test/frontend.test.js's own MODULE_ORDER (for jsdom UI-rendering
-  // completeness) still evals js/data.js and js/voice.js unconditionally at
-  // boot — deliberately, per STATE.md: that list is the app's module SET for
-  // jsdom, not a mirror of what index.html currently <script>-tags. Loading
-  // it here too would set A.data.loaded/A.voice before a single test ran,
-  // permanently taking the fast path and making the lazy/failure branch this
-  // file exists to test unreachable. So: everything else index.html loads,
-  // MINUS 'data', 'voice', 'radar', 'scanners', 'race' and 'dragy' — those six
-  // are loaded lazily, on demand, by the real A.data.ensure() /
-  // A.voiceLoader.ensure() / A.lazy.radar() / A.lazy.scanners() /
-  // A.lazy.race() / A.lazy.dragy() calls under test.
-  const MODULE_ORDER = ['config', 'telemetry', 'util', 'state', 'themes', 'detectors', 'space',
-    'mapview', 'sim', 'net', 'routing', 'ghost', 'overlays',
-    'racetimer', 'wake', 'places', 'triplog', 'speedo', 'hud', 'compass',
-    'clock', 'tripmeter', 'gmeter', 'quest', 'weathernow', 'battery', 'coords',
-    'destarrow', 'riderarrows', 'speedalert', 'dimmer', 'tripextras', 'party',
-    'ui', 'auth', 'native', 'ota'];
-  MODULE_ORDER.forEach(function (name) {
-    win.eval(fs.readFileSync(path.join(ROOT, 'js', name + '.js'), 'utf8'));
-  });
-  return { win, doc: win.document, A: win.App, scriptOutcomes };
-}
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-// A.lazy.race() chains TWO sequential "script load" macrotasks (dragy, then
-// race — Trap A's dependency order), so a fixed sleep long enough on a quiet
-// box can still be too short on this one (a persistent, unrelated Chromium
-// session — see STATE.md §8 — makes Node's own timer scheduling jittery
-// under load). Poll instead of guessing a constant.
-async function waitFor(predicate, timeoutMs) {
-  const t0 = Date.now();
-  while (!predicate()) {
-    if (Date.now() - t0 > timeoutMs) return false;
-    await sleep(15);
-  }
-  return true;
-}
+// bootRealUi/sleep/waitFor moved to test/harness.js cycle 7 (shared with the
+// new test/leaks.test.js — same jsdom boot path, "what a WebView actually
+// renders", not two hand-written fixtures that can drift from each other).
 
 async function checkFailedGarageLeavesAWayBack() {
   group('js/ui.js buildProfilePanel() — a failed garage load leaves a usable panel (reviewer MEDIUM #1)');
