@@ -723,6 +723,50 @@ function testBootCost() {
     'bootAssetGzipBudget', gz + indexGz, 'assets raw ' + raw + ' / gzip ' + gz + ', index.html gzip ' + indexGz + ' → ' + Math.round((gz + indexGz) / 1024) + ' KB');
   atOrBelowBaseline('boot external origins — distinct hosts across every <script src> and <link href> in index.html, preconnect/dns-prefetch hints included',
     'bootExternalOrigins', hosts.size, Array.from(hosts).sort().join(', '));
+  // bootRenderBlockingExternal (cycle 19, T2.5): a <link rel="stylesheet"> whose
+  // href is a full URL is a render-blocking request to a THIRD-PARTY origin —
+  // DNS+TLS+download+parse, serialized, before first paint. Measured 2 before
+  // this cycle's font self-hosting (fonts.googleapis.com + maplibre's CDN css),
+  // 1 after (maplibre's is a pinned CDN asset, guardrail 2, a later milestone).
+  const externalStylesheets = Array.from(html.matchAll(/<link\b[^>]*>/g))
+    .filter((m) => /rel="stylesheet"/.test(m[0]) && /href="https?:\/\//.test(m[0]));
+  atOrBelowBaseline('boot render-blocking external stylesheets — <link rel="stylesheet"> tags whose href is a third-party URL (each one is a full DNS+TLS+download+parse chain before first paint)',
+    'bootRenderBlockingExternal', externalStylesheets.length, externalStylesheets.map((m) => m[0]).join(' | '));
+}
+
+function testSelfHostedFonts() {
+  H.group('self-hosted boot fonts (T2.5, cycle 19) — real files, matching preloads, no typo\'d path');
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  const css = fs.readFileSync(path.join(ROOT, 'css', 'styles.css'), 'utf8');
+  const cssFontUrls = Array.from(css.matchAll(/url\((\/fonts\/[^)]+\.woff2)\)/g)).map((m) => m[1]);
+  H.ok('css/styles.css declares at least one @font-face pointing under /fonts/*.woff2',
+    cssFontUrls.length > 0);
+  const badFiles = cssFontUrls.filter((u) => {
+    const p = path.join(ROOT, u.replace(/^\//, ''));
+    if (!fs.existsSync(p)) return true;
+    return fs.readFileSync(p).slice(0, 4).toString('ascii') !== 'wOF2';
+  });
+  H.ok('every url(...) under fonts/ in css/styles.css resolves to a real file on disk starting with the wOF2 magic bytes (' + cssFontUrls.length + ' urls) — ' +
+    'a typo\'d path here silently falls back to system-ui in production and is otherwise invisible',
+    badFiles.length === 0, 'bad: ' + badFiles.join(', '));
+  const preloads = Array.from(html.matchAll(/<link\b[^>]*rel="preload"[^>]*as="font"[^>]*>/g));
+  H.ok('index.html preloads at least one boot font (Chakra Petch 400 + Share Tech Mono 400, the two the first paint uses)',
+    preloads.length >= 2, 'found ' + preloads.length);
+  const preloadHrefs = preloads.map((m) => (m[0].match(/href="([^"]+)"/) || [])[1]).filter(Boolean);
+  const badPreloads = preloadHrefs.filter((h) => cssFontUrls.indexOf(h) === -1);
+  H.ok('every <link rel="preload" as="font"> href is byte-identical to one of the css url(...) strings — a mismatch here is a double-download, not a crash',
+    preloadHrefs.length > 0 && badPreloads.length === 0, 'unmatched preload hrefs: ' + badPreloads.join(', '));
+  const badCrossorigin = preloads.filter((m) => !/\bcrossorigin\b/.test(m[0]));
+  H.ok('every font preload carries `crossorigin` — font fetches are CORS-mode even same-origin; without it the preload is wasted and the font downloads twice',
+    badCrossorigin.length === 0, 'missing crossorigin: ' + badCrossorigin.map((m) => m[0]).join(' | '));
+  // The CSP meta tag is expected to still allowlist both hosts (js/themes.js's
+  // nine alternate themes fetch their fonts lazily, off the boot path) — this
+  // checks that no <link> (preconnect/stylesheet/preload) references them,
+  // not that the strings never appear anywhere in the file.
+  const linkTags = Array.from(html.matchAll(/<link\b[^>]*>/g)).map((m) => m[0]);
+  H.ok('no boot-path <link> (preconnect/stylesheet/preload) references fonts.googleapis.com or fonts.gstatic.com — the CSP meta keeps both for js/themes.js\'s lazy alternate-theme fonts, which is the one place they are still allowed to appear',
+    !linkTags.some((t) => /fonts\.googleapis|fonts\.gstatic/.test(t)),
+    linkTags.filter((t) => /fonts\.googleapis|fonts\.gstatic/.test(t)).join(' | '));
 }
 
 /* ---------------- cycle 8 task 2: the REAL boot graph, not MODULE_ORDER's
@@ -919,6 +963,7 @@ function testDetector() {
   testThemes();
   testStamps();
   testBootCost();
+  testSelfHostedFonts();
   testRealBootGraphSurfaces();
   testFontSizeFloor();
   testAnimationBudget();

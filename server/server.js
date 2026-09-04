@@ -3580,7 +3580,7 @@ const ROOT = path.resolve(__dirname, '..');
 // Explicit allowlist of top-level paths that may be served. Anything else 404s.
 // (Formerly a denylist, which silently served any new file added at the repo root —
 // a path-traversal-class bug waiting for the next config/backup file to land here.)
-const ALLOWED_TOP = ['/', '/index.html', '/js', '/css', '/legal', '/convoy.apk'];
+const ALLOWED_TOP = ['/', '/index.html', '/js', '/css', '/legal', '/convoy.apk', '/fonts'];
 
 /* ---- legal pages ----
    Served at clean, stable, linkable paths because other people's rules point at
@@ -3621,7 +3621,8 @@ const MIME = {
   '.css': 'text/css; charset=utf-8', '.json': 'application/json',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg',
   '.ico': 'image/x-icon', '.md': 'text/markdown; charset=utf-8', '.map': 'application/json',
-  '.apk': 'application/vnd.android.package-archive'  // downloadable Android build (/convoy.apk)
+  '.apk': 'application/vnd.android.package-archive',  // downloadable Android build (/convoy.apk)
+  '.woff2': 'font/woff2'  // self-hosted boot fonts (cycle 19, /fonts/*.woff2)
 };
 
 // Per-IP rate limit + concurrency cap for the CPU-bound /api/tts route (spawns piper).
@@ -3957,7 +3958,7 @@ const httpServer = http.createServer((req, res) => {
     // fs.readFile's EISDIR used to, rather than minting it a validator.
     if (err || !st.isFile()) { res.writeHead(404); res.end('Not found'); return; }
     const meta = {
-      stamped: httpcache.isStamped(qAt >= 0 ? req.url.slice(qAt + 1) : ''),
+      stamped: httpcache.isStamped(qAt >= 0 ? req.url.slice(qAt + 1) : '') || httpcache.isImmutablePath(file),
       immutable: httpcache.IMMUTABLE_ENABLED,
       etag: httpcache.etagFor(st),
       mtime: st.mtime

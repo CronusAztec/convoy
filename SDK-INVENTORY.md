@@ -69,7 +69,8 @@ JavaScript. Each of these hosts sees the device's **IP address** and a
 | MapLibre GL JS 5.24.0 (+ CSS) | `cdn.jsdelivr.net` | Every launch | Nothing. Renderer, runs locally. jsDelivr sees the request. |
 | TensorFlow.js 4.22.0 | `cdn.jsdelivr.net` | **Lazy** — only when a rider picks a profile photo | Nothing. The photo is screened on-device and never uploaded for screening. |
 | NSFWJS 4.2.1 (fallback 2.4.2) + MobileNet model | `cdn.jsdelivr.net` | Same | Same. |
-| Chakra Petch, Share Tech Mono | `fonts.googleapis.com`, `fonts.gstatic.com` | Every launch | Google Fonts sees the IP and User-Agent. No cookies. |
+| Chakra Petch, Share Tech Mono (default theme) | `odoreeci.tech` (self-hosted, `/fonts/*.woff2`) | Every launch | Nothing beyond the normal page request — self-hosted since cycle 19 (T2.5). |
+| Nine alternate-theme fonts (Oswald, Rajdhani, Audiowide, Orbitron, Cinzel/Quicksand, Bangers/Comic Neue, Inter, Monoton) | `fonts.googleapis.com`, `fonts.gstatic.com` | **Lazy** — only if a rider picks an alternate theme | Google Fonts sees the IP and User-Agent. No cookies. A genuine privacy improvement over the previous every-launch row: most riders on the default theme now contact Google Fonts never. |
 | Basemap styles + tiles | `basemaps.cartocdn.com`, `tiles.openfreemap.org` | Every launch | The tile hosts see the IP and **which map area is being viewed**. Disclosed in privacy §5. |
 
 **OTA hotfix channel** (house-built, no SDK): `LiveUpdatePlugin.java` + `js/ota.js`

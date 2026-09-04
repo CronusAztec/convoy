@@ -40,6 +40,8 @@ fs.writeFileSync(path.join(TMP, 'app.js'), APP_JS);
 fs.writeFileSync(path.join(TMP, 'index.html'), INDEX);
 fs.mkdirSync(path.join(TMP, 'js'));                       // a directory, to prove stat-first still 404s it
 fs.writeFileSync(path.join(TMP, 'convoy.apk'), 'PK not really an apk');
+fs.mkdirSync(path.join(TMP, 'fonts'));
+fs.writeFileSync(path.join(TMP, 'fonts', 'chakra-petch-v13-latin-400.woff2'), 'wOF2-fake-font-bytes');
 
 // fs.readFile spy: the 304 branch must never read a body. Wrapping the real
 // function (rather than counting Content-Length) makes the assertion direct.
@@ -49,7 +51,7 @@ fs.readFile = function () { reads++; return realReadFile.apply(fs, arguments); }
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
-  '.apk': 'application/vnd.android.package-archive'
+  '.apk': 'application/vnd.android.package-archive', '.woff2': 'font/woff2'
 };
 const IMMUTABLE = 'public, max-age=31536000, immutable';
 
@@ -150,6 +152,13 @@ const get = (url, headers) => request('GET', url, headers);
   ok('IMMUTABLE_ENABLED is a boolean, true with STATIC_IMMUTABLE unset, and headersFor defaults to it',
     cache.IMMUTABLE_ENABLED === true && process.env.STATIC_IMMUTABLE === undefined &&
     cache.headersFor({ stamped: true, etag: tag, mtime: st.mtime })['Cache-Control'] === IMMUTABLE);
+  ok('isImmutablePath: a .woff2 file directly under a "fonts" directory, any ancestor path',
+    cache.isImmutablePath('/opt/data/convoy/fonts/chakra-petch-v13-latin-400.woff2') &&
+    cache.isImmutablePath(path.join(TMP, 'fonts', 'x.woff2')));
+  ok('isImmutablePath: false for a non-.woff2 file in fonts/, a .woff2 elsewhere, or a bad type',
+    !cache.isImmutablePath(path.join(TMP, 'fonts', 'OFL.txt')) &&
+    !cache.isImmutablePath(path.join(TMP, 'js', 'x.woff2')) &&
+    !cache.isImmutablePath(undefined) && !cache.isImmutablePath(42));
 
   /* ================================================================== */
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -254,6 +263,10 @@ const get = (url, headers) => request('GET', url, headers);
       r.status === 404 && r.body === 'Not found' && r404.status === 404 && r404.body === 'Not found');
     r = await get('/js', { 'if-none-match': '*' });
     ok('production code: a directory with If-None-Match: * is a 404, not a 304 (stat-first guarded by !st.isFile())', r.status === 404, 'got ' + r.status);
+    r = await get('/fonts/chakra-petch-v13-latin-400.woff2');
+    ok('production code: /fonts/*.woff2 -> 200 ' + IMMUTABLE + ' + etag + font/woff2, with NO ?v=cyNNN stamp at all (T2.5, cycle 19)',
+      r.status === 200 && r.headers['cache-control'] === IMMUTABLE && !!r.headers.etag && r.headers['content-type'] === 'font/woff2',
+      JSON.stringify(r.headers));
     useLifted = false;
   }
 

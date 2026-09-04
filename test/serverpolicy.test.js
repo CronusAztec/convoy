@@ -357,6 +357,20 @@ ok('STATIC_IMMUTABLE is read from process.env exactly once, at require time, as 
 ok('server/.env.example documents STATIC_IMMUTABLE and WS_MSG_BUDGET (the runtime tuning knobs are discoverable)',
   /STATIC_IMMUTABLE/.test(ENV_EXAMPLE) && /WS_MSG_BUDGET/.test(ENV_EXAMPLE), 'a knob nobody can find is a knob nobody can turn');
 
+group('T2.5 — self-hosted boot fonts are actually servable (cycle 19)');
+// The two ways a font release breaks silently in production while working
+// fine on `python3 -m http.server`: the top-level dir isn't allowlisted (404
+// for every glyph) or the extension isn't in MIME (served as
+// application/octet-stream, which Chrome refuses to use as a font). Both are
+// one-line adds a careless edit could drop; pin them as source, not just by
+// reading the file.
+ok("ALLOWED_TOP includes '/fonts' — without it every self-hosted font 404s in production",
+  /const ALLOWED_TOP = \[[^\]]*'\/fonts'[^\]]*\];/.test(SRC), 'ALLOWED_TOP line: ' + (SRC.match(/const ALLOWED_TOP = \[[^\]]*\];/) || [''])[0]);
+ok("MIME['.woff2'] is 'font/woff2' — without it every font goes out as application/octet-stream and Chrome refuses to use it",
+  /'\.woff2':\s*'font\/woff2'/.test(SRC));
+ok('the immutable-path helper is wired: server.js calls httpcache.isImmutablePath(file) in the stamped OR-clause of the static tail',
+  /httpcache\.isStamped\([\s\S]*?\)\s*\|\|\s*httpcache\.isImmutablePath\(file\)/.test(SRC));
+
 group('D1 — deferred work is guarded, and leadership goes to a live socket');
 // server-002: five deferred bodies (race teardown, bot invite reply, bot chat
 // reply, bot wave reply, race green light) ran outside every try/catch. The

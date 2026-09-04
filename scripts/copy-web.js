@@ -8,7 +8,7 @@ const path = require('path');
 
 const root = path.resolve(__dirname, '..');
 const www = path.join(root, 'www');
-const targets = ['index.html', 'js', 'css'];
+const targets = ['index.html', 'js', 'css', 'fonts'];
 
 function rmrf(p) { if (fs.existsSync(p)) fs.rmSync(p, { recursive: true, force: true }); }
 function copyDir(src, dst) {

@@ -29,7 +29,7 @@ Last reviewed: 2026-08-25.
 | `org.jetbrains.kotlinx:kotlinx-coroutines-play-services` | — | Apache-2.0 | Transitive of `@capacitor/geolocation`. |
 | [ws](https://github.com/websockets/ws) | 8.x | MIT | WebSocket server. |
 | [node-postgres (`pg`)](https://node-postgres.com/) | 8.x | MIT | Postgres client. |
-| [Chakra Petch](https://fonts.google.com/specimen/Chakra+Petch), [Share Tech Mono](https://fonts.google.com/specimen/Share+Tech+Mono) | — | SIL Open Font License 1.1 | Served by Google Fonts. |
+| [Chakra Petch](https://fonts.google.com/specimen/Chakra+Petch), [Share Tech Mono](https://fonts.google.com/specimen/Share+Tech+Mono) | — | SIL Open Font License 1.1 | Self-hosted since cycle 19 (`fonts/*.woff2`, latin + latin-ext subsets; licence text travels with the files at `fonts/OFL.txt`). Google Fonts still serves the nine alternate themes' fonts, lazily, on theme switch. |
 | [Piper](https://github.com/rhasspy/piper) neural TTS (optional, self-hosted) | — | MIT (voice models vary — check the model card) | Only present if the operator installs it. |
 
 **BSD-3-Clause (MapLibre GL JS)** — redistribution in binary form must reproduce

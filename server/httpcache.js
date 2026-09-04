@@ -17,9 +17,20 @@
 
      request                          Cache-Control                        ETag  Last-Modified
      stamped (?v=cyNNN), switch on    public, max-age=31536000, immutable  yes   yes
+     /fonts/*.woff2, switch on        public, max-age=31536000, immutable  yes   yes
      stamped, STATIC_IMMUTABLE=0      no-cache                             yes   yes
      unstamped (index.html, /, the    no-cache                             yes   yes
        legal pages, /convoy.apk, …)
+
+   /fonts/*.woff2 (cycle 19, T2.5) gets the same immutable treatment as a
+   ?v=cyNNN asset even though it carries no query stamp: the contract is that
+   the upstream font VERSION lives in the filename itself (e.g.
+   chakra-petch-v13-latin-400.woff2 — see fonts/OFL.txt and css/styles.css's
+   @font-face block), so a font upgrade is a new filename, never a stale byte
+   at an old one. Without this rule every self-hosted font would be
+   revalidated on EVERY page load — a regression versus the gstatic-served
+   fonts it replaced, which were immutable for a year by default. Gated by
+   the same STATIC_IMMUTABLE=0 kill switch as the stamp path.
 
    index.html is NEVER immutable. It is the unstamped entry point that names
    the current stamp; cache it for a year and no rider ever sees a new release,
@@ -41,6 +52,7 @@
    policy lives here and not inline in server.js's static handler (server.js
    exits at boot without Supabase config and cannot be required at all). */
 'use strict';
+const path = require('path');
 
 // Kill switch. STATIC_IMMUTABLE=0 in convoy.env + a restart returns every
 // static response to `no-cache` (today's behaviour, plus the ETag) with no
@@ -56,6 +68,19 @@ const STAMP_RE = /(^|[?&])v=cy\d+(&|$)/;
 
 function isStamped(query) {
   return typeof query === 'string' && STAMP_RE.test(query);
+}
+
+// Path-based immutable rule alongside the query-based one above: a font under
+// /fonts/ is versioned by filename, not by query, so the path alone is as
+// trustworthy a cache key as a ?v=cyNNN stamp (see the header comment table).
+// Takes the resolved file path (not the URL) so it works unmodified inside
+// server.js's static tail, which is lifted verbatim into a `new Function()`
+// with only fs/path/req/res/file/httpcache/MIME in scope — `file` is one of
+// those names, an `urlPath` variable from earlier in server.js is not.
+function isImmutablePath(file) {
+  return typeof file === 'string' &&
+    path.extname(file).toLowerCase() === '.woff2' &&
+    path.basename(path.dirname(file)) === 'fonts';
 }
 
 // W/"<size hex>-<mtime ms hex>": moves whenever the file's size or mtime does,
@@ -98,4 +123,4 @@ function headersFor(opts) {
   return h;
 }
 
-module.exports = { isStamped, etagFor, matchesEtag, headersFor, IMMUTABLE_ENABLED };
+module.exports = { isStamped, isImmutablePath, etagFor, matchesEtag, headersFor, IMMUTABLE_ENABLED };

@@ -299,10 +299,17 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
    without waiting 5s per run. */
 const CDP_SEND_TIMEOUT_MS = Number(process.env.CONVOY_CDP_TIMEOUT_MS) || 5000;
 
-// Last-resort net (cycle 18): every openCdp() session lives here until closeCdp()
-// removes it, so a throw *outside* runIdleCdp()'s try/finally (e.g. during the
-// Page.enable/Runtime.enable/Page.navigate sequence in openCdp's caller, before the
-// try block is entered) still gets its Chrome process tree reaped on process exit.
+// Last-resort net (cycle 18, coverage completed cycle 19): every openCdp() session is
+// added to this set as soon as its child process is spawned — *before* the DevTools
+// handshake even starts, not only after a full successful connection — so both a
+// connect-phase failure (fail(), below) and a throw outside runIdleCdp()'s try/finally
+// get their Chrome process tree and temp --user-data-dir reaped, either explicitly via
+// closeCdp() or by the process.on('exit') net below. Cycle 18 only covered the
+// post-connection path (a session already in this set); a connect-phase failure used to
+// reject before ever being added, leaking a detached Chrome + a /tmp/cprof-cdp-* dir on
+// every DevToolsActivePort/json-list/no-page-target failure (found by the cycle-18
+// review, fixed here — see the CONVOY_CHROMIUM fault-injection test in package.json's
+// perf-bench notes / the cycle-19 report).
 const LIVE_CDP_SESSIONS = new Set();
 process.on('exit', () => { for (const s of LIVE_CDP_SESSIONS) closeCdp(s); });
 
@@ -314,13 +321,18 @@ function openCdp(bin) {
       '--window-size=390,844', '--host-resolver-rules=MAP * 127.0.0.1, EXCLUDE localhost',
       '--user-data-dir=' + dir, '--remote-debugging-port=0', 'about:blank'
     ], { stdio: ['ignore', 'ignore', 'ignore'], detached: true });
+    // Tracked from the moment the child exists — not only once the handshake finishes —
+    // so every fail() path below has a real session to hand to closeCdp().
+    const session = { child, dir, ws: null, send: null };
+    LIVE_CDP_SESSIONS.add(session);
     let settled = false;
     // fail() is a no-op after the session has resolved (settled=true) — this is
     // deliberate for the *connect* phase (retrying/erroring before we have a usable
     // session makes no sense once callers already hold one). Past that point,
     // ws.onclose/ws.onerror below are what surfaces a dead socket, by rejecting every
-    // in-flight send() instead of silently doing nothing.
-    const fail = (e) => { if (!settled) { settled = true; reject(e); } };
+    // in-flight send() instead of silently doing nothing. Every connect-phase fail()
+    // now tears the process/dir down itself via closeCdp() before rejecting.
+    const fail = (e) => { if (!settled) { settled = true; closeCdp(session); reject(e); } };
     child.on('error', fail);
     (async () => {
       let port = null;
@@ -338,6 +350,7 @@ function openCdp(bin) {
       const target = list.find((t) => t.type === 'page');
       if (!target) return fail(new Error('no page target in /json/list'));
       const ws = new WebSocket(target.webSocketDebuggerUrl);
+      session.ws = ws;
       const pending = new Map();
       let nextId = 0;
       const rejectAllPending = (err) => {
@@ -350,7 +363,15 @@ function openCdp(bin) {
       };
       ws.onerror = () => { fail(new Error('CDP WebSocket error')); rejectAllPending(new Error('CDP WebSocket error')); };
       ws.onclose = () => rejectAllPending(new Error('CDP WebSocket closed with a send() still pending'));
-      await new Promise((res) => { ws.onopen = res; });
+      // Bounded the same as a CDP send() — an open that never fires would otherwise
+      // suspend this IIFE forever while still holding the child process (review HIGH).
+      let openTimer;
+      const openTimeout = new Promise((_, rej) => {
+        openTimer = setTimeout(() => rej(new Error('CDP WebSocket did not open within ' + CDP_SEND_TIMEOUT_MS + 'ms')), CDP_SEND_TIMEOUT_MS);
+      });
+      try {
+        await Promise.race([new Promise((res) => { ws.onopen = res; }), openTimeout]);
+      } catch (e) { return fail(e); } finally { clearTimeout(openTimer); }
       const send = (method, params) => new Promise((resolve, reject) => {
         const id = ++nextId;
         const timer = setTimeout(() => {
@@ -365,10 +386,9 @@ function openCdp(bin) {
         });
         ws.send(JSON.stringify({ id, method, params: params || {} }));
       });
+      session.send = send;
       if (!settled) {
         settled = true;
-        const session = { child, dir, ws, send };
-        LIVE_CDP_SESSIONS.add(session);
         resolve(session);
       }
     })();
@@ -377,7 +397,7 @@ function openCdp(bin) {
 
 function closeCdp(session) {
   LIVE_CDP_SESSIONS.delete(session);
-  try { session.ws.close(); } catch (e) { /* already closed */ }
+  try { if (session.ws) session.ws.close(); } catch (e) { /* already closed, or never opened */ }
   try { process.kill(-session.child.pid, 'SIGKILL'); } catch (e) { try { session.child.kill('SIGKILL'); } catch (e2) { /* already dead */ } }
   try { fs.rmSync(session.dir, { recursive: true, force: true }); } catch (e) { /* best effort */ }
 }
