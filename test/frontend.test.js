@@ -742,13 +742,13 @@ function testRealBootGraphSurfaces() {
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const LAZY_MODULES = ['data', 'voice', 'radar', 'scanners', 'race', 'dragy',
     'tripmeter', 'gmeter', 'weathernow', 'battery', 'coords', 'destarrow', 'speedalert', 'dimmer', 'tripextras',
-    'riderarrows'];
+    'riderarrows', 'vitals'];
   // app.js only wires a DOMContentLoaded listener assuming a live map/socket/
   // GPS (same reason MODULE_ORDER and test/harness.js's bootRealUi() both
   // exclude it) — nothing under test calls into it.
   const bootModules = bootModuleNames(html).filter((m) => m !== 'app');
   const stillLazy = LAZY_MODULES.filter((m) => !bootModules.includes(m));
-  H.ok('the derived boot-graph list still excludes all sixteen known-lazy modules — a self-check that the parser found the real tags, not a stale array (if this fails, a module was un-lazied and this gate\'s panel list may need a deliberate update)',
+  H.ok('the derived boot-graph list still excludes all seventeen known-lazy modules — a self-check that the parser found the real tags, not a stale array (if this fails, a module was un-lazied and this gate\'s panel list may need a deliberate update)',
     stillLazy.length === LAZY_MODULES.length,
     'still excluded: ' + stillLazy.join(', ') + '; now present: ' + LAZY_MODULES.filter((m) => bootModules.includes(m)).join(', '));
 

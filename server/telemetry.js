@@ -75,10 +75,39 @@ function bucket(day) {
       quit: {},         // last screen -> sessions that ended there
       events: {},       // analytics event name -> count
       releases: {},     // release tag -> sessions
-      fp: {}            // fingerprint -> { n, type, msg, at, release }
+      fp: {},           // fingerprint -> { n, type, msg, at, release }
+      vitals: {}        // release -> metric -> { n, sum, s: [] } (see recordVitals)
     };
   }
   return b;
+}
+
+/* Field Web Vitals (cycle 15). Per metric, a cap on the raw value a client is
+   allowed to claim — generous enough for a genuinely slow device, tight
+   enough that a corrupted client can't skew the pool. CLS/INP travel from the
+   client already ×1000/as whole ms respectively (js/vitals.js), so their caps
+   are in that same scaled unit. */
+const VITALS_CAPS = { lcp: 120000, dcl: 120000, load: 120000, ttfb: 120000, cls: 10000, inp: 60000, lt: 10000 };
+const VITALS_METRICS = Object.keys(VITALS_CAPS);
+// Distinct raw samples kept per (day, release, metric) for the p75 sort.
+// Beyond this, later samples in the same day are simply dropped rather than
+// reservoir-sampled — this is a diagnostic percentile, not a billing figure,
+// and "drop" keeps the number exactly reproducible from a fixture in a test,
+// which reservoir sampling's randomness would not.
+const VITALS_RESERVOIR = 100;
+
+function recordVitals(b, release, v) {
+  if (!v || typeof v !== 'object') return;
+  const store = b.vitals || (b.vitals = {});   // restored-from-disk buckets predate this key (see load())
+  const rel = store[release] || (store[release] = {});
+  for (const m of VITALS_METRICS) {
+    const n = num(v[m], VITALS_CAPS[m]);
+    if (n == null) continue;
+    const e = rel[m] || (rel[m] = { n: 0, sum: 0, s: [] });
+    e.n++;
+    e.sum += n;
+    if (e.s.length < VITALS_RESERVOIR) e.s.push(n);
+  }
 }
 
 /* ---------------- ingest ----------------
@@ -144,6 +173,9 @@ function ingest(batch, meta) {
       }
       case 'session':
         break; // the counters above already happened on first sight
+      case 'vitals':
+        recordVitals(own, release, ev.v);
+        break;
       default:
         accepted--; // unknown kind — ignore rather than store
     }
@@ -216,6 +248,7 @@ function stats(daysBack) {
   const keys = Object.keys(days).sort().slice(-n);
   const totals = { sessions: 0, crashed: 0, errors: 0, serverErrors: 0 };
   const steps = {}, quit = {}, events = {}, fp = {}, releases = {};
+  const vitalsPool = {};   // metric -> { n, sum, s: [] }, pooled across days AND releases
 
   for (const k of keys) {
     const b = days[k];
@@ -231,6 +264,33 @@ function stats(daysBack) {
       cur.n += e.n;
       if (e.at > cur.at) { cur.at = e.at; cur.release = e.release; }
     }
+    const bv = b.vitals || {};   // absent on a day bucket restored from pre-cycle-15 disk state
+    for (const rel in bv) {
+      if (!Object.prototype.hasOwnProperty.call(bv, rel)) continue;
+      for (const m in bv[rel]) {
+        if (!Object.prototype.hasOwnProperty.call(bv[rel], m)) continue;
+        const e = bv[rel][m];
+        const cur = vitalsPool[m] || (vitalsPool[m] = { n: 0, sum: 0, s: [] });
+        cur.n += e.n;
+        cur.sum += e.sum;
+        cur.s = cur.s.concat(e.s);
+      }
+    }
+  }
+
+  // p75 of the pooled reservoir, index Math.ceil(0.75*len)-1. cls travels
+  // scaled ×1000 from the client (see js/vitals.js); scale both p75 and mean
+  // back down here so the payload carries a real 0.0x figure throughout.
+  const vitals = {};
+  for (const m of VITALS_METRICS) {
+    const e = vitalsPool[m];
+    if (!e || !e.n) { vitals[m] = { p75: null, n: 0, mean: null }; continue; }
+    const sorted = e.s.slice().sort(function (a, b) { return a - b; });
+    const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil(0.75 * sorted.length) - 1));
+    let p75 = sorted.length ? sorted[idx] : null;
+    let mean = Math.round(e.sum / e.n);
+    if (m === 'cls') { if (p75 != null) p75 = p75 / 1000; mean = mean / 1000; }
+    vitals[m] = { p75: p75, n: e.n, mean: mean };
   }
 
   // The headline. An empty window is not 100% crash-free, it is unknown — say
@@ -250,6 +310,7 @@ function stats(daysBack) {
     errors: totals.errors,
     serverErrors: totals.serverErrors,
     releases: releases,
+    vitals: vitals,
     // Funnel as reached-counts plus the share of sessions that got there.
     funnel: STEPS.map(function (s) {
       const c = steps[s] || 0;
@@ -274,6 +335,12 @@ function stats(daysBack) {
 function str(v, max) {
   if (v == null) return '';
   return String(v).slice(0, max);
+}
+// A `null` return means "not recorded" — never coerced to 0, which would
+// silently drag a p75 down and lie in the flattering direction.
+function num(v, max) {
+  const n = Math.round(+v);
+  return Number.isFinite(n) && n >= 0 && n <= max ? n : null;
 }
 function merge(into, from) {
   for (const k in from) {

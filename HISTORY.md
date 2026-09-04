@@ -13,6 +13,10 @@ Improve-directive cycle 2 done — the cycle-2 lazy-loader hardened (retry-on-re
 - Previous mission cycle 59: visual pollers pause when hidden (`test/visibility.test.js`), shipped `cy121`.
 - Previous mission cycle 58: convoy seat resume across reconnects (`test/partyresume.test.js`), shipped `cy120`.
 
+## Older §9 history lines trimmed from STATE.md by cycle 15's implementer (directive task 4 hygiene — STATE.md was over its ≤30720 B budget after adding two push-history lines + the field-vitals milestone)
+- 2026-09-04 cycle 11 (PUSH, stage 0061): shipped T2.6 wire gate to production — Lane B, no stamp bump, commit `d85e9c5`. 0 BLOCKER/HIGH, 39/39 suites, journal clean.
+- 2026-09-04 cycle 11 (IMPLEMENT): shipped T2.6 (`server/wiregate.js`, per-viewer wire gate, `test/wiregate.test.js` 39th suite). N=60 moving −38.8%, parked −93.9%, stretch bar (≤0.6×) missed by ~2% — corrected cycle 12 (WS compression was the right lever). Full narrative: `HISTORY.md`.
+
 ## Older §9 history lines trimmed from STATE.md by cycle 4's implementer (directive task 4 hygiene)
 - Previous mission cycle 61: chat-log freeze at line 100 fixed (`test/chatlog.test.js`), UI/UX truth pass, `cy122 → cy123` (push pending — never ran).
 - Previous mission cycle 60: Frontend truth pass, `test/domids.test.js`, dead solo physics deleted (−1.6 KB gzip), shipped `cy122`.

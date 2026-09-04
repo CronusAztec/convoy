@@ -49,8 +49,8 @@ const ES = ['Array', 'ArrayBuffer', 'Boolean', 'DataView', 'Date', 'Error', 'Flo
   'String', 'TypeError', 'Uint8Array', 'decodeURIComponent', 'encodeURIComponent', 'isFinite', 'isNaN',
   'parseFloat', 'parseInt'];
 // Host globals that Node (>= 18) and every browser both define. Every tree.
-const HOST = ['AbortController', 'AbortSignal', 'URL', 'URLSearchParams', 'clearInterval', 'clearTimeout',
-  'console', 'fetch', 'setInterval', 'setTimeout'];
+const HOST = ['AbortController', 'AbortSignal', 'PerformanceObserver', 'URL', 'URLSearchParams', 'clearInterval',
+  'clearTimeout', 'console', 'fetch', 'setInterval', 'setTimeout'];
 // Node only: real globals, plus the CommonJS wrapper's parameters — which are
 // NOT globals at all; they are verified through this module's own wrapper.
 const NODE = ['Buffer', 'process'];

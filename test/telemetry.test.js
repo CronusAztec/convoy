@@ -23,7 +23,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { installBrowser, loadModule, group, ok, report } = require('./harness');
+const { installBrowser, loadModule, group, ok, report, ROOT } = require('./harness');
 
 /* ---------------- server module, with DATA_DIR redirected ----------------
    store.js is stubbed rather than loaded: telemetry.js wants exactly one thing
@@ -120,6 +120,7 @@ ok('scalars are kept', props.arrived === true && props.dist === 1234.57, JSON.st
 ok('no coordinate appears anywhere in the payload', allBodies().indexOf('118.25') < 0);
 
 function lastBatchAfterFlush(t) { t.flush(); return lastBatch(); }
+function near(a, b) { return Math.abs(a - b) < 0.001; }
 
 /* ================================================================== */
 group('client — the opt-out is a network switch, not a UI one');
@@ -251,6 +252,73 @@ ok('a malformed DSN is ignored rather than posted to garbage',
   JSON.stringify(sends.map(function (s) { return s.url; })));
 
 /* ================================================================== */
+group('client — field vitals (js/vitals.js): lazy, zero boot cost, reports exactly once at session end');
+
+{
+  const indexHtml = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  ok('js/vitals.js is not referenced by any <script> tag in index.html — reachable only via A.lazy.vitals()',
+    !/<script[^>]*src="js\/vitals\.js[^"]*"/.test(indexHtml));
+  ok('js/vitals.js exists on disk (fetched lazily, still shipped in the OTA bundle)',
+    fs.existsSync(path.join(ROOT, 'js', 'vitals.js')));
+
+  // A fixture PerformanceObserver whose .observe() WORKS for
+  // largest-contentful-paint/layout-shift/longtask but THROWS for 'event' —
+  // proves each of js/vitals.js's four observers is independently
+  // try/catch-wrapped, not guarded by one shared try around all of them.
+  function FakePO(cb) { this.cb = cb; }
+  FakePO.prototype.observe = function (opts) {
+    if (opts.type === 'event') throw new Error('event timing unsupported on this WebView');
+    if (opts.type === 'largest-contentful-paint') {
+      this.cb({ getEntries: function () { return [{ startTime: 1000 }, { startTime: 2345 }]; } });
+    } else if (opts.type === 'layout-shift') {
+      this.cb({
+        getEntries: function () {
+          return [{ value: 0.05, hadRecentInput: false }, { value: 0.2, hadRecentInput: true }, { value: 0.033, hadRecentInput: false }];
+        }
+      });
+    } else if (opts.type === 'longtask') {
+      this.cb({ getEntries: function () { return [{}, {}]; } });
+    }
+  };
+  win.PerformanceObserver = FakePO;
+  global.PerformanceObserver = FakePO;
+
+  T = loadTelemetry();
+  loadModule('js/vitals.js');
+  const V = win.App.vitals;
+  ok('A.vitals is exported with init/snapshot', !!(V && V.init && V.snapshot));
+
+  V.init();
+  const snap = V.snapshot();
+  ok('lcp is the LAST largest-contentful-paint entry\'s startTime', snap.lcp === 2345, JSON.stringify(snap));
+  ok('cls sums layout-shift values, excluding the one with hadRecentInput', near(snap.cls, 0.083),
+    JSON.stringify(snap));
+  ok('inp stayed unset — the "event" observer threw at .observe() time, and that did not stop the others',
+    snap.inp === null, JSON.stringify(snap));
+  ok('long tasks were still counted from the separate "longtask" observer', snap.lt === 2, JSON.stringify(snap));
+
+  sends.length = 0;
+  T.end('hidden');
+  const events = lastBatch().events || [];
+  const vEvents = events.filter(function (e) { return e.k === 'vitals'; });
+  ok('exactly one vitals event reaches the queue when the session ends', vEvents.length === 1,
+    JSON.stringify(events));
+  const v = vEvents[0] && vEvents[0].v;
+  ok('it carries the rounded lcp', v && v.lcp === 2345, JSON.stringify(v));
+  ok('...and cls scaled ×1000 for the wire (0.083 -> 83)', v && v.cls === 83, JSON.stringify(v));
+  ok('...and no inp field at all (never coerced to 0)', v && v.inp === undefined, JSON.stringify(v));
+  ok('...and the long-task count', v && v.lt === 2, JSON.stringify(v));
+
+  sends.length = 0;
+  T.end('again');
+  ok('a second end() reports nothing at all — the vitals report is exactly-once, not per-call',
+    sends.length === 0, 'sends=' + sends.length);
+
+  delete win.PerformanceObserver;
+  delete global.PerformanceObserver;
+}
+
+/* ================================================================== */
 group('server — crash-free sessions is counted honestly');
 
 server._reset();
@@ -328,6 +396,56 @@ let rec = {};
 try { rec = JSON.parse(lastLine); } catch (e) { }
 ok('...as one JSON object per line, with the stack', rec.type === 'uncaughtException' &&
   /db pool exhausted/.test(rec.stack || ''), lastLine && lastLine.slice(0, 120));
+
+/* ================================================================== */
+group('server — field vitals: clamped, bounded, honestly empty');
+
+server._reset();
+ok('an empty window reports null p75 for every metric, never a reassuring 0',
+  server.stats(7).vitals.lcp.p75 === null && server.stats(7).vitals.cls.p75 === null &&
+  server.stats(7).vitals.lcp.n === 0);
+
+let vr = server.ingest({ sid: 'v1', release: 'cy132', events: [{ k: 'vitals', v: { lcp: 2100, cls: 83, inp: 140, dcl: 900, load: 1200, ttfb: 300, lt: 1 } }] });
+ok('a well-formed vitals event is accepted', vr.ok === true && vr.accepted === 1, JSON.stringify(vr));
+
+vr = server.ingest({ sid: 'v1', release: 'cy132', events: [{ k: 'vitals', v: { lcp: 'x', cls: -5, inp: 1e9 } }] });
+ok('a malformed vitals payload (non-numeric, negative, way-over-cap) is still accepted as a batch but records nothing, and never throws',
+  vr.ok === true && vr.accepted === 1);
+
+vr = server.ingest({ sid: 'v1', release: 'cy132', events: [{ k: 'vitals' }] });
+ok('a vitals event with no `v` at all does not throw', vr.ok === true && vr.accepted === 1);
+
+let vst = server.stats(7);
+ok('none of the malformed/missing samples above made it into the pool — only the one well-formed lcp',
+  vst.vitals.lcp.n === 1, 'n=' + vst.vitals.lcp.n);
+ok('cls is reported unscaled (÷1000 back down from the wire units)', near(vst.vitals.cls.mean, 0.083),
+  'mean=' + vst.vitals.cls.mean);
+
+// A hand-computed p75 fixture, not a range.
+server._reset();
+[1000, 1500, 2000, 2500, 3000].forEach(function (v, i) {
+  server.ingest({ sid: 'p' + i, release: 'cy132', events: [{ k: 'vitals', v: { lcp: v } }] });
+});
+vst = server.stats(7);
+// sorted [1000,1500,2000,2500,3000] (len 5) -> idx = ceil(0.75*5)-1 = 3 -> 2500
+ok('p75 matches a hand-computed fixture', vst.vitals.lcp.p75 === 2500, 'p75=' + vst.vitals.lcp.p75);
+ok('n and mean are exact too', vst.vitals.lcp.n === 5 && vst.vitals.lcp.mean === 2000,
+  'n=' + vst.vitals.lcp.n + ' mean=' + vst.vitals.lcp.mean);
+
+// The restored-bucket trap (Task 2.3): a day bucket that predates this
+// change has no `vitals` key at all, because load() assigns `days = obj.days`
+// raw rather than routing every day through bucket()'s initializer.
+const todayKey = new Date().toISOString().slice(0, 10);
+const legacySeed = {};
+legacySeed[todayKey] = { sessions: 0, crashed: 0, errors: 0, serverErrors: 0, steps: {}, quit: {}, events: {}, releases: {}, fp: {} };
+server._reset(legacySeed);
+let threwOnLegacyBucket = false;
+try {
+  server.ingest({ sid: 'legacy', release: 'cy131', events: [{ k: 'vitals', v: { lcp: 1800 } }] });
+} catch (e) { threwOnLegacyBucket = true; }
+ok('ingesting a vitals event into a day bucket that predates this change does not throw', !threwOnLegacyBucket);
+ok('...and the sample lands once the `vitals` key is lazily created', server.stats(1).vitals.lcp.n === 1,
+  'n=' + server.stats(1).vitals.lcp.n);
 
 /* ================================================================== */
 group('server — retention is enforced, not just promised');

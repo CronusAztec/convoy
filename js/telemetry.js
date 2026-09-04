@@ -76,6 +76,8 @@
   var started = false;          // init() ran
   var flushTimer = null;
   var ended = false;
+  // Hooks (e.g. js/vitals.js) that get one last push() before 'end' is built.
+  var beforeEndFns = [];
   // Held until window 'load' + idle so the FIRST flush never competes with the
   // boot path for a connection; every flush after that is on its own timer as
   // before. armWhenSettled() flips this once, then re-arms if events queued up
@@ -540,6 +542,9 @@
   function end(reason) {
     if (ended || !on()) return;
     ended = true;
+    for (var i = 0; i < beforeEndFns.length; i++) {
+      try { beforeEndFns[i](); } catch (e) { /* a throwing hook must not cost the 'end' event */ }
+    }
     // Bypass the queue's normal batching: this is the last thing we will ever
     // get to say for this session.
     if (sent < MAX_EVENTS) {
@@ -634,6 +639,8 @@
     end: end,
     flush: flush,
     setEnabled: setEnabled,
+    beforeEnd: function (fn) { if (typeof fn === 'function') beforeEndFns.push(fn); },
+    vitals: function (o) { push({ k: 'vitals', v: o }); },
     enabled: function () { return on(); },
     // Inspection hook for tests and for the debug console; never sent anywhere.
     snapshot: function () {

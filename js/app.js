@@ -76,6 +76,12 @@
   function wakeRiderarrowsOnFirstParty() {
     offRiderarrowsParty = A.store.on('party', wakeRiderarrows);
   }
+  // js/vitals.js: woken at load+idle like A.data/A.voice below, not on a bus
+  // event — it has nothing to observe until the page has painted, and
+  // reports itself once at session end via A.telemetry.beforeEnd().
+  function wakeVitalsOnLoadIdle() {
+    A.lazy.vitals().then(function (m) { if (m && m.init) m.init(); }).catch(function () {});
+  }
   // Test seam only (test/lazyinstruments.test.js) — app.js otherwise exports
   // nothing on A, since everything else here is boot-time side effects wired
   // through DOMContentLoaded/load listeners that a test can't safely trigger
@@ -85,7 +91,8 @@
   A.appBoot = {
     LAZY_INSTRUMENTS: LAZY_INSTRUMENTS, wakeInstrument: wakeInstrument, wakeLazyInstruments: wakeLazyInstruments,
     wakeTripextras: wakeTripextras, wakeTripextrasOnFirstRouteOrTrip: wakeTripextrasOnFirstRouteOrTrip,
-    wakeRiderarrows: wakeRiderarrows, wakeRiderarrowsOnFirstParty: wakeRiderarrowsOnFirstParty
+    wakeRiderarrows: wakeRiderarrows, wakeRiderarrowsOnFirstParty: wakeRiderarrowsOnFirstParty,
+    wakeVitalsOnLoadIdle: wakeVitalsOnLoadIdle
   };
 
   window.addEventListener('DOMContentLoaded', function () {
@@ -173,5 +180,10 @@
         A.voiceLoader.ensure().then(function (v) { if (v && v.init) v.init(); }).catch(function () {});
       }
     });
+  }, { once: true });
+
+  window.addEventListener('load', function () {
+    var ric = window.requestIdleCallback || function (cb) { setTimeout(cb, 1); };
+    ric(wakeVitalsOnLoadIdle);
   }, { once: true });
 })();

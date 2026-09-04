@@ -131,4 +131,6 @@
   // it on the first 'party' event where S.party is truthy (a leave also emits
   // 'party', so app.js checks the value, not just the event).
   A.lazy.riderarrows = A.lazy.module('riderarrows', function () { return A.riderarrows; });
+  // js/vitals.js: woken at load+idle (js/app.js), not on a bus event.
+  A.lazy.vitals = A.lazy.module('vitals', function () { return A.vitals; });
 })();
