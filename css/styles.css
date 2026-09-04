@@ -330,6 +330,60 @@ button svg, .ctl svg, .search-icon svg {
   box-shadow: var(--shadow-sm);
 }
 
+/* Blur budget (T2.4a): backdrop-filter is recomputed every frame over a
+   repainting surface (the map), so it is the single most expensive rendering
+   feature the driving screen draws. When data-glass="off" — the auto-detect
+   in js/state.js's applyGlass() on low-memory devices / prefers-reduced-
+   transparency, or an explicit Settings choice — every surface below drops
+   its blur. Two groups, see css/DESIGN-DECISIONS.md's "Blur budget" section
+   for the full rationale:
+     A. opaque replacement — translucency here is pure decoration, so the
+        blur is replaced by --surface-solid (already defined by every theme,
+        js/themes.js).
+     B. blur removed only — .modal-backdrop's translucency is functional (a
+        scrim over the app behind the modal; forcing it opaque would black
+        out the screen) and .maplibregl-ctrl-attrib already carries its own
+        !important background and is a legal attribution surface — neither
+        is restyled.
+   :root[...] is required, not a bare [data-glass="off"]: js/themes.js
+   injects theme CSS into a later <style> tag, and the frost theme sets a
+   heavy backdrop-filter on .glass/.panel/#dock at specificity (0,2,0) — the
+   same specificity a bare [data-glass="off"] .glass would have, so it would
+   lose to frost and the blur would come back. :root[data-glass="off"] .glass
+   is (0,3,0) and wins. test/frontend.test.js's testGlassBudget() asserts
+   this prefix on every selector below. */
+:root[data-glass="off"] .glass,
+:root[data-glass="off"] .brand,
+:root[data-glass="off"] #search-input,
+:root[data-glass="off"] .search-results,
+:root[data-glass="off"] .avatar-btn,
+:root[data-glass="off"] .chip,
+:root[data-glass="off"] .ctl,
+:root[data-glass="off"] #dock,
+:root[data-glass="off"] .panel,
+:root[data-glass="off"] .eta-card,
+:root[data-glass="off"] .toast,
+:root[data-glass="off"] .verify-banner,
+:root[data-glass="off"] .pop-card,
+:root[data-glass="off"] .wt-btn,
+:root[data-glass="off"] .wt-meta,
+:root[data-glass="off"] .ralert-foot,
+:root[data-glass="off"] .rstat,
+:root[data-glass="off"] #radar-dock,
+:root[data-glass="off"] .hot-legend,
+:root[data-glass="off"] .rider-arrow,
+:root[data-glass="off"] .rlabel {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: var(--surface-solid);
+}
+
+:root[data-glass="off"] .modal-backdrop,
+:root[data-glass="off"] .maplibregl-ctrl-attrib {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
 /* ============================== top bar ============================== */
 #topbar {
   position: fixed;

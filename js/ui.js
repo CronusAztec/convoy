@@ -2139,6 +2139,19 @@
     styleSel.addEventListener('change', function () { ST.setMapStyle(styleSel.value); });
     body.appendChild(mkField('Map style', styleSel));
 
+    // Blur budget (T2.4a): backdrop-filter is the most expensive thing the HUD
+    // draws every frame over the map. 'auto' drops it on low-memory devices;
+    // this row lets a rider override a wrong auto-detect either direction.
+    var glassSel = mkSelect(['auto', 'on', 'off'], S.settings.glass);
+    var glassNames = {
+      auto: 'Auto (off on low-end devices)',
+      on: 'Always on',
+      off: 'Off (faster)'
+    };
+    glassSel.querySelectorAll('option').forEach(function (o) { o.textContent = glassNames[o.value]; });
+    glassSel.addEventListener('change', function () { ST.setSetting('glass', glassSel.value); ST.applyGlass(); });
+    body.appendChild(mkField('Glass blur', glassSel));
+
     /* ---- Map dots (recolor the rider categories live) ---- */
     // One color input per category. Each writes a CSS var via setDotColor, so the
     // change lands on every marker instantly (no reload, no marker rebuild).

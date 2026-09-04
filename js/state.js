@@ -29,6 +29,7 @@
     showGlobal: true,
     anim: !(typeof matchMedia === 'function' &&
             matchMedia('(prefers-reduced-motion: reduce)').matches),
+    glass: 'auto',         // auto | on | off — 'auto' drops backdrop blur on low-memory devices
     showSpace: true,      // stars/planets/moon + day-night shading around the globe
     followCam: true,
     adaptiveZoom: true,   // follow camera eases zoom out at highway speed, in around town
@@ -321,6 +322,23 @@
     emit('anim', state.settings.anim);
   }
 
+  // Blur budget: backdrop-filter is recomputed every frame over a repainting map,
+  // so it is the most expensive surface we draw on a phone. 'auto' keeps the glass
+  // on capable devices and drops it where it actually costs frames.
+  function glassOn() {
+    var v = state.settings.glass;
+    if (v === 'on') return true;
+    if (v === 'off') return false;
+    if (typeof matchMedia === 'function' &&
+        matchMedia('(prefers-reduced-transparency: reduce)').matches) return false;
+    var mem = typeof navigator !== 'undefined' ? navigator.deviceMemory : null;
+    return !(typeof mem === 'number' && mem <= 4);
+  }
+  function applyGlass() {
+    document.documentElement.setAttribute('data-glass', glassOn() ? 'on' : 'off');
+    emit('glass', glassOn());
+  }
+
   // Write the 5 rider-dot colors to CSS vars on :root. The category rules in
   // styles.css read var(--dot-<key>), so this recolors every rider marker on the
   // map live (no marker rebuild needed — CSS var changes cascade instantly).
@@ -584,6 +602,7 @@
     on: on, off: off, emit: emit,
     themeResolved: themeResolved, themeIsDark: themeIsDark,
     applyTheme: applyTheme, applyAccent: applyAccent, applyAnim: applyAnim, applyDotColors: applyDotColors,
+    applyGlass: applyGlass, glassOn: glassOn,
     applyUiBrightness: applyUiBrightness,
     setTheme: setTheme, setAccent: setAccent, setMapStyle: setMapStyle,
     setUnits: setUnits, setShowGlobal: setShowGlobal, setAnim: setAnim,

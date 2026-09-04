@@ -101,9 +101,12 @@ H.group('Server code is never packaged into the app');
   H.ok('copy-web declares an explicit target list', !!m, m ? m[1].trim() : 'not found');
   if (m) {
     const targets = m[1].split(',').map((s) => s.trim().replace(/['"]/g, '')).filter(Boolean);
-    H.ok('copy-web copies only index.html, js and css',
-      targets.length === 3 && targets.indexOf('index.html') >= 0 &&
-      targets.indexOf('js') >= 0 && targets.indexOf('css') >= 0, targets.join(' + '));
+    // 'fonts' joined the list in cycle 19 (T2.5, self-hosted boot fonts) — static
+    // woff2 files, no server code, same shape as the three original targets.
+    H.ok('copy-web copies only index.html, js, css and fonts',
+      targets.length === 4 && targets.indexOf('index.html') >= 0 &&
+      targets.indexOf('js') >= 0 && targets.indexOf('css') >= 0 &&
+      targets.indexOf('fonts') >= 0, targets.join(' + '));
     H.ok('copy-web never copies server/', targets.indexOf('server') < 0, targets.join(' + '));
   }
 }
@@ -117,7 +120,10 @@ H.group('Server code is never served over HTTP');
   if (m) {
     const allowed = m[1].split(',').map((s) => s.trim().replace(/['"]/g, '')).filter(Boolean);
     H.ok('/server is not in the allowlist', !allowed.some((a) => /^\/server/.test(a)), allowed.join(' '));
-    H.ok('the allowlist stays small', allowed.length <= 6, allowed.length + ' entries: ' + allowed.join(' '));
+    // Ceiling raised 6 -> 7 in cycle 20: '/fonts' joined in cycle 19 (T2.5,
+    // self-hosted boot fonts) — a static asset path, same shape as /css or /js,
+    // not a server-code surface. "Stays small" is the intent, not a frozen count.
+    H.ok('the allowlist stays small', allowed.length <= 7, allowed.length + ' entries: ' + allowed.join(' '));
   }
 }
 
@@ -195,4 +201,4 @@ H.group('Supabase credentials never reach the shipped app');
   H.ok('.env is gitignored', /(^|\n)\*\*\/\.env|(^|\n)\.env/.test(read('.gitignore')));
 }
 
-H.report();
+process.exit(H.report());

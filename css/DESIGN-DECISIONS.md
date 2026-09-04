@@ -56,3 +56,67 @@ against. All three only run while transmitting/speaking/alerting (zero idle cost
 on screen on a default, quiet screen), so the honest trade is to pin `infinitePaintAnimations` at
 **3** rather than force a lossy conversion. Converting them is still open work for a future stage
 with a way to actually look at the result (STATE.md §8 human item 4).
+
+## Blur budget (mission 20260903-173653-75d3, aspect P-C, T2.4a, cycle 20)
+
+`backdrop-filter` is the single most expensive rendering feature this app draws: it is recomputed
+every frame over whatever is behind it, and the driving screen's backdrop is a continuously
+repainting WebGL map. `css/styles.css`'s 23 `backdrop-filter` selectors (`.glass`, `.brand`,
+`#search-input`, `.chip`, `.ctl`, `#dock`, `.panel`, `.eta-card`, `.toast`, `.pop-card`, `.wt-btn`,
+`.wt-meta`, `.rider-arrow`, the radar-HUD surfaces, and a few smaller ones) sit permanently over that
+map. `js/state.js`'s `glassOn()`/`applyGlass()` set `<html data-glass="on"|"off">` from the `glass`
+setting (`auto` | `on` | `off`); `auto` drops the blur on `prefers-reduced-transparency: reduce` or a
+low-memory device (`navigator.deviceMemory <= 4`) and otherwise keeps it. `test/frontend.test.js`'s
+`testGlassBudget()` (`ungatedBlurSurfaces` in `test/frontend-baseline.json`, pinned at **0**) parses
+every `backdrop-filter` declaration in the file and fails if a selector has no matching
+`:root[data-glass="off"]` neutralizer — a future `backdrop-filter` added to the file without a
+neutralizer is caught, not silently shipped.
+
+**Two groups**, both immediately below the `.glass` rule at `css/styles.css:325-331`:
+
+- **Group A — opaque replacement** (`backdrop-filter: none` + `background: var(--surface-solid)`):
+  every selector whose translucency is pure decoration — `.glass`, `.brand`, `#search-input`,
+  `.search-results`, `.avatar-btn`, `.chip`, `.ctl`, `#dock`, `.panel`, `.eta-card`, `.toast`,
+  `.verify-banner`, `.pop-card`, `.wt-btn`, `.wt-meta`, `.ralert-foot`, `.rstat`, `#radar-dock`,
+  `.hot-legend`, `.rider-arrow`, `.rlabel`. `--surface-solid` is defined by every theme
+  (`css/styles.css:112`/`:149`, and every entry in `js/themes.js`, including the derived value for
+  user custom themes), so this never invents a colour outside the active theme. `.search-results` /
+  `.toast` / `.pop-card` already use `var(--surface-solid)` as their normal background — the override
+  is a harmless no-op for those three. `.verify-banner`'s normal background is a warn-tinted
+  `color-mix(... var(--surface-solid))`; the glass-off override loses that tint in favour of a flat
+  `--surface-solid` — a small, deliberate simplification for a rare, 8px-blur banner, not an
+  oversight. `.rider-arrow`/`.rlabel` are small map-overlay labels on `var(--surface)` (0.72 alpha);
+  making them opaque under `data-glass="off"` makes their text *more* legible over the map, not less.
+- **Group B — blur removed only**, background untouched: `.modal-backdrop` (a full-screen scrim over
+  the app behind every modal — forcing `--surface-solid` on it would black out that app instead of
+  dimming it) and `.maplibregl-ctrl-attrib` (a legal map-attribution surface with its own
+  `!important` background; not a decorative surface to restyle).
+
+**Why `:root[data-glass="off"] <selector>`, never a bare `[data-glass="off"] <selector>`:**
+`js/themes.js` injects each theme's CSS into a `<style>` tag *after* `styles.css` loads. The frost
+theme (`js/themes.js:581-586`) sets a heavy `backdrop-filter` on `.glass, .panel, #dock` at
+specificity `(0,2,0)` — the same specificity a bare `[data-glass="off"] .glass` would have. Because
+frost's rule loads later in the cascade, an equal-specificity override loses to it and the blur
+would silently return for any rider on frost. `:root[data-glass="off"] .glass` is `(0,3,0)` and wins
+regardless of theme or load order. `testGlassBudget()` asserts every neutralizer selector carries the
+`:root` prefix.
+
+**Why `prefers-reduced-transparency: reduce`, not `prefers-reduced-motion: reduce`:** the app already
+seeds `anim` (`js/state.js:29-31`, unchanged by this cycle) from `prefers-reduced-motion` — that is
+correct and stays as-is (guardrail 6). Blur is not motion: a rider who asks for less motion has not
+asked for less translucency, and conflating the two would strip the glass look from someone who only
+wanted animations to stop. `prefers-reduced-transparency` (Chrome 118+) is the standards-correct
+signal for "this user does not want translucent surfaces," so `[data-anim="off"]` is deliberately
+**not** a trigger for `data-glass="off"` — proven by `test/glassbudget.test.js`'s dedicated check.
+
+**In-repo precedent:** the `toon` theme (`js/themes.js:512-518`) has shipped `backdrop-filter: none`
+across `.glass, .chip, .ctl, .panel, #dock, .eta-card, .toast, .btn, .modal-card, .speedo,
+#search-input` since before this mission. A no-blur Slipstream is a look this codebase has already
+built and kept — this cycle generalises the same idea into a quality *mode* available under every
+theme, rather than a theme-specific override.
+
+**Real-device measurement (STATE.md §8):** this box cannot measure GPU cost — the only true
+before/after is `adb shell dumpsys gfxinfo <pkg>` jank % on a mid-range Android phone, HUD rail /
+chips / dock visible, Settings → Glass blur On vs Off. **Eyeball check with glass off:** every
+panel/card must still read as a solid surface with legible text, and the modal scrim must still show
+the app dimmed behind it, not blacked out.

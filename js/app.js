@@ -109,6 +109,7 @@
     A.store.applyTheme();
     A.store.applyAccent();
     A.store.applyAnim();
+    A.store.applyGlass();
     A.store.applyDotColors();
 
     // One-time boot glitch flash — sells the "HUD powering on" feel.

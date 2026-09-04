@@ -930,6 +930,116 @@ function testAnimationBudget() {
     ' — ' + real.safeNames.length + ' already transform/opacity-only: ' + real.safeNames.join(', '));
 }
 
+/* ---------------- 4d. blur budget (T2.4a, aspect P-C) ----------------
+   backdrop-filter is recomputed every frame over a repainting surface (the map),
+   so it is the most expensive rendering feature on the driving screen. Every
+   selector that declares a live backdrop-filter must have a matching
+   `:root[data-glass="off"] <selector>` neutralizer (css/DESIGN-DECISIONS.md's
+   "Blur budget" section), so `js/state.js`'s applyGlass() can drop every blurred
+   surface to an opaque one on low-end devices without leaving one behind
+   unnoticed. Static/deterministic, same brace-balanced-parse idea as
+   parseKeyframesBlocks() above — comments are stripped first so a selector list
+   split on commas never picks up a comment's own commas. */
+function parseTopLevelCssRules(css) {
+  const stripped = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const rules = [];
+  let i = 0, selStart = 0, depth = 0;
+  while (i < stripped.length) {
+    const ch = stripped[i];
+    if (ch === '{') {
+      if (depth === 0) {
+        const selector = stripped.slice(selStart, i).trim();
+        let d = 1, j = i + 1;
+        while (d > 0 && j < stripped.length) {
+          if (stripped[j] === '{') d++;
+          else if (stripped[j] === '}') d--;
+          j++;
+        }
+        rules.push({ selector: selector, body: stripped.slice(i + 1, j - 1) });
+        i = j; selStart = j; continue;
+      }
+      depth++;
+    } else if (ch === '}') {
+      if (depth > 0) depth--;
+    }
+    i++;
+  }
+  return rules;
+}
+
+const GLASS_GATE_ATTR = '[data-glass="off"]';
+const GLASS_MODAL_EXCEPTION = '.modal-backdrop'; // functional scrim — forcing --surface-solid would black out the app behind every modal
+
+function analyzeGlassBudget(css) {
+  const rules = parseTopLevelCssRules(css);
+  const blurred = []; // selectors with a live backdrop-filter, source order, de-duped
+  const neutralized = {}; // bare selector -> the override rule's body
+  const malformedOverrideSelectors = []; // a [data-glass="off"] rule not prefixed by :root
+
+  rules.forEach((r) => {
+    if (/^@/.test(r.selector)) return; // @media/@keyframes bodies aren't backdrop-filter rule text at this depth (confirmed: none of the 23 live inside one)
+    const parts = r.selector.split(',').map((s) => s.trim()).filter(Boolean);
+    const isOverrideRule = parts.some((s) => s.indexOf(GLASS_GATE_ATTR) !== -1);
+    if (isOverrideRule) {
+      parts.forEach((s) => {
+        if (s.indexOf(':root' + GLASS_GATE_ATTR + ' ') !== 0) {
+          malformedOverrideSelectors.push(s);
+          return;
+        }
+        const bare = s.slice((':root' + GLASS_GATE_ATTR + ' ').length).trim();
+        const m = r.body.match(/(?:^|;)\s*(?:-webkit-)?backdrop-filter\s*:\s*none\s*;/);
+        if (m) neutralized[bare] = r.body;
+      });
+      return;
+    }
+    const bf = r.body.match(/(?:^|;)\s*(?:-webkit-)?backdrop-filter\s*:\s*([^;]+);/);
+    if (!bf || bf[1].trim() === 'none') return;
+    parts.forEach((s) => { if (blurred.indexOf(s) === -1) blurred.push(s); });
+  });
+
+  const ungated = blurred.filter((s) => !(s in neutralized));
+  return { blurred, neutralized, ungated, malformedOverrideSelectors };
+}
+
+function testGlassBudget() {
+  H.group('css/styles.css — every backdrop-filter surface has a :root[data-glass="off"] opaque neutralizer (T2.4a)');
+
+  const fixture = [
+    '.fx-plain { backdrop-filter: blur(10px); }',
+    ':root[data-glass="off"] .fx-plain { backdrop-filter: none; background: var(--surface-solid); }',
+    '.fx-ungated { backdrop-filter: blur(6px); }',
+    '[data-glass="off"] .fx-badprefix { backdrop-filter: blur(6px); }', // missing :root — must not count as a valid neutralizer
+    ':root[data-glass="off"] .fx-badprefix { backdrop-filter: none; }'
+  ].join('\n');
+  const fx = analyzeGlassBudget(fixture);
+  H.ok('fixture: a gated selector with a matching :root override is not ungated',
+    fx.ungated.indexOf('.fx-plain') === -1, 'ungated=' + fx.ungated.join(','));
+  H.ok('fixture: a blurred selector with no override at all is ungated',
+    fx.ungated.indexOf('.fx-ungated') !== -1, 'ungated=' + fx.ungated.join(','));
+  H.ok('fixture: a bare [data-glass="off"] override (no :root prefix) is flagged, not silently accepted',
+    fx.malformedOverrideSelectors.indexOf('[data-glass="off"] .fx-badprefix') !== -1,
+    'malformed=' + fx.malformedOverrideSelectors.join(','));
+
+  const css = fs.readFileSync(path.join(ROOT, 'css', 'styles.css'), 'utf8');
+  const real = analyzeGlassBudget(css);
+  atOrBelowBaseline('always-on blurred surfaces with no data-glass="off" neutralizer',
+    'ungatedBlurSurfaces', real.ungated.length,
+    real.ungated.length ? real.ungated.join(', ') : (real.blurred.length + ' blurred selectors, all gated'));
+
+  H.ok('every [data-glass="off"] override selector is prefixed with :root (frost-theme specificity guard)',
+    real.malformedOverrideSelectors.length === 0,
+    'bad prefixes: ' + real.malformedOverrideSelectors.join(', '));
+
+  const modalBody = real.neutralized[GLASS_MODAL_EXCEPTION];
+  H.ok('.modal-backdrop\'s override does not set background (keeps the scrim over whatever is behind the modal)',
+    !!modalBody && !/background\s*:/.test(modalBody), modalBody === undefined ? '(no override found)' : modalBody.trim());
+
+  const groupASelectors = Object.keys(real.neutralized).filter((s) => s !== GLASS_MODAL_EXCEPTION && s !== '.maplibregl-ctrl-attrib');
+  const missingSolid = groupASelectors.filter((s) => !/background\s*:\s*var\(--surface-solid\)/.test(real.neutralized[s]));
+  H.ok('every group-A (opaque replacement) override sets background: var(--surface-solid), not a literal colour',
+    missingSolid.length === 0, missingSolid.length ? missingSolid.join(', ') + ' missing the theme-correct opaque background' : (groupASelectors.length + ' selectors checked'));
+}
+
 /* ---------------- 5. impeccable design-integrity detector ---------------- */
 function testDetector() {
   H.group('impeccable detector — design-integrity antipatterns');
@@ -967,6 +1077,7 @@ function testDetector() {
   testRealBootGraphSurfaces();
   testFontSizeFloor();
   testAnimationBudget();
+  testGlassBudget();
   testDetector();
   console.log('\nMeasured counts (compare against test/frontend-baseline.json):');
   console.log(JSON.stringify(measured, null, 2));
