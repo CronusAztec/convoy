@@ -32,6 +32,15 @@ sb.forwardsIp = () => false;
 const store = require(P + 'store.js');
 store.init = async () => {};
 
+// SIGKILL (this file's usual teardown, test/wire-bench.js's oneRun()) never
+// lets Node's own --cpu-prof flush a .cpuprofile to disk — that only happens
+// on a normal exit path. server/server.js installs no SIGTERM handler of its
+// own (default disposition is also immediate termination), so a bench run
+// that wants a profile sends SIGTERM and needs *something* to turn that into
+// a clean process.exit(0). Harmless when nothing sends SIGTERM (the common
+// case): this handler simply never fires.
+process.on('SIGTERM', () => process.exit(0));
+
 const STATS_PATH = process.env.CONVOY_BENCH_STATS;
 if (STATS_PATH) {
   const fs = require('fs');

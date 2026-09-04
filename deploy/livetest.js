@@ -6,10 +6,18 @@ const URL = process.env.WSURL || 'ws://2.25.184.90/ws';
 function client(name, pos, car) {
   const ws = new WebSocket(URL);
   const st = { name, ws, id: null, sees: new Set(), party: null, invite: null, chat: [], welcomeBots: 0 };
-  ws.on('open', () => ws.send(JSON.stringify({
-    t: 'hello', pos, heading: 90,
-    profile: { name, handle: name.toLowerCase(), emoji: '🚗', vibe: 'Road trip!', car }
-  })));
+  ws.on('open', () => {
+    // Print, never assert: an assertion here would fail the push stage on the
+    // very run that's trying to ship the change. This is how a push stage
+    // proves permessage-deflate (cycle 12, T2.6b) survives Caddy's reverse
+    // proxy in production — if this prints empty here but non-empty on a
+    // local run, Caddy is stripping Sec-WebSocket-Extensions (STATE.md §8).
+    console.log(name + ' negotiated WS extensions: ' + JSON.stringify(ws.extensions));
+    ws.send(JSON.stringify({
+      t: 'hello', pos, heading: 90,
+      profile: { name, handle: name.toLowerCase(), emoji: '🚗', vibe: 'Road trip!', car }
+    }));
+  });
   ws.on('message', (d) => {
     let m; try { m = JSON.parse(d); } catch (e) { return; }
     if (m.t === 'welcome') { st.id = m.id; st.welcomeBots = (m.riders || []).length; (m.riders||[]).forEach(r=>st.sees.add(r.id)); }

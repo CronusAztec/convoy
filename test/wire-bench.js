@@ -49,7 +49,18 @@
 
    bytesPerClientPerSec is the pinnable number (test/server-baseline.json,
    Task 2) — it depends only on the deterministic lattice and rider count, not
-   on box speed. tickMs is informational only: this box runs a long-lived,
+   on box speed. It is computed from `JSON.parse(buf.toString()).length` in
+   `ws`'s own message event — i.e. AFTER `ws` has already inflated a
+   permessage-deflate frame, so it measures protocol efficiency (how much the
+   app-level format itself costs) and does not change when compression is
+   toggled. `wireBytesPerClientPerSec` (cycle 12, T2.6b) is the other number:
+   real bytes read off the underlying TCP socket (`socket.bytesRead`, sampled
+   at the same gate-open/gate-close instants used for byte counting above) —
+   this is what actually crosses a rider's mobile data plan, and it is the one
+   that moves when `perMessageDeflate` is turned on. The two are expected to
+   be within ~30% of each other with compression OFF (a few percent of TCP/WS
+   framing overhead) and to diverge sharply once compression is ON. tickMs is
+   informational only: this box runs a long-lived,
    unrelated Chromium session (STATE.md §8) that can eat 100%+ of a core, so a
    tick callback's wall-clock duration here is not a trustworthy number to
    ratchet against. `boxLoaded` (os.loadavg()[0] > 1) is recorded on every run
@@ -94,10 +105,19 @@ function freePort() {
 
 /* Spawn the real server as a child process, stubbed just enough to boot with
    no server/.env. Resolves once "Convoy server →" appears on stdout, rejects
-   on early exit or a 15s timeout. */
-function startServer(port, statsPath) {
+   on early exit or a 15s timeout. `profileDir`, when set, adds Node's own
+   --cpu-prof flags (Task 3, cycle 12) — the resulting .cpuprofile is only
+   flushed to disk on a clean exit, which is why oneRun() sends SIGTERM
+   (never SIGKILL) to a profiled child, see server-stub.js's SIGTERM
+   handler. */
+function startServer(port, statsPath, profileDir) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['-r', STUB, SERVER], {
+    const nodeArgs = [];
+    if (profileDir) {
+      nodeArgs.push('--cpu-prof', '--cpu-prof-dir=' + profileDir, '--cpu-prof-name=wire-bench.cpuprofile');
+    }
+    nodeArgs.push('-r', STUB, SERVER);
+    const child = spawn(process.execPath, nodeArgs, {
       cwd: ROOT,
       env: Object.assign({}, process.env, {
         PORT: String(port), MAX_PER_IP: '999', MAX_CLIENTS: '500',
@@ -171,6 +191,17 @@ function connectClient(url, i, opts) {
     let welcomed = false;
     const prevRows = new Map();   // Task 4: rider id -> last-seen row JSON, for unchangedRowShare
     let rowsSeen = 0, rowsUnchanged = 0;
+    // Task 1 (cycle 12): the underlying TCP socket, captured off the public
+    // 'upgrade' event (the http.IncomingMessage response to the opening
+    // handshake — response.socket is a standard Node http property, not a ws
+    // internal). Falls back to the private `ws._socket` only if 'upgrade'
+    // never fires (never observed in practice on this box, kept as a
+    // just-in-case rather than throwing). `socket.bytesRead` is a running
+    // total maintained by Node itself, so sampling it at gate-open and
+    // gate-close and taking the delta gives real bytes received on the wire
+    // over exactly the counting window, independent of frame parsing.
+    let socket = null;
+    ws.on('upgrade', (res) => { socket = res && res.socket; });
 
     ws.on('message', (buf) => {
       const n = buf.length;
@@ -194,7 +225,11 @@ function connectClient(url, i, opts) {
         welcomed = true;
         resolve({
           close() { try { clearInterval(posTimer); } catch (e) {} try { ws.close(); } catch (e) {} },
-          stats() { return { bytesByKind, framesTotal, rowsSeen, rowsUnchanged }; }
+          stats() { return { bytesByKind, framesTotal, rowsSeen, rowsUnchanged }; },
+          wireBytesRead() {
+            const s = socket || ws._socket;
+            return (s && typeof s.bytesRead === 'number') ? s.bytesRead : null;
+          }
         });
       }
     });
@@ -218,11 +253,13 @@ function connectClient(url, i, opts) {
   });
 }
 
-async function oneRun(clients, secs, mode) {
+async function oneRun(clients, secs, mode, profile) {
   const port = await freePort();
   const statsPath = path.join(os.tmpdir(), 'convoy-wire-bench-' + process.pid + '-' + Date.now() + '.json');
+  const profileDir = profile ? '/tmp/convoy-prof' : null;
+  if (profileDir) { try { fs.mkdirSync(profileDir, { recursive: true }); } catch (e) {} }
   const loadBefore = os.loadavg()[0];
-  const child = await startServer(port, statsPath);
+  const child = await startServer(port, statsPath, profileDir);
   try {
     const url = 'ws://127.0.0.1:' + port + '/ws';
     // Shared across every client, not a per-client timer keyed off its OWN
@@ -239,10 +276,26 @@ async function oneRun(clients, secs, mode) {
     }
     const warmupMs = 1500;
     await new Promise((r) => setTimeout(r, warmupMs));
+    // Sample wire bytes at the exact instant the gate opens/closes — sampling
+    // inside the 'message' handler (like bytesByKind above) would require a
+    // per-client gate check on every single TCP read event, not just every
+    // WS message, and 'upgrade' fires once at connect time so the socket
+    // reference is already stable well before this point.
+    const wireBytesStart = conns.map((c) => c.wireBytesRead());
+    const rssKbStart = readRssKb(child.pid);
     gate.counting = true;
     await new Promise((r) => setTimeout(r, secs * 1000));
     gate.counting = false;
+    const wireBytesEnd = conns.map((c) => c.wireBytesRead());
+    const rssKbEnd = readRssKb(child.pid);
     const loadAfter = os.loadavg()[0];
+
+    let totalWireBytes = 0;
+    let wireBytesValid = true;
+    for (let i = 0; i < conns.length; i++) {
+      if (wireBytesStart[i] === null || wireBytesEnd[i] === null) { wireBytesValid = false; continue; }
+      totalWireBytes += wireBytesEnd[i] - wireBytesStart[i];
+    }
 
     let totalBytes = 0;
     let totalFrames = 0;
@@ -280,36 +333,65 @@ async function oneRun(clients, secs, mode) {
 
     return {
       clients, secs, totalBytes, totalFrames, byKind,
-      rowsSeen, rowsUnchanged, boxLoaded: loadBefore > 1 || loadAfter > 1, tickMs
+      totalWireBytes: wireBytesValid ? totalWireBytes : null,
+      rssKbStart, rssKbEnd,
+      rowsSeen, rowsUnchanged, boxLoaded: loadBefore > 1 || loadAfter > 1, tickMs,
+      cpuProfPath: profileDir ? path.join(profileDir, 'wire-bench.cpuprofile') : null
     };
   } finally {
     try { fs.unlinkSync(statsPath); } catch (e) {}
     // Wait for the actual 'exit' event, not a guessed delay — pgrep can still
     // see a just-SIGKILLed pid for a few ms after kill() returns, which made
-    // the no-orphan check flaky before this fix.
+    // the no-orphan check flaky before this fix. A profiled run needs a CLEAN
+    // exit for Node to flush the .cpuprofile (SIGKILL never runs JS) — send
+    // SIGTERM first (server-stub.js turns that into process.exit(0)) and only
+    // fall back to SIGKILL if the child hasn't gone within 3s.
     await new Promise((resolve) => {
       if (child.exitCode !== null || child.signalCode !== null) return resolve();
       child.once('exit', () => resolve());
-      try { child.kill('SIGKILL'); } catch (e) { resolve(); }
+      try {
+        child.kill(profileDir ? 'SIGTERM' : 'SIGKILL');
+        if (profileDir) {
+          setTimeout(() => { try { child.kill('SIGKILL'); } catch (e) {} }, 3000);
+        }
+      } catch (e) { resolve(); }
     });
   }
 }
 
 function round2(n) { return Math.round(n * 100) / 100; }
 
-async function bench(clients, secs, mode) {
-  const r = await oneRun(clients, secs, mode);
+// Task 2 (cycle 12): peak server memory, before/after — read straight off
+// /proc rather than adding a process.memoryUsage() report path through
+// server-stub.js's stats file, since the wire-bench parent already knows the
+// child's pid and /proc/<pid>/status is zero-cost to read. Linux-only (this
+// box); returns null off-platform so the JSON output degrades gracefully
+// rather than throwing.
+function readRssKb(pid) {
+  try {
+    const status = fs.readFileSync('/proc/' + pid + '/status', 'utf8');
+    const m = /VmRSS:\s*(\d+)\s*kB/.exec(status);
+    return m ? parseInt(m[1], 10) : null;
+  } catch (e) { return null; }
+}
+
+async function bench(clients, secs, mode, profile) {
+  const r = await oneRun(clients, secs, mode, profile);
   const bytesPerClientPerSec = round2(r.totalBytes / r.clients / r.secs);
   const framesPerClientPerSec = round2(r.totalFrames / r.clients / r.secs);
   const byKindBytesPerSec = {};
   for (const k of Object.keys(r.byKind)) byKindBytesPerSec[k] = round2(r.byKind[k] / r.secs);
   const unchangedRowShare = r.rowsSeen ? round2(r.rowsUnchanged / r.rowsSeen) : null;
+  const wireBytesPerClientPerSec = r.totalWireBytes === null ? null : round2(r.totalWireBytes / r.clients / r.secs);
   return {
     mode: mode === 'parked' ? 'wire-parked' : 'wire',
     clients: r.clients, secs: r.secs,
     bytesPerClientPerSec, framesPerClientPerSec, byKindBytesPerSec,
+    wireBytesPerClientPerSec,
     serverBytesPerSec: round2(r.totalBytes / r.secs),
-    tickMs: r.tickMs, boxLoaded: r.boxLoaded, unchangedRowShare
+    tickMs: r.tickMs, boxLoaded: r.boxLoaded, unchangedRowShare,
+    serverRssKb: { start: r.rssKbStart, end: r.rssKbEnd },
+    cpuProfPath: r.cpuProfPath || null
   };
 }
 
@@ -332,6 +414,34 @@ function serverPids() {
   } catch (e) { return new Set(); } // pgrep exits 1 with no output when nothing matches
 }
 
+// Task 3 (cycle 12): sum each node's self time (its own samples' hitCount *
+// the profile's sampling interval) by callFrame.functionName, no DevTools UI
+// and no dependency — a .cpuprofile is just JSON (`nodes: [{id, callFrame,
+// hitCount, children}]`, `samples: [id...]`, `timeDeltas`). hitCount is
+// already the authoritative "how many samples landed exactly on this node"
+// count, so summing hitCount * interval per node is equivalent to walking
+// `samples` ourselves and cheaper.
+function printTopSelfTime(cpuProfPath, topN) {
+  const prof = JSON.parse(fs.readFileSync(cpuProfPath, 'utf8'));
+  const intervalUs = prof.timeDeltas && prof.timeDeltas.length
+    ? (prof.endTime - prof.startTime) / prof.timeDeltas.length
+    : 1000; // 1ms default sampling interval if timeDeltas is absent
+  const selfUsByName = Object.create(null);
+  for (const node of prof.nodes || []) {
+    const name = (node.callFrame && node.callFrame.functionName) || '(anonymous)';
+    const url = (node.callFrame && node.callFrame.url) || '';
+    const key = name + (url ? ' [' + url.replace(/^.*\/(server|test)\//, '$1/') + ']' : '');
+    const hitCount = node.hitCount || 0;
+    selfUsByName[key] = (selfUsByName[key] || 0) + hitCount * intervalUs;
+  }
+  const rows = Object.keys(selfUsByName)
+    .map((k) => ({ name: k, selfMs: round2(selfUsByName[k] / 1000) }))
+    .sort((a, b) => b.selfMs - a.selfMs)
+    .slice(0, topN || 10);
+  console.log('--profile top ' + rows.length + ' self-time frames (' + cpuProfPath + '):');
+  for (const r of rows) console.log('  ' + r.selfMs.toString().padStart(9, ' ') + ' ms  ' + r.name);
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const clientsIdx = args.indexOf('--clients');
@@ -339,14 +449,15 @@ async function main() {
   const clients = clientsIdx >= 0 ? parseInt(args[clientsIdx + 1], 10) : 8;   // fast default mode
   const secs = secsIdx >= 0 ? parseInt(args[secsIdx + 1], 10) : 5;
   const mode = args.includes('--parked') ? 'parked' : 'moving';
-  const isDefaultMode = clientsIdx < 0 && secsIdx < 0 && mode === 'moving';
+  const profile = args.includes('--profile');
+  const isDefaultMode = clientsIdx < 0 && secsIdx < 0 && mode === 'moving' && !profile;
 
   const pidsBefore = serverPids();
 
   H.group('wire-bench — real server child, ' + clients + ' guest WS clients, ' + secs + 's window (' + mode + ')');
   let result;
   try {
-    result = await bench(clients, secs, mode);
+    result = await bench(clients, secs, mode, profile);
   } catch (e) {
     H.ok('bench connected ' + clients + ' guest client(s) and measured a steady-state window', false, e.message);
     process.exit(H.report());
@@ -354,10 +465,23 @@ async function main() {
   }
   console.log(JSON.stringify(result));
 
+  if (result.cpuProfPath) {
+    try { printTopSelfTime(result.cpuProfPath, 10); }
+    catch (e) { console.log('(--profile: could not read ' + result.cpuProfPath + ': ' + e.message + ')'); }
+  }
+
   H.ok('bytesPerClientPerSec is a positive number', typeof result.bytesPerClientPerSec === 'number' && result.bytesPerClientPerSec > 0,
     'bytesPerClientPerSec=' + result.bytesPerClientPerSec);
-  H.ok('every received frame was t:\'tick\' (guest-only, no other traffic in this window)',
-    Object.keys(result.byKindBytesPerSec).every((k) => k === 'tick'), JSON.stringify(result.byKindBytesPerSec));
+  // 'global' is a legitimate, expected frame kind too — server/server.js's
+  // delayed-global-layer setInterval fires every 45s regardless of guest
+  // traffic (:3553), and a slow-enough box (this one runs a long-lived
+  // foreign Chromium session, STATE.md §8) can stretch a --clients 60 run's
+  // connect+warmup+window wall-clock past 45s, especially now that N=60
+  // sockets are each running permessage-deflate. Not an error — the point of
+  // this check is to catch a genuinely wrong kind (e.g. 'error', 'unparsed'),
+  // not to assert this window never crosses a real 45s boundary.
+  H.ok('every received frame was t:\'tick\' or the legitimate 45s t:\'global\' broadcast (guest-only, no OTHER traffic in this window)',
+    Object.keys(result.byKindBytesPerSec).every((k) => k === 'tick' || k === 'global'), JSON.stringify(result.byKindBytesPerSec));
   H.ok('boxLoaded is recorded so tickMs is never read without its trust caveat', typeof result.boxLoaded === 'boolean', result.boxLoaded);
 
   // Ratchet gate, default mode only (test/server-baseline.json — same

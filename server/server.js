@@ -3981,6 +3981,46 @@ const httpServer = http.createServer((req, res) => {
 /* ================= websocket wiring ================= */
 // 64KB: the client's hello/profile frames now include the profile photo
 // (≤24KB base64). The old 8KB cap would hard-kill any socket that sent one.
+//
+// perMessageDeflate (P-E, T2.6b, cycle 12): every tick frame today crosses
+// the network as raw JSON — `ws`'s server-side default for this option is
+// `false`, and until this line nothing here ever set it. The client side
+// needs ZERO changes: permessage-deflate is negotiated per-connection in the
+// HTTP Upgrade handshake, and every client already deployed (Chrome, the
+// Android WebView, Safari, node `ws`) advertises the extension by default —
+// the server just has to accept it.
+//
+// `threshold: 0` is the load-bearing setting. `ws`'s own default threshold is
+// 1024 bytes; our tick rows are ~150-500 bytes, so leaving the default would
+// compress nothing and this whole change would measure a 0% improvement.
+//
+// The frugal-window choice (`serverMaxWindowBits: 11`, `zlibDeflateOptions`
+// below) trades a slightly worse compression ratio for far less per-socket
+// memory: a deflate context costs roughly (1 << (windowBits+2)) + (1 <<
+// (memLevel+9)) bytes ~= 8KB + 64KB ~= 72KB, plus a small inflate context and
+// Node's own per-stream chunk buffers -- call it ~100KB/connection. At
+// MAX_CLIENTS=200 (:62) that is a worst case of roughly 20MB, which is why
+// w11/m7 was chosen even though a synthetic-frame simulation this cycle
+// measured `ws`'s w15/m8 default compresses marginally better on our exact
+// row shape (0.243 vs 0.254 ratio) -- not worth 10x the memory for that gap.
+// `concurrencyLimit` bounds how many deflate/inflate operations the libuv
+// threadpool runs at once; zlib work happens off the event loop, so it never
+// blocks a tick callback, but it does consume threadpool slots other work
+// (file I/O, DNS) also needs.
+//
+// Traded away, recorded rather than hand-waved: (1) the ~100KB/connection
+// memory above (bounded, see MAX_CLIENTS math); (2) a CRIME/BREACH-shaped
+// side channel where an attacker who can inject chosen plaintext into a
+// compressed stream alongside a secret can sometimes infer the secret from
+// compressed-length changes. Tick frames carry no secrets (rider id/lat/lng/
+// heading, all either public-to-viewers-in-scope or already known to the
+// attacker if they're a rider themselves), and auth tokens never ride a WS
+// data frame (server/auth.js issues them over HTTPS) -- so this does not
+// apply here, but it is a real property of the option being turned on.
+//
+// WS_DEFLATE=0 is a same-code kill switch: revert by restarting the process
+// with that env var set, no redeploy needed.
+const WS_DEFLATE_OFF = process.env.WS_DEFLATE === '0';
 const wss = new WebSocketServer({
   server: httpServer, path: '/ws', maxPayload: 65536,
   // WebSockets are NOT gated by CORS — a browser page on ANY origin can open
@@ -3992,7 +4032,16 @@ const wss = new WebSocketServer({
   //   - the deployed site (+ any extra hosts listed in WS_ORIGINS)
   //   - localhost / 127.0.0.1 on any port/scheme (dev server, Capacitor's
   //     https://localhost WebView origin)
-  verifyClient: wsOriginOk
+  verifyClient: wsOriginOk,
+  perMessageDeflate: WS_DEFLATE_OFF ? false : {
+    threshold: 0,
+    zlibDeflateOptions: { level: 6, memLevel: 7 },
+    serverMaxWindowBits: 11,
+    // Never force clientMaxWindowBits: some clients reject that negotiation
+    // parameter outright and the WHOLE extension then fails to negotiate.
+    // Let the client keep its own default.
+    concurrencyLimit: 10
+  }
 });
 
 // WS_ORIGINS: extra browser hosts allowed to open /ws. Pre-seeded with the
