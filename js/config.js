@@ -97,4 +97,15 @@
   };
   A.lazy.scanners = A.lazy.module('scanners', function () { return A.scanners; });
   A.lazy.radar = A.lazy.module('radar', function () { return A.radar; });
+  A.lazy.dragy = A.lazy.module('dragy', function () { return A.dragy; });
+  // js/race.js's modeById() falls back to A.racetimer.modeById, which is only
+  // ever set by js/dragy.js publishing its MODES table onto the shared
+  // racetimer module (js/dragy.js:500). A race started by a rider who never
+  // opened the dragy chip would otherwise hit an empty mode table and silently
+  // never begin — so loading race pulls dragy in first. `then(load, load)`:
+  // even a failed dragy load still attempts the race load rather than
+  // blocking an inbound race:invite forever.
+  A.lazy.race = (function (load) {
+    return function () { return A.lazy.dragy().then(load, load); };
+  })(A.lazy.module('race', function () { return A.race; }));
 })();

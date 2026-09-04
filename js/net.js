@@ -422,10 +422,14 @@
     // view (Nearby, popup, overlay) reflects it live.
     'dragy:pb': function (m) { if (A.sim && A.sim.remoteStats) A.sim.remoteStats(m.id, m.stats); },
 
-    /* ----- drag races ----- */
-    'race:state': function (m) { if (A.race && A.race.onState) A.race.onState(m); },
-    'race:invite': function (m) { if (A.race && A.race.onInvite) A.race.onInvite(m); },
-    'race:fix': function (m) { if (A.race && A.race.onFix) A.race.onFix(m); },
+    /* ----- drag races -----
+       js/race.js is lazy (A.lazy.race). These are inbound messages, not a rider
+       gesture — dropping one silently loses a challenge or a running race's
+       state, so each pulls the module in (guardrail 6) instead of no-opping
+       when A.race isn't loaded yet. */
+    'race:state': function (m) { A.lazy.race().then(function (r) { r.onState(m); }).catch(function () {}); },
+    'race:invite': function (m) { A.lazy.race().then(function (r) { r.onInvite(m); }).catch(function () {}); },
+    'race:fix': function (m) { A.lazy.race().then(function (r) { r.onFix(m); }).catch(function () {}); },
 
     tick: function (m) { A.sim.remoteTick(m.r || []); },
 

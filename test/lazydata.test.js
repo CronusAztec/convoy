@@ -43,6 +43,18 @@ group('index.html — js/data.js is off the boot path');
     fs.existsSync(path.join(ROOT, 'js', 'data.js')));
 }
 
+/* ---------------- cycle 5: js/race.js + js/dragy.js off the boot path ---------------- */
+group('index.html — js/race.js and js/dragy.js are off the boot path');
+{
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  ok('no <script src="js/race.js…"> tag remains', !/js\/race\.js/.test(html));
+  ok('no <script src="js/dragy.js…"> tag remains', !/js\/dragy\.js/.test(html));
+  ok('js/race.js still exists on disk (fetched lazily, still shipped in the OTA bundle)',
+    fs.existsSync(path.join(ROOT, 'js', 'race.js')));
+  ok('js/dragy.js still exists on disk (fetched lazily, still shipped in the OTA bundle)',
+    fs.existsSync(path.join(ROOT, 'js', 'dragy.js')));
+}
+
 /* ---------------- (b) object-identity: D survives data.js loading later ---------------- */
 group('js/ui.js + js/party.js — captured `D` is the object js/data.js later fills, not a stale empty one');
 {
@@ -239,7 +251,8 @@ async function checkRetryAfterRejection() {
    chain/order test/frontend.test.js drives (jsdom + the real index.html), so
    this is the same "what a WebView actually renders" guarantee, not a second
    hand-written fixture that can drift from it. ---------------- */
-function bootRealUi() {
+function bootRealUi(opts) {
+  const scriptDelayMs = (opts && opts.scriptDelayMs) || 0;
   const { JSDOM } = require('jsdom');
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const dom = new JSDOM(html, { url: 'http://localhost/', pretendToBeVisual: true, runScripts: 'outside-only' });
@@ -272,7 +285,7 @@ function bootRealUi() {
             try { win.eval(fs.readFileSync(path.join(ROOT, String(v).split('?')[0]), 'utf8')); }
             catch (e) { if (el.onerror) el.onerror(new win.Event('error')); return; }
             if (el.onload) el.onload(new win.Event('load'));
-          }, 0);
+          }, scriptDelayMs);
         }
       });
     }
@@ -298,15 +311,16 @@ function bootRealUi() {
   // it here too would set A.data.loaded/A.voice before a single test ran,
   // permanently taking the fast path and making the lazy/failure branch this
   // file exists to test unreachable. So: everything else index.html loads,
-  // MINUS 'data', 'voice', 'radar' and 'scanners' — those four are loaded
-  // lazily, on demand, by the real A.data.ensure() / A.voiceLoader.ensure() /
-  // A.lazy.radar() / A.lazy.scanners() calls under test.
+  // MINUS 'data', 'voice', 'radar', 'scanners', 'race' and 'dragy' — those six
+  // are loaded lazily, on demand, by the real A.data.ensure() /
+  // A.voiceLoader.ensure() / A.lazy.radar() / A.lazy.scanners() /
+  // A.lazy.race() / A.lazy.dragy() calls under test.
   const MODULE_ORDER = ['config', 'telemetry', 'util', 'state', 'themes', 'detectors', 'space',
     'mapview', 'sim', 'net', 'routing', 'ghost', 'overlays',
-    'racetimer', 'dragy', 'wake', 'places', 'triplog', 'speedo', 'hud', 'compass',
+    'racetimer', 'wake', 'places', 'triplog', 'speedo', 'hud', 'compass',
     'clock', 'tripmeter', 'gmeter', 'quest', 'weathernow', 'battery', 'coords',
     'destarrow', 'riderarrows', 'speedalert', 'dimmer', 'tripextras', 'party',
-    'ui', 'auth', 'native', 'ota', 'race'];
+    'ui', 'auth', 'native', 'ota'];
   MODULE_ORDER.forEach(function (name) {
     win.eval(fs.readFileSync(path.join(ROOT, 'js', name + '.js'), 'utf8'));
   });
@@ -314,6 +328,19 @@ function bootRealUi() {
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// A.lazy.race() chains TWO sequential "script load" macrotasks (dragy, then
+// race — Trap A's dependency order), so a fixed sleep long enough on a quiet
+// box can still be too short on this one (a persistent, unrelated Chromium
+// session — see STATE.md §8 — makes Node's own timer scheduling jittery
+// under load). Poll instead of guessing a constant.
+async function waitFor(predicate, timeoutMs) {
+  const t0 = Date.now();
+  while (!predicate()) {
+    if (Date.now() - t0 > timeoutMs) return false;
+    await sleep(15);
+  }
+  return true;
+}
 
 async function checkFailedGarageLeavesAWayBack() {
   group('js/ui.js buildProfilePanel() — a failed garage load leaves a usable panel (reviewer MEDIUM #1)');
@@ -466,6 +493,152 @@ async function checkGhostPersistedOnBootLoadsRadarImmediately() {
   ok('A.radar.isActive() is true after boot', !!A.radar && A.radar.isActive());
 }
 
+/* ---------------- cycle 5 task 1: the reviewer MEDIUM — a rapid double-tap on
+   #chip-scan (no await between clicks) before the module resolves used to
+   attach two .then() callbacks, both firing the legal gate. bootRealUi's
+   default script-load delay is 0ms, which resolves before a second synchronous
+   click can even happen — raised to 20ms here (mirroring the reviewer's own
+   probe) so the second click genuinely lands before the first load settles. ---------------- */
+async function checkScannerRapidDoubleTapBeforeLoadRunsGateOnce() {
+  group('js/ui.js — #chip-scan rapid double-tap (no await between clicks) before the module loads runs the legal gate exactly once (reviewer MEDIUM)');
+  const { doc, A, scriptOutcomes } = bootRealUi({ scriptDelayMs: 20 });
+  A.ui.init(); // wires the js/ui.js shim onto #chip-scan
+  var gateCalls = 0;
+  A.ui.legalGate = function () { gateCalls++; };
+  const chip = doc.getElementById('chip-scan');
+  scriptOutcomes.push('ok'); // js/scanners.js loads, 20ms later
+  chip.click(); // tap 1: attaches A.lazy.scanners().then(...)
+  chip.click(); // tap 2, no await: fires while the shim is still attached (RED before the fix)
+  await sleep(30);
+  ok('two rapid taps before the module resolved ran the legal gate exactly once, not twice',
+    gateCalls === 1, 'gateCalls=' + gateCalls);
+}
+
+/* ---------------- cycle 5 task 3: same shape, applied to the NEW #chip-dragy
+   shim (written with the fix from the start — this proves it, not just the
+   scanner one). ---------------- */
+async function checkDragyRapidDoubleTapBeforeLoadRunsGateOnce() {
+  group('js/ui.js — #chip-dragy rapid double-tap (no await between clicks) before the module loads runs the legal gate exactly once');
+  const { doc, A, scriptOutcomes } = bootRealUi({ scriptDelayMs: 20 });
+  A.ui.init(); // wires the js/ui.js shim onto #chip-dragy
+  var gateCalls = 0;
+  A.ui.legalGate = function () { gateCalls++; };
+  const chip = doc.getElementById('chip-dragy');
+  scriptOutcomes.push('ok'); // js/dragy.js loads, 20ms later
+  chip.click();
+  chip.click();
+  await sleep(30);
+  ok('two rapid taps before the module resolved ran the legal gate exactly once, not twice',
+    gateCalls === 1, 'gateCalls=' + gateCalls);
+}
+
+/* ---------------- cycle 5 task 2: js/race.js off the boot path. The three
+   js/net.js handlers ('race:state'/'race:invite'/'race:fix') are INBOUND
+   message paths (guardrail 6, same shape as the native BLE-alert sites cycle
+   4 guarded) — this drives a real 'race:invite' frame through the REAL
+   js/net.js message table (a fake WebSocket, exactly like test/net.test.js
+   uses) to prove the module gets pulled in, not silently dropped. ---------- */
+async function checkRaceInviteNotDropped() {
+  group("js/net.js race:invite — arrives through the real message table and pulls the lazy js/race.js module in (an inbound message must not be dropped)");
+  const { win, A, scriptOutcomes } = bootRealUi();
+  ok('A.race has not been loaded yet', !A.race);
+
+  const sockets = [];
+  win.WebSocket = class FakeWS {
+    constructor(url) { this.url = url; this.readyState = 0; sockets.push(this); }
+    send() {}
+    close() { this.readyState = 3; if (this.onclose) this.onclose({}); }
+  };
+  A.net.connect();
+  const s = sockets[0];
+  s.readyState = 1;
+  s.onopen(); // sets ws = socket, so the message-guard (ws !== socket) passes
+
+  scriptOutcomes.push('ok'); // js/dragy.js loads (A.lazy.race's own dependency, Trap A)
+  scriptOutcomes.push('ok'); // js/race.js loads
+  s.onmessage({ data: JSON.stringify({ t: 'race:invite', fromName: 'Ghost', modeId: 'quarter', raceId: 'r1' }) });
+  await waitFor(function () { return !!A.race; }, 2000);
+  ok('the inbound race:invite pulled js/race.js in instead of silently no-oping because A.race was not loaded yet',
+    !!A.race);
+}
+
+/* "Challenge to race" used to be gated on A.race already being loaded
+   (`if (A.race && A.race.challenge)`), which would have hidden the button
+   from every profile overlay the instant race.js left the boot path. It must
+   render unconditionally and load the module on click instead. */
+async function checkChallengeButtonLoadsRaceLazily() {
+  group('js/ui.js buildProfileOverlay() — "Challenge to race" renders even before js/race.js has loaded, and loads it (plus its dragy dependency) on click');
+  const { doc, A, scriptOutcomes } = bootRealUi();
+  A.mapview.addNpc = function () {};
+  A.sim.remoteAdd({
+    id: 'npc2', name: 'Rival', handle: 'rival', emoji: '🏁', vibe: 'Racing',
+    car: { year: 2021, make: 'Test', model: 'Car' }, pos: [0, 0], heading: 0
+  });
+  ok('A.race has not been loaded yet', !A.race);
+
+  A.ui.openProfileOverlay('npc2');
+  const raceBtn = Array.prototype.filter.call(
+    doc.querySelectorAll('.pf-po-actions button'),
+    function (b) { return /Challenge to race/.test(b.textContent); }
+  )[0];
+  ok('"Challenge to race" is rendered even though js/race.js has not loaded yet', !!raceBtn);
+
+  A.net.isLive = function () { return true; };
+  A.sim.hasRealPos = function () { return true; };
+  scriptOutcomes.push('ok'); // js/dragy.js loads (A.lazy.race's own dependency)
+  scriptOutcomes.push('ok'); // js/race.js loads
+  raceBtn.click();
+  await waitFor(function () { return !!A.race; }, 2000);
+  ok('clicking "Challenge to race" loaded js/race.js', !!A.race);
+}
+
+/* ---------------- cycle 5 task 3: js/dragy.js off the boot path ---------------- */
+
+/* Trap A: js/race.js's modeById() falls back to A.racetimer.modeById, which
+   only js/dragy.js ever sets (js/dragy.js:500). Without the dependency wiring
+   in A.lazy.race (js/config.js), a race started by a rider who never opened
+   the dragy chip would resolve no mode and silently never begin. */
+async function checkRaceLoadsDragyDependencyTrapA() {
+  group('js/config.js A.lazy.race() — Trap A: loads js/dragy.js as a dependency first, so the shared mode table is populated (a race would otherwise silently never start)');
+  const { A, scriptOutcomes } = bootRealUi();
+  ok('A.dragy has not loaded yet', !A.dragy);
+  ok('A.race has not loaded yet', !A.race);
+
+  scriptOutcomes.push('ok'); // js/dragy.js loads first (the dependency)
+  scriptOutcomes.push('ok'); // js/race.js loads second
+  const r = await A.lazy.race();
+  ok('A.lazy.race() loaded js/dragy.js as a dependency before resolving', !!A.dragy);
+  ok('A.lazy.race() resolved with the real js/race.js module', !!A.race && r === A.race);
+  const mode = A.racetimer && A.racetimer.modeById && A.racetimer.modeById('quarter');
+  ok('the shared mode table is populated: A.racetimer.modeById resolves a real mode (Trap A closed)',
+    !!mode, JSON.stringify(mode));
+}
+
+/* With dragy unloaded, the overlay must still render (degraded — raw mode ids,
+   no sort order), then re-render in place with human labels once it lands. */
+async function checkProfileOverlayRendersDragyLabelsOnceLoaded() {
+  group('js/ui.js openProfileOverlay() — public overlay degrades without js/dragy.js, then re-renders with human mode labels once it loads');
+  const { doc, A, scriptOutcomes } = bootRealUi();
+  A.mapview.addNpc = function () {};
+  A.sim.remoteAdd({
+    id: 'npc1', name: 'Ghost', handle: 'ghost', emoji: '👻', vibe: 'Cruising',
+    car: { year: 2020, make: 'Test', model: 'Car' }, pos: [0, 0], heading: 0,
+    stats: { pb: { quarter: { time: 12.3, trap: 40 } } }
+  });
+  ok('A.dragy has not loaded yet', !A.dragy);
+
+  scriptOutcomes.push('ok'); // js/dragy.js loads
+  A.ui.openProfileOverlay('npc1');
+  const bestsBefore = doc.querySelector('.pf-po-bests').textContent;
+  ok('before js/dragy.js loads, the bests section shows the raw mode id (degraded, not broken)',
+    /quarter/.test(bestsBefore), bestsBefore);
+
+  await sleep(30);
+  const bestsAfter = doc.querySelector('.pf-po-bests').textContent;
+  ok('once js/dragy.js loads, the overlay re-renders with a human label + dragy sort order from A.dragy.modes()',
+    A.dragy.modes().some(function (m) { return bestsAfter.indexOf(m.label) >= 0; }), bestsAfter);
+}
+
 (async function runRemainingGroupsInSequence() {
   await checkRetryAfterRejection();
   await checkFailedGarageLeavesAWayBack();
@@ -474,5 +647,11 @@ async function checkGhostPersistedOnBootLoadsRadarImmediately() {
   await checkScannerFailedLoadRetries();
   await checkNativeAlertReachesRadarWithGhostOff();
   await checkGhostPersistedOnBootLoadsRadarImmediately();
+  await checkScannerRapidDoubleTapBeforeLoadRunsGateOnce();
+  await checkDragyRapidDoubleTapBeforeLoadRunsGateOnce();
+  await checkRaceInviteNotDropped();
+  await checkChallengeButtonLoadsRaceLazily();
+  await checkRaceLoadsDragyDependencyTrapA();
+  await checkProfileOverlayRendersDragyLabelsOnceLoaded();
   process.exit(report());
 })();

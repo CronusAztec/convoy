@@ -142,7 +142,7 @@ ok("the reason still holds: js/themes.js builds the tag id as 'theme-css-' + def
 // static id is added or removed on purpose, update the number here so the
 // change is visible in the diff instead of silent.
 group('D3 — informational pins (update the number when the tree changes on purpose; never a ratchet)');
-ok('101 direct document.getElementById(\'<literal>\') sites (measured ' + direct.length + ')', direct.length === 101);
+ok('102 direct document.getElementById(\'<literal>\') sites (measured ' + direct.length + ')', direct.length === 102);
 ok('7 literal lookups through the js/radar.js byId() wrapper (measured ' + viaWrapper.length + ')', viaWrapper.length === 7);
 ok('71 static id="…" in index.html (measured ' + staticIds.size + ')', staticIds.size === 71);
 ok('22 referenced ids that are not static: 21 assigned in js/ + 1 allowlisted (measured ' + notStatic.length + ' = ' + jsAssignedRefs.length + ' + ' + notStatic.filter((id) => ALLOW[id]).length + ')',

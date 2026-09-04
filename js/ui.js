@@ -1349,15 +1349,18 @@
       }
       act.appendChild(inviteBtn);
 
-      // Challenge to a race (Part C wires the actual handler; guard until loaded).
-      if (A.race && A.race.challenge) {
-        var raceBtn = U.el('button', 'btn btn-small', 'Challenge to race');
-        raceBtn.addEventListener('click', function () {
-          if (A.race.challenge(subject.id)) closeOverlay();
+      // Challenge to a race. js/race.js is lazy (A.lazy.race) — render the
+      // button unconditionally (it used to be gated on A.race already being
+      // loaded, which would have hidden it from every profile overlay) and
+      // load the module on the click itself.
+      var raceBtn = U.el('button', 'btn btn-small', 'Challenge to race');
+      raceBtn.addEventListener('click', function () {
+        A.lazy.race().then(function (r) {
+          if (r.challenge(subject.id)) closeOverlay();
           else A.ui.toast('Too far to race. Move closer', 'warn');
-        });
-        act.appendChild(raceBtn);
-      }
+        }).catch(function () { A.ui.toast('Race unavailable — try again', 'warn'); });
+      });
+      act.appendChild(raceBtn);
 
       var waveBtn = U.el('button', 'btn btn-ghost btn-small', 'Wave');
       waveBtn.addEventListener('click', function () {
@@ -1632,6 +1635,12 @@
       if (card) openOverlay(card);
     };
     openOverlay(buildProfileOverlay(subject));
+    // js/dragy.js is lazy — render immediately (bestsFromStats()/pbRowsHtml()
+    // degrade to raw mode ids with no sort order until it lands) and re-render
+    // in place once it resolves. Reuses the same profileOverlayId guard the
+    // 'stats' listener below already relies on, so it survives a second
+    // overlapping open the same way a live stats update does.
+    if (!A.dragy) A.lazy.dragy().then(function () { refresh(); }).catch(function () {});
     // One-shot stats listener: refreshes the overlay when this rider's stats land.
     // ST.on now returns an unsubscribe (it returned undefined before, so the
     // off() call below threw and every opened profile leaked a live listener).
@@ -1670,28 +1679,33 @@
     var body = document.getElementById('profile-body');
     if (!body) return; // absent panel must not desync openName from the DOM
     body.innerHTML = '';
-    // T1.5a: js/data.js is lazy now. The idle warm in js/app.js has usually
-    // already filled A.data by the time a rider gets here, but a rider who
-    // beats it (garage view needs D.MAKE_LIST/D.PAINTS/etc.) must not see an
-    // empty-dropdown panel — wait for the (cached, near-instant once loaded)
-    // ensure() before building the garage page specifically.
-    if (profileView === 'garage') {
-      var gen = ++profileGen;
-      A.data.ensure().then(function () {
-        if (gen !== profileGen || document.getElementById('profile-body') !== body) return;
-        buildGaragePage(body);
-      }).catch(function () {
-        if (gen !== profileGen || document.getElementById('profile-body') !== body) return;
+    // T1.5a: js/data.js is lazy (garage view needs D.MAKE_LIST/D.PAINTS/etc.).
+    // Cycle 5: js/dragy.js is lazy too (renderTimes()'s "Fastest times" section
+    // on the MAIN page reads A.dragy for human labels + sort order) — fold its
+    // loader into the same gen-guarded await shape rather than a second,
+    // separately-guarded path. Each branch only awaits what it actually reads.
+    var gen = ++profileGen;
+    var deps = profileView === 'garage' ? [A.data.ensure()] : [A.lazy.dragy()];
+    Promise.all(deps).then(function () {
+      if (gen !== profileGen || document.getElementById('profile-body') !== body) return;
+      if (profileView === 'garage') buildGaragePage(body);
+      else buildProfileMain(body);
+    }).catch(function () {
+      if (gen !== profileGen || document.getElementById('profile-body') !== body) return;
+      if (profileView === 'garage') {
         // A failed load must not trap the rider on the blank panel body.innerHTML
         // was cleared to at the top of this call — fall back to the main page
         // (which still offers the My Garage button, i.e. a retry) and correct
         // profileView so it matches what is actually on screen.
         toast('Could not load the garage — try again', 'warn');
         showProfileView('main');
-      });
-    } else {
-      buildProfileMain(body);
-    }
+      } else {
+        // Main page degrades gracefully without dragy (bestsFromStats()/
+        // pbRowsHtml() both guard on A.dragy) — show it rather than strand the
+        // rider on a blank panel over one failed fetch.
+        buildProfileMain(body);
+      }
+    });
   }
 
   /* ---- page 1: the profile ---- */
@@ -4509,14 +4523,43 @@
     // the second tap.
     var scanChip = document.getElementById('chip-scan');
     if (scanChip) {
+      // Removed synchronously, before the async chain starts — a rapid
+      // double-tap (ordinary on a moving vehicle) used to attach two .then()s
+      // that both fired the legal gate, racing two geolocation + OpenMHz
+      // lookups against each other (reviewer MEDIUM, cycle 4). The shim only
+      // ever needs to fire once PER load attempt; js/scanners.js re-wires the
+      // chip itself once it lands (js/scanners.js:344), so a successful load
+      // has no reason to survive the await boundary. A FAILED load re-attaches
+      // it, or the chip would go permanently dead the moment one fetch drops.
       var scanShim = function () {
+        scanChip.removeEventListener('click', scanShim);
         A.lazy.scanners().then(function (s) {
-          scanChip.removeEventListener('click', scanShim);
           if (A.ui && A.ui.legalGate) A.ui.legalGate('scanner', s.open);
           else s.open();
-        }).catch(function () { toast('Scanners unavailable — try again', 'warn'); });
+        }).catch(function () {
+          scanChip.addEventListener('click', scanShim);
+          toast('Scanners unavailable — try again', 'warn');
+        });
       };
       scanChip.addEventListener('click', scanShim);
+    }
+
+    // js/dragy.js is lazy (8.5 KB gzip, A.lazy.dragy) — same shim shape as
+    // #chip-scan above, written with the sync-removal fix from the start.
+    // js/dragy.js:481-486 re-wires #chip-dragy itself once it lands.
+    var dragyChip = document.getElementById('chip-dragy');
+    if (dragyChip) {
+      var dragyShim = function () {
+        dragyChip.removeEventListener('click', dragyShim);
+        A.lazy.dragy().then(function (d) {
+          if (A.ui && A.ui.legalGate) A.ui.legalGate('perf', d.open);
+          else d.open();
+        }).catch(function () {
+          dragyChip.addEventListener('click', dragyShim);
+          toast('Performance meter unavailable — try again', 'warn');
+        });
+      };
+      dragyChip.addEventListener('click', dragyShim);
     }
     ST.on('auth', function () { renderAccount(); });
     ST.on('profile', function () { if (openName === 'profile') renderAccount(); });
