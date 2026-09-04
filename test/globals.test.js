@@ -69,8 +69,9 @@ const WEB_NOT_IN_JSDOM = ['Path2D', 'RTCIceCandidate', 'RTCPeerConnection', 'RTC
 const APP_WEB = ['maplibregl'];
 const APP_WEB_SCRIPT = { maplibregl: 'maplibre-gl' };
 // Test only: Node's `global`, the lift-and-execute suites' `eval`, the fetch
-// fakes' `Response` / `DOMException` (Node globals since 18 / 17) …
-const TEST_EXTRA = ['global', 'eval', 'Response', 'DOMException'];
+// fakes' `Response` / `DOMException` (Node globals since 18 / 17), and
+// `WebSocket` (Node global since 22, used by test/perf-bench.js's raw CDP client) …
+const TEST_EXTRA = ['global', 'eval', 'Response', 'DOMException', 'WebSocket'];
 // … and `document`: test/browser.test.js stringifies its probe functions and
 // runs them inside headless Chromium, where the DOM is real.
 const TEST_DOM = ['document'];

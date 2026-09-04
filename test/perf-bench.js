@@ -293,6 +293,19 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
    zygote/gpu/network/renderer children that a plain child.kill() on the
    parent PID alone leaves as orphans (confirmed on this box — three defunct
    chrome-headless children survived the old --idle path's runs). */
+/* CONVOY_CDP_TIMEOUT_MS: how long a single CDP send() waits for a response before
+   rejecting (cycle 18). 5s default is generous given the ~200ms round-trip cadence
+   observed; overridable so task 3's fault-injection proof can force the timeout path
+   without waiting 5s per run. */
+const CDP_SEND_TIMEOUT_MS = Number(process.env.CONVOY_CDP_TIMEOUT_MS) || 5000;
+
+// Last-resort net (cycle 18): every openCdp() session lives here until closeCdp()
+// removes it, so a throw *outside* runIdleCdp()'s try/finally (e.g. during the
+// Page.enable/Runtime.enable/Page.navigate sequence in openCdp's caller, before the
+// try block is entered) still gets its Chrome process tree reaped on process exit.
+const LIVE_CDP_SESSIONS = new Set();
+process.on('exit', () => { for (const s of LIVE_CDP_SESSIONS) closeCdp(s); });
+
 function openCdp(bin) {
   return new Promise((resolve, reject) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cprof-cdp-'));
@@ -302,6 +315,11 @@ function openCdp(bin) {
       '--user-data-dir=' + dir, '--remote-debugging-port=0', 'about:blank'
     ], { stdio: ['ignore', 'ignore', 'ignore'], detached: true });
     let settled = false;
+    // fail() is a no-op after the session has resolved (settled=true) — this is
+    // deliberate for the *connect* phase (retrying/erroring before we have a usable
+    // session makes no sense once callers already hold one). Past that point,
+    // ws.onclose/ws.onerror below are what surfaces a dead socket, by rejecting every
+    // in-flight send() instead of silently doing nothing.
     const fail = (e) => { if (!settled) { settled = true; reject(e); } };
     child.on('error', fail);
     (async () => {
@@ -322,23 +340,43 @@ function openCdp(bin) {
       const ws = new WebSocket(target.webSocketDebuggerUrl);
       const pending = new Map();
       let nextId = 0;
+      const rejectAllPending = (err) => {
+        for (const { reject: rej } of pending.values()) rej(err);
+        pending.clear();
+      };
       ws.onmessage = (ev) => {
         const m = JSON.parse(ev.data);
-        if (m.id && pending.has(m.id)) { pending.get(m.id)(m.result); pending.delete(m.id); }
+        if (m.id && pending.has(m.id)) { pending.get(m.id).resolve(m.result); pending.delete(m.id); }
       };
-      ws.onerror = () => fail(new Error('CDP WebSocket error'));
+      ws.onerror = () => { fail(new Error('CDP WebSocket error')); rejectAllPending(new Error('CDP WebSocket error')); };
+      ws.onclose = () => rejectAllPending(new Error('CDP WebSocket closed with a send() still pending'));
       await new Promise((res) => { ws.onopen = res; });
-      const send = (method, params) => new Promise((res) => {
+      const send = (method, params) => new Promise((resolve, reject) => {
         const id = ++nextId;
-        pending.set(id, res);
+        const timer = setTimeout(() => {
+          if (pending.has(id)) {
+            pending.delete(id);
+            reject(new Error('CDP send timed out after ' + CDP_SEND_TIMEOUT_MS + 'ms: ' + method + ' (id ' + id + ')'));
+          }
+        }, CDP_SEND_TIMEOUT_MS);
+        pending.set(id, {
+          resolve: (v) => { clearTimeout(timer); resolve(v); },
+          reject: (e) => { clearTimeout(timer); reject(e); }
+        });
         ws.send(JSON.stringify({ id, method, params: params || {} }));
       });
-      if (!settled) { settled = true; resolve({ child, dir, ws, send }); }
+      if (!settled) {
+        settled = true;
+        const session = { child, dir, ws, send };
+        LIVE_CDP_SESSIONS.add(session);
+        resolve(session);
+      }
     })();
   });
 }
 
 function closeCdp(session) {
+  LIVE_CDP_SESSIONS.delete(session);
   try { session.ws.close(); } catch (e) { /* already closed */ }
   try { process.kill(-session.child.pid, 'SIGKILL'); } catch (e) { try { session.child.kill('SIGKILL'); } catch (e2) { /* already dead */ } }
   try { fs.rmSync(session.dir, { recursive: true, force: true }); } catch (e) { /* best effort */ }
