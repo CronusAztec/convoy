@@ -617,7 +617,7 @@
         '<div class="convoy-hero-art">' + U.convoyFlag(0) + '</div>' +
         '<h3>Start a convoy</h3>' +
         '<p>Ride together in real time. Members appear on each other\'s map with a live link line.</p>';
-      var nameInput = mkText('', U.pick(D.CONVOY_NAMES));
+      var nameInput = mkText('', U.pick((D.CONVOY_NAMES && D.CONVOY_NAMES.length) ? D.CONVOY_NAMES : A.party.FALLBACK_CONVOY_NAMES));
       var flagRow = U.el('div', 'emoji-row');
       var chosen = 0;
       for (var fi = 0; fi < 3; fi++) {
@@ -664,6 +664,8 @@
       }
 
       body.appendChild(hero);
+
+      if (!D.CONVOY_NAMES) A.data.ensure().then(function () { if (openName === 'convoy') renderConvoy(); }).catch(function () {});
       return;
     }
 

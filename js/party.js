@@ -219,6 +219,7 @@
     CHAT_MAX: CHAT_MAX,
     systemMsg: systemMsg,
     setRally: setRally,
-    clearRally: clearRally
+    clearRally: clearRally,
+    FALLBACK_CONVOY_NAMES: FALLBACK_CONVOY_NAMES
   };
 })();

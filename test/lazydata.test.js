@@ -552,6 +552,52 @@ async function checkProfileOverlayRendersDragyLabelsOnceLoaded() {
     A.dragy.modes().some(function (m) { return bestsAfter.indexOf(m.label) >= 0; }), bestsAfter);
 }
 
+/* ---------------- cycle 8 task 1: the directive's own found-and-fixed defect
+   — js/ui.js:620's renderConvoy() read D.CONVOY_NAMES synchronously with no
+   guard, so opening the Convoy panel before the idle warm (or a failed warm,
+   swallowed by js/app.js's .catch(function(){})) landed js/data.js threw a
+   TypeError and left #convoy-body EMPTY (body.innerHTML='' runs before the
+   throw). Fixed by reusing js/party.js's FALLBACK_CONVOY_NAMES (now exported
+   on A.party) for the first paint, then self-healing via A.data.ensure() once
+   real data lands (mirrors buildProfilePanel()'s openName re-render guard). ---------------- */
+async function checkConvoyPanelSurvivesUnloadedData() {
+  group('js/ui.js renderConvoy() — opening Convoy before js/data.js has loaded does not throw and paints a real hero, not a blank panel');
+  const { doc, A } = bootRealUi();
+  ok('A.data.loaded is false — js/data.js has not been fetched yet (the exact precondition of the bug)',
+    !A.data.loaded);
+
+  let threw = null;
+  try { A.ui.openPanel('convoy'); } catch (e) { threw = e; }
+  ok('A.ui.openPanel(\'convoy\') does not throw with js/data.js unloaded', threw === null,
+    threw && threw.stack.split('\n').slice(0, 2).join(' | '));
+
+  const body = doc.getElementById('convoy-body');
+  ok('#convoy-body is non-empty after opening (not stranded blank by the throw)', body.children.length > 0);
+  const nameInput = body.querySelector('input.input');
+  ok('the convoy-name placeholder is one of js/party.js\'s FALLBACK_CONVOY_NAMES (real DOM, not just "no exception")',
+    !!nameInput && A.party.FALLBACK_CONVOY_NAMES.indexOf(nameInput.placeholder) >= 0,
+    nameInput && nameInput.placeholder);
+}
+
+async function checkConvoyPanelSelfHealsOnceDataLands() {
+  group('js/ui.js renderConvoy() — once A.data.ensure() resolves, the panel re-renders in place with a real catalog name');
+  const { doc, A, scriptOutcomes } = bootRealUi();
+  A.ui.openPanel('convoy');
+  const before = doc.getElementById('convoy-body').querySelector('input.input').placeholder;
+  ok('before the load resolves, the placeholder is still a fallback name (sanity check on the setup)',
+    A.party.FALLBACK_CONVOY_NAMES.indexOf(before) >= 0, before);
+
+  scriptOutcomes.push('ok'); // js/data.js actually loads (bootRealUi evals the real file, see harness.js)
+  await A.data.ensure();
+  await sleep(0); // let the .then() re-render scheduled by renderConvoy() run
+
+  const after = doc.getElementById('convoy-body').querySelector('input.input').placeholder;
+  ok('A.data.loaded is true after ensure() resolves', A.data.loaded === true);
+  ok('after the load, the placeholder is drawn from the real D.CONVOY_NAMES catalog, not the 3-item fallback (proves the self-heal re-render actually ran)',
+    A.data.CONVOY_NAMES.indexOf(after) >= 0 && A.party.FALLBACK_CONVOY_NAMES.length < A.data.CONVOY_NAMES.length,
+    'after="' + after + '" fallbackLen=' + A.party.FALLBACK_CONVOY_NAMES.length + ' realLen=' + A.data.CONVOY_NAMES.length);
+}
+
 (async function runRemainingGroupsInSequence() {
   await checkRetryAfterRejection();
   await checkFailedGarageLeavesAWayBack();
@@ -566,5 +612,7 @@ async function checkProfileOverlayRendersDragyLabelsOnceLoaded() {
   await checkChallengeButtonLoadsRaceLazily();
   await checkRaceLoadsDragyDependencyTrapA();
   await checkProfileOverlayRendersDragyLabelsOnceLoaded();
+  await checkConvoyPanelSurvivesUnloadedData();
+  await checkConvoyPanelSelfHealsOnceDataLands();
   process.exit(report());
 })();

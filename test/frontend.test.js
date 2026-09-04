@@ -57,6 +57,13 @@ const MODULE_ORDER = [
   'voice', 'ui', 'auth', 'native', 'ota', 'race'
 ];
 
+// Lifted from testBootCost()'s own scriptTags matcher (cycle 8, directive task
+// 2) so the real-boot-graph gate below derives its module list from
+// index.html instead of hardcoding a second array that can drift from it.
+const BOOT_SCRIPT_TAG_RE = /<script\b[^>]*src="js\/([^"?]+)\.js(?:\?[^"]*)?"[^>]*>/g;
+function bootScriptTags(html) { return Array.from(html.matchAll(BOOT_SCRIPT_TAG_RE)); }
+function bootModuleNames(html) { return bootScriptTags(html).map((m) => m[1]); }
+
 function buildWindow() {
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const dom = new JSDOM(html, { url: 'http://localhost/', pretendToBeVisual: true, runScripts: 'outside-only' });
@@ -693,7 +700,7 @@ function testBootCost() {
   const missing = sameOrigin.filter((p) => !fs.existsSync(path.join(ROOT, p)));
   H.ok('every same-origin <script src> / stylesheet <link href> in index.html exists on disk (' + sameOrigin.length + ' assets)',
     missing.length === 0, 'missing: ' + missing.join(', '));
-  const scriptTags = Array.from(html.matchAll(/<script\b[^>]*src="js\/[^"]+"[^>]*>/g));
+  const scriptTags = bootScriptTags(html);
   H.ok('every same-origin script is `defer` (' + scriptTags.length + ' tags) — nothing render-blocking',
     scriptTags.length > 0 && scriptTags.every((m) => /\bdefer\b/.test(m[0])));
   let raw = 0, gz = 0, css = 0, js = 0;
@@ -716,6 +723,52 @@ function testBootCost() {
     'bootAssetGzipBudget', gz + indexGz, 'assets raw ' + raw + ' / gzip ' + gz + ', index.html gzip ' + indexGz + ' → ' + Math.round((gz + indexGz) / 1024) + ' KB');
   atOrBelowBaseline('boot external origins — distinct hosts across every <script src> and <link href> in index.html, preconnect/dns-prefetch hints included',
     'bootExternalOrigins', hosts.size, Array.from(hosts).sort().join(', '));
+}
+
+/* ---------------- cycle 8 task 2: the REAL boot graph, not MODULE_ORDER's
+   full jsdom test SET. MODULE_ORDER above deliberately includes six modules
+   (data/voice/radar/scanners/dragy/race) that production has not <script>-tagged
+   at boot since cycles 2-5's lazy-loading work — necessary so the axe/surface
+   suite above can still exercise their UI, but it means testSurfaces() alone
+   could never catch a bug like task 1's (renderConvoy() dereferencing
+   D.CONVOY_NAMES with no guard): its 'convoy panel' surface opened fine there
+   because js/data.js WAS loaded. This gate derives the module list from
+   index.html itself via bootModuleNames() (never hardcoded, so a future lazy
+   conversion cannot silently drift back out of coverage) and opens each panel
+   against ONLY those modules — the actual graph a cold rider gets before any
+   idle warm lands. Not a ratchet (guardrail 4) — a pass/fail regression gate. */
+function testRealBootGraphSurfaces() {
+  H.group('js/ui.js — panels render against the REAL boot graph (index.html\'s own <script> tags, not the full jsdom module SET)');
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  const LAZY_MODULES = ['data', 'voice', 'radar', 'scanners', 'race', 'dragy'];
+  // app.js only wires a DOMContentLoaded listener assuming a live map/socket/
+  // GPS (same reason MODULE_ORDER and test/harness.js's bootRealUi() both
+  // exclude it) — nothing under test calls into it.
+  const bootModules = bootModuleNames(html).filter((m) => m !== 'app');
+  const stillLazy = LAZY_MODULES.filter((m) => !bootModules.includes(m));
+  H.ok('the derived boot-graph list still excludes all six known-lazy modules — a self-check that the parser found the real tags, not a stale array (if this fails, a module was un-lazied and this gate\'s panel list may need a deliberate update)',
+    stillLazy.length === LAZY_MODULES.length,
+    'still excluded: ' + stillLazy.join(', ') + '; now present: ' + LAZY_MODULES.filter((m) => bootModules.includes(m)).join(', '));
+
+  const dom = buildWindow();
+  const win = dom.window;
+  installAsGlobals(win);
+  let A;
+  try {
+    bootModules.forEach((name) => win.eval(fs.readFileSync(path.join(ROOT, 'js', name + '.js'), 'utf8')));
+    A = win.App;
+    H.ok('the real boot graph (' + bootModules.length + ' modules, derived from index.html) loads without throwing', true);
+  } catch (e) {
+    H.ok('the real boot graph loads without throwing', false, e.stack);
+    return;
+  }
+
+  ['nearby', 'convoy', 'profile'].forEach((name) => {
+    let threw = null;
+    try { A.ui.openPanel(name); } catch (e) { threw = e; }
+    H.ok(name + ' panel opens against the real (pre-idle-warm) boot graph without throwing', threw === null,
+      threw && threw.stack.split('\n').slice(0, 3).join(' | '));
+  });
 }
 
 /* ---------------- 4b. typography floor (source text, not computed style) ---------------- */
@@ -864,6 +917,7 @@ function testDetector() {
   testThemes();
   testStamps();
   testBootCost();
+  testRealBootGraphSurfaces();
   testFontSizeFloor();
   testAnimationBudget();
   testDetector();
