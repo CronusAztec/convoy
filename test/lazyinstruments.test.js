@@ -183,6 +183,50 @@ async function checkTripextrasWakesOnFirstRouteOrTrip() {
     injected.length === 1, 'injected ' + injected.length);
 }
 
+/* ---------------- cycle 14 task 1: js/riderarrows.js wakes on the first
+   'party' event where A.state.party is truthy — not just the first 'party'
+   event (a leave also emits 'party' with S.party already set to null). ---------------- */
+async function checkRiderarrowsWakesOnFirstRealParty() {
+  group('js/app.js wakeRiderarrowsOnFirstParty() — loads js/riderarrows.js on the first party event where S.party is truthy, ignoring a leave');
+  const riderarrowsTagRe = /<script[^>]*src="js\/riderarrows\.js[^"]*"/;
+  ok('no <script src="js/riderarrows.js…"> tag remains in index.html', !riderarrowsTagRe.test(html));
+  ok('js/riderarrows.js still exists on disk (fetched lazily, still shipped in the OTA bundle)',
+    fs.existsSync(path.join(ROOT, 'js', 'riderarrows.js')));
+
+  const { win, A, injected, stamp } = bootAppBoot();
+  ok('A.lazy.riderarrows is a function', typeof A.lazy.riderarrows === 'function');
+
+  A.appBoot.wakeRiderarrowsOnFirstParty();
+  ok('zero <script> elements injected before any party event', injected.length === 0);
+
+  // A 'party' event with S.party still null (e.g. an early no-op emit, or the
+  // shape of a leave) must NOT wake the module.
+  A.state.party = null;
+  A.store.emit('party');
+  ok('a "party" event with S.party falsy does not inject anything', injected.length === 0,
+    'injected ' + injected.length);
+
+  A.state.party = { id: 'p1', name: 'Test Convoy', members: ['npc1'] };
+  A.store.emit('party');
+  ok('exactly one <script> injected after the first "party" event with S.party truthy', injected.length === 1,
+    'injected ' + injected.length);
+  const src = injected[0] && injected[0].src;
+  ok('injected src is js/riderarrows.js' + stamp + ' (measured "' + src + '")', src === 'js/riderarrows.js' + stamp);
+
+  const spy = resolveInjectedScript(win, injected[0], 'riderarrows');
+  await H.sleep(10);
+  ok('A.riderarrows.init() called exactly once after the script "loads" (its own trailing schedule() self-paints, no catch-up call needed)',
+    spy.calls() === 1, 'calls=' + spy.calls());
+
+  // A subsequent leave (S.party -> null, then emit) must not inject again.
+  A.state.party = null;
+  A.store.emit('party');
+  A.state.party = { id: 'p2', name: 'Another Convoy', members: [] };
+  A.store.emit('party');
+  ok('still exactly one <script> injected after a later leave + rejoin (wake-once, listener unsubscribed)',
+    injected.length === 1, 'injected ' + injected.length);
+}
+
 /* ---------------- (6) js/hud.js card() — rank-ordered insert ---------------- */
 async function checkHudRankOrder() {
   group('js/hud.js card() — cards insert by rank regardless of enable order (guardrail 6: fixed rail position)');
@@ -226,6 +270,7 @@ group('js/app.js LAZY_INSTRUMENTS — every entry names a real module file and a
 (async function runAsyncGroupsInSequence() {
   await checkSettingFlipWakesOnce();
   await checkTripextrasWakesOnFirstRouteOrTrip();
+  await checkRiderarrowsWakesOnFirstRealParty();
   await checkHudRankOrder();
   process.exit(report());
 })();

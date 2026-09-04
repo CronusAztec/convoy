@@ -48,7 +48,13 @@ function makeEl(tag) {
     },
     appendChild(c) { this.children.push(c); c.parentNode = this; return c; },
     removeChild(c) { this.children = this.children.filter((x) => x !== c); return c; },
-    insertBefore(c) { this.children.unshift(c); c.parentNode = this; return c; },
+    insertBefore(c, ref) {
+      c.parentNode = this;
+      const i = ref == null ? -1 : this.children.indexOf(ref);
+      if (i === -1) this.children.push(c);
+      else this.children.splice(i, 0, c);
+      return c;
+    },
     remove() { if (this.parentNode) this.parentNode.removeChild(this); },
     setAttribute(k, v) { this['attr_' + k] = v; },
     getAttribute(k) { return this['attr_' + k]; },

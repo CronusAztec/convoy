@@ -24,6 +24,36 @@ const ST = A.store;
 const src = (rel) => fs.readFileSync(path.join(H.ROOT, rel), 'utf8');
 
 /* ======================================================================== */
+H.group('test/harness.js DOM shim — insertBefore(child, ref) honours its second argument');
+{
+  // The shim's insertBefore used to ignore its second argument entirely
+  // (always this.children.unshift(c)) — every real caller that passes a
+  // reference node (js/hud.js's rank-ordered card insert, js/space.js,
+  // js/tripextras.js) would have silently gotten "always first" instead of
+  // "before ref", and insertBefore(x, null) — which real DOM appends — would
+  // have prepended instead. Direct check against a fresh parent, not routed
+  // through any app module, so it proves the shim itself, not a caller.
+  const parent = H.makeEl('div');
+  const a = H.makeEl('span'); a.id = 'a';
+  const b = H.makeEl('span'); b.id = 'b';
+  const c = H.makeEl('span'); c.id = 'c';
+  parent.appendChild(a); parent.appendChild(b); parent.appendChild(c);
+
+  const d = H.makeEl('span'); d.id = 'd';
+  parent.insertBefore(d, b);
+  H.ok('insertBefore(d, b) lands d directly before b, not at the front',
+    parent.children.map((x) => x.id).join(',') === 'a,d,b,c',
+    'got ' + parent.children.map((x) => x.id).join(','));
+  H.ok('insertBefore sets the inserted node\'s parentNode', d.parentNode === parent);
+
+  const e = H.makeEl('span'); e.id = 'e';
+  parent.insertBefore(e, null);
+  H.ok('insertBefore(e, null) appends at the end (matches real DOM insertBefore(x, null))',
+    parent.children.map((x) => x.id).join(',') === 'a,d,b,c,e',
+    'got ' + parent.children.map((x) => x.id).join(','));
+}
+
+/* ======================================================================== */
 H.group('Event bus — on() returns a working unsubscribe');
 {
   // ui.js's profile overlay calls the return value of ST.on to detach its

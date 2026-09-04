@@ -125,4 +125,10 @@
   // setting like the eight above — it activates on trip/route activity, so
   // js/app.js wakes it on the first 'route'/'trip' bus event instead.
   A.lazy.tripextras = A.lazy.module('tripextras', function () { return A.tripextras; });
+
+  // Cycle 14: js/riderarrows.js (edge arrows to off-screen convoy riders) has
+  // no convoy to point at until the rider is actually IN one — js/app.js wakes
+  // it on the first 'party' event where S.party is truthy (a leave also emits
+  // 'party', so app.js checks the value, not just the event).
+  A.lazy.riderarrows = A.lazy.module('riderarrows', function () { return A.riderarrows; });
 })();

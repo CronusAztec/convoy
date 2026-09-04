@@ -55,6 +55,27 @@
     offTripextrasRoute = A.store.on('route', wakeTripextras);
     offTripextrasTrip = A.store.on('trip', wakeTripextras);
   }
+  // js/riderarrows.js (edge arrows to off-screen convoy riders) has nothing to
+  // draw until the rider is actually in a convoy. S.party starts null every
+  // boot (state.js:158, same shape as S.route) and 'party' also fires on a
+  // LEAVE (party.js's leave() sets S.party = null then emits), so this must
+  // check the value, not just react to the event — otherwise the very first
+  // party event of a session that happens to be "no convoy" would wake the
+  // module for nothing. A party resume after reconnect (net.js's applyParty())
+  // sets S.party THEN emits 'party', so it is caught by this same listener,
+  // no separate boot-time check needed. Once woken, init() ends with its own
+  // schedule() call, so no catch-up refresh() is needed (unlike tripextras).
+  var riderarrowsWoken = false;
+  var offRiderarrowsParty;
+  function wakeRiderarrows() {
+    if (riderarrowsWoken || !A.state.party) return;
+    riderarrowsWoken = true;
+    offRiderarrowsParty();
+    A.lazy.riderarrows().then(function (m) { if (m && m.init) m.init(); }).catch(function () {});
+  }
+  function wakeRiderarrowsOnFirstParty() {
+    offRiderarrowsParty = A.store.on('party', wakeRiderarrows);
+  }
   // Test seam only (test/lazyinstruments.test.js) — app.js otherwise exports
   // nothing on A, since everything else here is boot-time side effects wired
   // through DOMContentLoaded/load listeners that a test can't safely trigger
@@ -63,7 +84,8 @@
   // handler below at the same point in boot order.
   A.appBoot = {
     LAZY_INSTRUMENTS: LAZY_INSTRUMENTS, wakeInstrument: wakeInstrument, wakeLazyInstruments: wakeLazyInstruments,
-    wakeTripextras: wakeTripextras, wakeTripextrasOnFirstRouteOrTrip: wakeTripextrasOnFirstRouteOrTrip
+    wakeTripextras: wakeTripextras, wakeTripextrasOnFirstRouteOrTrip: wakeTripextrasOnFirstRouteOrTrip,
+    wakeRiderarrows: wakeRiderarrows, wakeRiderarrowsOnFirstParty: wakeRiderarrowsOnFirstParty
   };
 
   window.addEventListener('DOMContentLoaded', function () {
@@ -109,7 +131,7 @@
       if (A.clock) A.clock.init();
       if (A.quest) A.quest.init();       // Top Speed Quest — top speed + fastest 60–100
       wakeLazyInstruments();             // tripmeter/gmeter/weathernow/battery/coords/destarrow/speedalert/dimmer
-      if (A.riderarrows) A.riderarrows.init(); // edge arrows to off-screen convoy riders
+      wakeRiderarrowsOnFirstParty();     // edge arrows to off-screen convoy riders, loaded on first real party
       wakeTripextrasOnFirstRouteOrTrip(); // ETA-card weather + share + save, loaded on first route/trip
       A.auth.boot();   // decide: show auth screen, or enter app + connect (net.connect)
       // OTA handshake, deliberately LAST and only on the success path: the
