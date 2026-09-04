@@ -27,3 +27,32 @@ that inline note now that the actionable subset (`undersized-ui-text`, `tiny-tex
 `layout-transition`) has actually been driven to zero (cycle 2 stage 10) and the remaining count is
 stable at 17. `test/frontend-baseline.json`'s `detectorWarnings` is pinned at 17; `testBaselineRatchet()`
 fails the suite if it is ever raised without a corresponding real fix.
+
+## Animation budget (mission 20260903-173653-75d3, aspect P-C)
+
+Infinite (`animation: … infinite`) declarations in this stylesheet may only animate `transform`
+and/or `opacity`. Any other animated property (`background-position`, `box-shadow`, `width`, …)
+forces Chrome to repaint the element every frame for as long as the animation runs, forever, on
+every rider's screen — the compositor thread can only take over transform/opacity. If you add an
+infinite animation that touches anything else, `test/frontend.test.js`'s `testAnimationBudget()`
+(`infinitePaintAnimations` in `test/frontend-baseline.json`) will catch it and fail the suite.
+
+The established pattern for a "pulsing ring" effect (`ringPulse` at `css/styles.css:1831`, and the
+cycle-6 conversions of `hudScan` and `livePulse` below) is: keep any *static* shadow/border/
+background on the element or a pseudo-element as a fixed value, and animate only `transform: scale()`
+/`opacity` on top of it. `width`-based progress bars use the same idea (cycle 2 stage 10: `transform:
+scaleX()` instead of animating `width`).
+
+Cycle 6 converted the two infinite paint animations that run continuously with no user action —
+`hudScan` (`#hud-scan`, the full-viewport scanline overlay, was animating `background-position-y`)
+and `livePulse` (`.dot-live`, the header's live-status dot, was animating `box-shadow`) — to
+transform/opacity via the pseudo-element pattern above. Three remain and are a deliberate,
+documented exception rather than a forced conversion: `wtPulse` (`.wt-btn.wt-live`), `wtChipPulse`
+(`.member-chip.wt-speaking .u-ava`) and `detPulse` (`[data-anim="on"] .ralert-detector`) each
+animate **two** independently-varying `box-shadow` layers (inset + outer glow, or two glows with
+different alpha *and* spread on each keyframe) — geometry a single `transform: scale()` ring cannot
+reproduce pixel-for-pixel without a visual regression, and this box has no browser to verify one
+against. All three only run while transmitting/speaking/alerting (zero idle cost — they are never
+on screen on a default, quiet screen), so the honest trade is to pin `infinitePaintAnimations` at
+**3** rather than force a lossy conversion. Converting them is still open work for a future stage
+with a way to actually look at the result (STATE.md §8 human item 4).

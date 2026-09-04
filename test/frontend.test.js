@@ -743,6 +743,94 @@ function testFontSizeFloor() {
     'offending declarations: ' + offenders.join(', '));
 }
 
+/* ---------------- 4c. infinite CSS animation paint budget (aspect P-C) ----------------
+   Chrome can only hand an infinite animation to the compositor thread when every
+   property it touches is `transform` or `opacity`; anything else (background-position,
+   box-shadow, width, …) repaints the whole animated element every frame for as long as
+   it runs — forever, for an `infinite` animation. Static and deterministic (css text
+   only, no browser) so it stays honest on a box whose bench numbers are contaminated
+   by an unrelated foreign process (STATE.md §8). See css/DESIGN-DECISIONS.md's
+   "Animation budget" section for the house pattern and the documented exceptions. */
+var ANIMATION_COMPOSITOR_SAFE_PROPS = { transform: true, opacity: true };
+
+function parseKeyframesBlocks(css) {
+  const kf = {};
+  const re = /@keyframes\s+([A-Za-z0-9_-]+)\s*\{/g;
+  let m;
+  while ((m = re.exec(css))) {
+    let i = re.lastIndex, depth = 1;
+    while (depth > 0 && i < css.length) {
+      if (css[i] === '{') depth++;
+      else if (css[i] === '}') depth--;
+      i++;
+    }
+    const body = css.slice(re.lastIndex, i - 1);
+    const props = {};
+    body.replace(/([-a-zA-Z]+)\s*:/g, (s, prop) => { props[prop] = true; return s; });
+    kf[m[1]] = Object.keys(props);
+  }
+  return kf;
+}
+
+function findInfiniteAnimationNames(css) {
+  // This codebase only ever uses the `animation:` shorthand (no animation-name /
+  // animation-iteration-count split declarations — confirmed by grep, cycle 6).
+  const names = [];
+  const re = /animation:\s*([^;]+);/g;
+  let m;
+  while ((m = re.exec(css))) {
+    const decl = m[1].trim();
+    if (decl === 'none') continue; // e.g. [data-anim="off"] … { animation: none; } — removes, doesn't add
+    if (!/\binfinite\b/.test(decl)) continue;
+    names.push(decl.split(/\s+/)[0]);
+  }
+  return names;
+}
+
+function classifyInfiniteAnimations(css) {
+  const kf = parseKeyframesBlocks(css);
+  const infinite = findInfiniteAnimationNames(css);
+  const paintNames = [], safeNames = [];
+  infinite.forEach((name) => {
+    const props = kf[name] || [];
+    const paints = props.some((p) => !ANIMATION_COMPOSITOR_SAFE_PROPS[p]);
+    (paints ? paintNames : safeNames).push(name);
+  });
+  return { infinite, paintNames, safeNames };
+}
+
+function testAnimationBudget() {
+  H.group('css/styles.css — infinite CSS animations may only touch transform/opacity (compositor-only)');
+
+  // Prove the analyzer before trusting it — same discipline as test/stamp.test.js's
+  // embedded regression fixture.
+  const fixture = [
+    '@keyframes fixturePaint { from { background-position: 0 0; } to { background-position: 10px 0; } }',
+    '.paint-el { animation: fixturePaint 1s linear infinite; }',
+    '@keyframes fixtureSafe { 0% { transform: scale(1); opacity: 1; } 100% { transform: scale(1.2); opacity: 0; } }',
+    '.safe-el { animation: fixtureSafe 2s ease infinite; }',
+    '.off-el { animation: none; }',
+    '@keyframes fixtureOnce { from { box-shadow: 0 0 0 red; } to { box-shadow: 0 0 10px red; } }',
+    '.once-el { animation: fixtureOnce 300ms ease-out; }' // no `infinite` — must not be counted
+  ].join('\n');
+  const fx = classifyInfiniteAnimations(fixture);
+  H.ok('fixture (a): a background-position infinite animation classifies as paint',
+    fx.paintNames.includes('fixturePaint'), 'paintNames=' + fx.paintNames.join(','));
+  H.ok('fixture (b): a transform/opacity infinite animation classifies as safe',
+    fx.safeNames.includes('fixtureSafe'), 'safeNames=' + fx.safeNames.join(','));
+  H.ok('fixture (c): `animation: none` is not counted as an infinite animation',
+    !fx.infinite.includes('none') && fx.infinite.length === 2, 'infinite=' + fx.infinite.join(','));
+  H.ok('fixture (d): a non-infinite paint animation (fixtureOnce) is not counted',
+    !fx.infinite.includes('fixtureOnce'), 'infinite=' + fx.infinite.join(','));
+
+  const css = fs.readFileSync(path.join(ROOT, 'css', 'styles.css'), 'utf8');
+  const real = classifyInfiniteAnimations(css);
+  atOrBelowBaseline('infinite CSS animations that touch a paint-triggering property (repaint every frame, forever)',
+    'infinitePaintAnimations', real.paintNames.length,
+    (real.paintNames.length ? real.paintNames.join(', ') : 'none') +
+    ' — ' + real.safeNames.length + ' already transform/opacity-only: ' + real.safeNames.join(', '));
+}
+
 /* ---------------- 5. impeccable design-integrity detector ---------------- */
 function testDetector() {
   H.group('impeccable detector — design-integrity antipatterns');
@@ -777,6 +865,7 @@ function testDetector() {
   testStamps();
   testBootCost();
   testFontSizeFloor();
+  testAnimationBudget();
   testDetector();
   console.log('\nMeasured counts (compare against test/frontend-baseline.json):');
   console.log(JSON.stringify(measured, null, 2));

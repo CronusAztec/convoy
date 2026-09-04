@@ -143,8 +143,19 @@ button svg, .ctl svg, .search-icon svg {
   pointer-events: none;
   z-index: 3;
 }
-/* faint horizontal scanlines */
+/* faint horizontal scanlines. Gradient lives on ::after (81px taller than
+   viewport, transform-animated) instead of animating background-position-y
+   on this fixed full-viewport layer — see DESIGN-DECISIONS.md. */
 #hud-scan {
+  mix-blend-mode: screen;
+  opacity: .6;
+  overflow: hidden;
+}
+#hud-scan::after {
+  content: '';
+  position: absolute;
+  inset: -81px 0 0 0;
+  height: calc(100% + 81px);
   background: repeating-linear-gradient(
     to bottom,
     rgba(255, 255, 255, .02) 0,
@@ -152,13 +163,11 @@ button svg, .ctl svg, .search-icon svg {
     transparent 1px,
     transparent 3px
   );
-  mix-blend-mode: screen;
-  opacity: .6;
   animation: hudScan 8s linear infinite;
 }
 @keyframes hudScan {
-  from { background-position-y: 0; }
-  to { background-position-y: 80px; }
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(0, 81px, 0); }
 }
 /* very faint tech grid */
 #hud-grid {
@@ -407,12 +416,22 @@ button svg, .ctl svg, .search-icon svg {
 .chip-ghost { border-color: rgba(155, 77, 255, .4); }
 .chip-ghost .dot { background: #9b4dff !important; box-shadow: 0 0 6px #9b4dff; }
 .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
-.dot-live { background: var(--good); box-shadow: 0 0 6px var(--good), 0 0 0 0 rgba(0, 255, 156, .7); animation: livePulse 2.2s infinite; }
+/* pulse ring on ::after (ringPulse pattern), not an animated box-shadow on
+   the dot itself — see DESIGN-DECISIONS.md. */
+.dot-live { position: relative; background: var(--good); box-shadow: 0 0 6px var(--good); }
+.dot-live::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  box-shadow: 0 0 0 7px rgba(0, 255, 156, .55);
+  animation: livePulse 2.2s infinite;
+}
 .dot-global { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
 @keyframes livePulse {
-  0% { box-shadow: 0 0 6px var(--good), 0 0 0 0 rgba(0, 255, 156, .55); }
-  70% { box-shadow: 0 0 6px var(--good), 0 0 0 7px rgba(0, 255, 156, 0); }
-  100% { box-shadow: 0 0 6px var(--good), 0 0 0 0 rgba(0, 255, 156, 0); }
+  0% { transform: scale(.55); opacity: .55; }
+  70% { transform: scale(1); opacity: 0; }
+  100% { transform: scale(1); opacity: 0; }
 }
 
 /* ============================== map controls ============================== */
