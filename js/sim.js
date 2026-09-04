@@ -23,6 +23,17 @@
   var linksSig = ''; // position signature of the last convoy-link build (skip no-op rebuilds)
   var uiTickAt = 0;
   var started = false;
+  // T1.1 (mission 20260903-173653-75d3 cycle 16): frame() used to re-arm
+  // requestAnimationFrame unconditionally (first statement, every call), so a
+  // parked rider alone on the map still cost 60 rAF/s forever with nothing to
+  // animate. idleTimer/kickUntil below gate that: frame() only re-arms at 60fps
+  // while idleGateActive() is true; otherwise it falls back to a ~1/s heartbeat
+  // (RAF_IDLE_MS) — a deliberate fail-safe so any activation this file doesn't
+  // explicitly kick() (e.g. a trip starting in js/routing.js) still wakes within
+  // one heartbeat instead of staying stuck silent.
+  var RAF_IDLE_MS = 1000;
+  var idleTimer = null;
+  var kickUntil = 0; // performance.now() deadline; force 60fps at least until this time
 
   /* ---------------- rider records ---------------- */
   function baseRider(rec) {
@@ -62,6 +73,7 @@
     npcs[npc.id] = npc;
     npcOrder.push(npc.id);
     A.mapview.addNpc(npc);
+    kick();
     return npc;
   }
 
@@ -72,10 +84,12 @@
     delete npcs[id];
     var i = npcOrder.indexOf(id);
     if (i >= 0) npcOrder.splice(i, 1);
+    kick();
   }
 
   function clearRiders() {
     npcOrder.slice().forEach(removeRider);
+    kick();
   }
 
   // Record a new target; current interpolated state becomes the start point.
@@ -117,6 +131,7 @@
     npc.pos = pos.slice();
     npc.heading = heading;
     if (mode) npc.mode = mode;
+    kick();
   }
 
   // Solo source (wanderer physics, fake nearby riders, ambient global dots) deleted in
@@ -278,8 +293,44 @@
   }
 
   /* ---------------- render loop ---------------- */
+  // True while frame() has real per-frame work to do: riders on the map to
+  // interpolate/extrapolate, an active trip, party links to redraw, a player
+  // dead-reckoning window in flight, or a recent kick() still inside its
+  // settle window. False means the screen is static and 60fps buys nothing —
+  // this is exactly the "parked, nobody nearby" case T1.1 targets.
+  function idleGateActive(nowMs) {
+    if (npcOrder.length) return true;
+    if (S.trip && S.trip.active) return true;
+    if (S.party && S.party.members && S.party.members.length) return true;
+    if (gpsPred && gpsPred.speed != null && gpsPred.speed > MOVING_MS) {
+      var pAge = (Date.now() - gpsPred.at) / 1000;
+      if (pAge > 0 && pAge <= MAX_EXTRAP_S) return true;
+    }
+    return nowMs < kickUntil;
+  }
+
+  function scheduleFrame() {
+    if (idleTimer != null) { clearTimeout(idleTimer); idleTimer = null; }
+    if (idleGateActive(performance.now())) {
+      requestAnimationFrame(frame);
+    } else {
+      // Idle heartbeat: ~1 rAF/s instead of 60, and still self-corrects if a
+      // trip/party/rider activation lands without going through kick().
+      idleTimer = setTimeout(function () { idleTimer = null; requestAnimationFrame(frame); }, RAF_IDLE_MS);
+    }
+  }
+
+  // Force 60fps for a settle window (long enough to cover one npc tDur, see
+  // setNext's clamp above) after a real event lands, called from the wake set:
+  // addRider/removeRider/clearRiders/setNext/updateGpsDot/relocatePlayer/externalFix.
+  function kick() {
+    if (!started) return;
+    kickUntil = performance.now() + 1200;
+    if (idleTimer != null) { clearTimeout(idleTimer); idleTimer = null; requestAnimationFrame(frame); }
+  }
+
   function frame(now) {
-    requestAnimationFrame(frame);
+    scheduleFrame();
     if (document.hidden) return;
     var dt = Math.min((now - (lastFrame || now)) / 1000, 0.1);
     lastFrame = now;
@@ -407,6 +458,7 @@
     else if (accuracy <= 100) dot.className = 'gps-dot gps-ok';
     else dot.className = 'gps-dot gps-poor';
     dot.title = accuracy != null ? ('GPS ±' + Math.round(accuracy) + 'm') : 'No GPS fix';
+    kick();
   }
 
   function startWatch() {
@@ -480,6 +532,7 @@
     if (A.net) A.net.sendPosNow(); // server re-scopes riders around the new position
     startWatch();
     ST.emit('tick');
+    kick();
   }
 
   // Apply a position fix that originates OUTSIDE the WebView's own watchPosition —
@@ -521,6 +574,7 @@
       if (A.mapview.landIntro) A.mapview.landIntro(pos, 15);
       if (gpsFollow && S.settings.followCam) A.mapview.followPlayer(pos);
     }
+    kick();
   }
 
   /* ---------------- api ---------------- */
@@ -530,7 +584,7 @@
     started = true;
     A.mapview.createPlayerMarker(player.pos);
     tickTimer = setInterval(tick, TICK_MS);
-    requestAnimationFrame(frame);
+    scheduleFrame();
     // A manual wheel/pinch zoom wins over adaptive zoom for a while (see stepTrip).
     try {
       var cc = A.mapview.map().getCanvasContainer();

@@ -470,7 +470,7 @@ async function checkRaceInviteNotDropped() {
   scriptOutcomes.push('ok'); // js/dragy.js loads (A.lazy.race's own dependency, Trap A)
   scriptOutcomes.push('ok'); // js/race.js loads
   s.onmessage({ data: JSON.stringify({ t: 'race:invite', fromName: 'Ghost', modeId: 'quarter', raceId: 'r1' }) });
-  await waitFor(function () { return !!A.race; }, 2000);
+  await waitFor(function () { return !!A.race; }, 5000); // widened from 2000 (cycle 16 task 0): flaked under an 8-way-parallel stress test on this box, same box-load jitter waitFor's own header comment names
   ok('the inbound race:invite pulled js/race.js in instead of silently no-oping because A.race was not loaded yet',
     !!A.race);
 }
@@ -501,7 +501,7 @@ async function checkChallengeButtonLoadsRaceLazily() {
   scriptOutcomes.push('ok'); // js/dragy.js loads (A.lazy.race's own dependency)
   scriptOutcomes.push('ok'); // js/race.js loads
   raceBtn.click();
-  await waitFor(function () { return !!A.race; }, 2000);
+  await waitFor(function () { return !!A.race; }, 5000); // widened from 2000 (cycle 16 task 0): same flake class as above
   ok('clicking "Challenge to race" loaded js/race.js', !!A.race);
 }
 
@@ -652,13 +652,14 @@ async function checkCreateAccountSurvivesUnloadedData() {
   ok('A.data.loaded is false — js/data.js has not been fetched yet (the exact precondition of the bug)',
     !A.data.loaded);
 
+  const findRegBtn = function () { return Array.from(doc.querySelectorAll('#onboarding button')).find(function (b) { return b.textContent.trim() === 'Create account'; }); };
   const caught = await withUnhandledRejection(async function () {
     A.ui.showAuth(function () {});
-    await sleep(80); // withAuthConfig()'s A.auth.config() promise resolving (network disabled in this harness)
-    const regBtn = Array.from(doc.querySelectorAll('#onboarding button')).find(function (b) { return b.textContent.trim() === 'Create account'; });
+    await waitFor(findRegBtn, 3000); // withAuthConfig()'s A.auth.config() promise resolving (network disabled in this harness) — poll, not a fixed sleep (task 0: a fixed sleep(150) here flaked under box load, see STATE.md §5 cycle 16)
+    const regBtn = findRegBtn();
     ok('welcome screen renders a "Create account" button', !!regBtn);
     regBtn.click();
-    await sleep(150); // renderAuth('register')'s withAuthConfig() + withCatalog()'s A.data.ensure().catch().then() chain
+    await waitFor(function () { return !!doc.querySelector('#onboarding input[placeholder="Display name"]'); }, 3000); // renderAuth('register')'s withAuthConfig() + withCatalog()'s A.data.ensure().catch().then() chain
   })();
   ok('tapping "Create account" on a cold/unloaded-data start raises no unhandled rejection', caught === null,
     caught && caught.stack && caught.stack.split('\n').slice(0, 3).join(' | '));
@@ -674,13 +675,14 @@ async function checkCreateAccountFallsBackWhenCatalogLoadFails() {
   group('js/ui.js buildCarSetup() via "Create account" — js/data.js genuinely FAILS to load (task 1b: withCatalog()\'s .catch cannot make the catalog appear, only the seed can)');
   const { doc, A, scriptOutcomes } = bootRealUi();
 
+  const findRegBtn = function () { return Array.from(doc.querySelectorAll('#onboarding button')).find(function (b) { return b.textContent.trim() === 'Create account'; }); };
   const caught = await withUnhandledRejection(async function () {
     A.ui.showAuth(function () {});
-    await sleep(80);
-    const regBtn = Array.from(doc.querySelectorAll('#onboarding button')).find(function (b) { return b.textContent.trim() === 'Create account'; });
+    await waitFor(findRegBtn, 3000);
+    const regBtn = findRegBtn();
     scriptOutcomes.push('fail'); // the one dynamic <script> A.data.ensure() injects, forced to error
     regBtn.click();
-    await sleep(150);
+    await waitFor(function () { return !!doc.querySelector('#onboarding input[placeholder="Display name"]'); }, 3000);
   })();
   ok('a failed js/data.js load still raises no unhandled rejection', caught === null,
     caught && caught.stack && caught.stack.split('\n').slice(0, 3).join(' | '));
@@ -698,13 +700,14 @@ async function checkGuestSurvivesUnloadedData() {
   group('js/ui.js buildCarSetup() via "Continue as guest" — guest setup before js/data.js has loaded raises no unhandled rejection');
   const { doc, A } = bootRealUi();
 
+  const findGuestBtn = function () { return Array.from(doc.querySelectorAll('#onboarding button')).find(function (b) { return b.textContent.trim() === 'Continue as guest'; }); };
   const caught = await withUnhandledRejection(async function () {
     A.ui.showAuth(function () {});
-    await sleep(80);
-    const guestBtn = Array.from(doc.querySelectorAll('#onboarding button')).find(function (b) { return b.textContent.trim() === 'Continue as guest'; });
+    await waitFor(findGuestBtn, 3000);
+    const guestBtn = findGuestBtn();
     ok('welcome screen renders a "Continue as guest" button', !!guestBtn);
     guestBtn.click();
-    await sleep(150);
+    await waitFor(function () { return !!doc.querySelector('#onboarding input[placeholder="Display name"]'); }, 3000);
   })();
   ok('tapping "Continue as guest" on a cold/unloaded-data start raises no unhandled rejection', caught === null,
     caught && caught.stack && caught.stack.split('\n').slice(0, 3).join(' | '));
@@ -722,7 +725,10 @@ async function checkOAuthSetupSurvivesUnloadedData() {
 
   const caught = await withUnhandledRejection(async function () {
     A.ui.showOAuthSetup({ suggested: { name: 'Riley' }, email: 'riley@example.com' }, function () {});
-    await sleep(80); // withCatalog()'s A.data.ensure().catch().then() chain
+    await waitFor(function () { // withCatalog()'s A.data.ensure().catch().then() chain — poll for the catalog-dependent Make select, not a fixed sleep
+      var ms = doc.querySelectorAll('#onboarding select')[1];
+      return !!ms && ms.options.length > 0;
+    }, 3000);
   })();
   ok('showOAuthSetup() raises no unhandled rejection with js/data.js unloaded', caught === null,
     caught && caught.stack && caught.stack.split('\n').slice(0, 3).join(' | '));
@@ -742,7 +748,7 @@ async function checkOAuthSetupFallsBackWhenCatalogLoadFails() {
   const caught = await withUnhandledRejection(async function () {
     scriptOutcomes.push('fail'); // the one dynamic <script> A.data.ensure() injects, forced to error
     A.ui.showOAuthSetup({ suggested: {}, email: 'riley@example.com' }, function () {});
-    await sleep(150);
+    await waitFor(function () { return !!doc.querySelector('#onboarding input[placeholder="Display name"]'); }, 3000);
   })();
   ok('a failed js/data.js load still raises no unhandled rejection', caught === null,
     caught && caught.stack && caught.stack.split('\n').slice(0, 3).join(' | '));
