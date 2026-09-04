@@ -50,6 +50,7 @@ const audit = require('./audit');
 const admin = require('./admin');
 const play = require('./play');
 const httpcache = require('./httpcache');
+const wiregate = require('./wiregate');
 
 const PORT = parseInt(process.env.PORT || '5173', 10);
 // Fake/demo riders are OFF by default for the production build. Set BOTS=12 (or
@@ -2131,6 +2132,7 @@ function syncScope(c, pool) {
   if (gone) {
     for (let i = 0; i < gone.length; i++) {
       c.known.delete(gone[i]);
+      c.wire.delete(gone[i]);
       send(c, { t: 'rider:remove', id: gone[i] });
     }
   }
@@ -2169,8 +2171,8 @@ function applyBlockNow(c, targetUserId) {
     const shared = c.party && tc.party && c.party === tc.party && parties.get(c.party);
     if (shared) sendPartyState(shared);
 
-    if (c.known && c.known.has(tc.id)) { c.known.delete(tc.id); send(c, { t: 'rider:remove', id: tc.id }); }
-    if (tc.known && tc.known.has(c.id)) { tc.known.delete(c.id); send(tc, { t: 'rider:remove', id: c.id }); }
+    if (c.known && c.known.has(tc.id)) { c.known.delete(tc.id); c.wire.delete(tc.id); send(c, { t: 'rider:remove', id: tc.id }); }
+    if (tc.known && tc.known.has(c.id)) { tc.known.delete(c.id); tc.wire.delete(c.id); send(tc, { t: 'rider:remove', id: c.id }); }
     // Mic state is sticky on the receiving end — clear it, or a rider blocked
     // mid-transmission stays lit up as "speaking" forever.
     send(c, { t: 'voice:mic', from: tc.id, on: false, name: '' });
@@ -2718,6 +2720,7 @@ const handlers = {
         if (other.id !== c.id && other.known && other.known.has(c.id)) {
           if (!scopeFor(other).has(c.id)) {
             other.known.delete(c.id);
+            other.wire.delete(c.id);
             send(other, { t: 'rider:remove', id: c.id });
           }
         }
@@ -3345,6 +3348,7 @@ setInterval(() => {
   // One combined rider list for the whole tick, reused across every client so
   // scopeFor doesn't reallocate+spread both Maps per viewer per second.
   const pool = [...clients.values(), ...bots.values()];
+  const now = Date.now();
   for (const c of humans()) {
     if (!c.pos) continue;
     syncScope(c, pool);
@@ -3352,9 +3356,17 @@ setInterval(() => {
     const rows = [];
     for (const id of c.known) {
       const r = getRider(id);
-      if (r && r.pos) rows.push(rowOf(r));
+      if (!r || !r.pos) continue;
+      const row = rowOf(r);
+      const rowStr = row.join(',');
+      const distM = B.haversine(c.pos, r.pos);
+      const sent = wiregate.shouldSend(c.wire.get(id), rowStr, distM, now);
+      wiregate.record(c.wire, id, rowStr, now, sent);
+      if (sent) rows.push(row);
     }
-    send(c, { t: 'tick', r: rows });
+    // Skip the send entirely (envelope included) when the gate suppressed
+    // every row this tick — the common case once riders settle down.
+    if (rows.length) send(c, { t: 'tick', r: rows });
   }
 }, TICK_MS);
 
@@ -3370,7 +3382,7 @@ setInterval(() => {
 
   for (const c of humans()) {
     if (!c.pos || !c.known.size) continue;
-    const near = nearestRows(c);
+    const near = nearestRows(c, now);
     if (near.length) send(c, { t: 'tick', r: near });
   }
 }, FAST_MS);
@@ -3394,7 +3406,7 @@ setInterval(() => {
    the sort was the part that grew. */
 const nearR = new Array(NEAR_FAST);
 const nearD = new Array(NEAR_FAST);
-function nearestRows(c) {
+function nearestRows(c, now) {
   let n = 0;
   for (const id of c.known) {
     const r = getRider(id);
@@ -3405,8 +3417,19 @@ function nearestRows(c) {
     while (i > 0 && nearD[i - 1] > d) { nearD[i] = nearD[i - 1]; nearR[i] = nearR[i - 1]; i--; }
     nearD[i] = d; nearR[i] = r;
   }
-  const out = new Array(n);
-  for (let i = 0; i < n; i++) out[i] = rowOf(nearR[i]);
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const r = nearR[i];
+    const row = rowOf(r);
+    const rowStr = row.join(',');
+    // Fast lane is by definition the viewer's nearest riders — always inside
+    // the "near" tier (distM 0), so the only gate that applies here is the
+    // identical-row hold/suppress (rule 4). No distance rate-limiting: that
+    // would fight the fast lane's own purpose.
+    const sent = wiregate.shouldSend(c.wire.get(r.id), rowStr, 0, now);
+    wiregate.record(c.wire, r.id, rowStr, now, sent);
+    if (sent) out.push(row);
+  }
   // The scratch buffers are module-level and reused every call, so drop the
   // rider references — otherwise a disconnected client stays reachable from
   // here until the next tick happens to overwrite its slot.
@@ -4015,6 +4038,7 @@ wss.on('connection', (ws, req) => {
     party: null,
     raceId: null,            // active drag race (ad-hoc lobby), if any
     known: new Set(),
+    wire: new Map(),   // per-rider wiregate memory — see server/wiregate.js
     lastPosAt: 0,
     micActive: false,
     ghost: false,
