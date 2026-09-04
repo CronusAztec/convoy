@@ -108,4 +108,21 @@
   A.lazy.race = (function (load) {
     return function () { return A.lazy.dragy().then(load, load); };
   })(A.lazy.module('race', function () { return A.race; }));
+
+  // Cycle 13: the eight HUD instrument modules gated on a setting that ships
+  // OFF (js/state.js:41-49) — a rider who never enables them should never
+  // fetch them. js/app.js's LAZY_INSTRUMENTS table drives these.
+  A.lazy.tripmeter = A.lazy.module('tripmeter', function () { return A.tripmeter; });
+  A.lazy.gmeter = A.lazy.module('gmeter', function () { return A.gmeter; });
+  A.lazy.weathernow = A.lazy.module('weathernow', function () { return A.weathernow; });
+  A.lazy.battery = A.lazy.module('battery', function () { return A.battery; });
+  A.lazy.coords = A.lazy.module('coords', function () { return A.coords; });
+  A.lazy.destarrow = A.lazy.module('destarrow', function () { return A.destarrow; });
+  A.lazy.speedalert = A.lazy.module('speedalert', function () { return A.speedalert; });
+  A.lazy.dimmer = A.lazy.module('dimmer', function () { return A.dimmer; });
+
+  // Cycle 13 task 4: js/tripextras.js (ETA-card extras) isn't gated on a
+  // setting like the eight above — it activates on trip/route activity, so
+  // js/app.js wakes it on the first 'route'/'trip' bus event instead.
+  A.lazy.tripextras = A.lazy.module('tripextras', function () { return A.tripextras; });
 })();

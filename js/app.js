@@ -3,6 +3,69 @@
   'use strict';
   var A = window.App;
 
+  // Default-OFF HUD instruments (js/state.js:41-49) — each module is fetched
+  // lazily via A.lazy.<key> (js/config.js) the moment its setting first goes
+  // truthy, instead of unconditionally on every cold boot. Table order must
+  // match js/hud.js's rank table (tripmeter, gmeter, weathernow, battery,
+  // coords, destarrow — the two without a rail card, speedalert/dimmer,
+  // don't need a rank entry).
+  var LAZY_INSTRUMENTS = [
+    ['showTripmeter', 'tripmeter'], ['showGforce', 'gmeter'],
+    ['showWeatherNow', 'weathernow'], ['showBattery', 'battery'],
+    ['showCoords', 'coords'], ['showDestArrow', 'destarrow'],
+    ['speedAlert', 'speedalert'], ['nightDim', 'dimmer']
+  ];
+  // Closure-scoped rather than a flag on the module object: keeps the "has
+  // this been woken" bookkeeping out of the module's own namespace, and
+  // guards the init() call (loadOnce already dedupes the script fetch itself).
+  var wokenInstruments = {};
+  function wakeInstrument(key) {
+    if (wokenInstruments[key]) return;
+    wokenInstruments[key] = true;
+    A.lazy[key]().then(function (m) { if (m && m.init) m.init(); }).catch(function () {});
+  }
+  function wakeLazyInstruments() {
+    LAZY_INSTRUMENTS.forEach(function (pair) {
+      if (A.state.settings[pair[0]]) wakeInstrument(pair[1]);
+    });
+    // A setting can be flipped on later from Settings — wake the module the
+    // first time that happens. Once loaded, the module's own ST.on('setting')
+    // handler (e.g. js/battery.js:44) takes over every subsequent toggle, so
+    // this listener must not also react once wokenInstruments[key] is set.
+    A.store.on('setting', function (s) {
+      for (var i = 0; i < LAZY_INSTRUMENTS.length; i++) {
+        if (LAZY_INSTRUMENTS[i][0] === s.key && s.val) { wakeInstrument(LAZY_INSTRUMENTS[i][1]); break; }
+      }
+    });
+  }
+  // js/tripextras.js (ETA-card extras) isn't gated on a boolean setting like
+  // the eight above — it activates on trip/route activity, which state.js
+  // never persists (S.route starts null every boot), so the first real
+  // 'route'/'trip' event is always live user action, never a boot-time replay.
+  // Wake it on whichever of the two fires first, then stop listening.
+  var tripextrasWoken = false;
+  var offTripextrasRoute, offTripextrasTrip;
+  function wakeTripextras() {
+    if (tripextrasWoken) return;
+    tripextrasWoken = true;
+    offTripextrasRoute(); offTripextrasTrip();
+    A.lazy.tripextras().then(function (m) { if (m && m.init) m.init(); }).catch(function () {});
+  }
+  function wakeTripextrasOnFirstRouteOrTrip() {
+    offTripextrasRoute = A.store.on('route', wakeTripextras);
+    offTripextrasTrip = A.store.on('trip', wakeTripextras);
+  }
+  // Test seam only (test/lazyinstruments.test.js) — app.js otherwise exports
+  // nothing on A, since everything else here is boot-time side effects wired
+  // through DOMContentLoaded/load listeners that a test can't safely trigger
+  // (they assume a live map/socket/GPS). Calling these here does not change
+  // runtime behaviour: they still run from inside the real DOMContentLoaded
+  // handler below at the same point in boot order.
+  A.appBoot = {
+    LAZY_INSTRUMENTS: LAZY_INSTRUMENTS, wakeInstrument: wakeInstrument, wakeLazyInstruments: wakeLazyInstruments,
+    wakeTripextras: wakeTripextras, wakeTripextrasOnFirstRouteOrTrip: wakeTripextrasOnFirstRouteOrTrip
+  };
+
   window.addEventListener('DOMContentLoaded', function () {
     A.store.load();
     // Straight after load() so the reporter can see the rider's opt-out, and
@@ -39,20 +102,15 @@
       if (A.places) A.places.init();     // saved places + parking pin
       if (A.triplog) A.triplog.init();   // trip recorder / drive log
       if (A.speedo) A.speedo.init();     // HUD speedometer
-      // Instrument HUD cards — order here sets their top-to-bottom order in the rail.
+      // Instrument HUD cards — order here (and LAZY_INSTRUMENTS below, for the
+      // default-off ones) sets their top-to-bottom order in the rail; see
+      // js/hud.js's rank table, which must be kept in the same order.
       if (A.compass) A.compass.init();
       if (A.clock) A.clock.init();
-      if (A.tripmeter) A.tripmeter.init();
-      if (A.gmeter) A.gmeter.init();
       if (A.quest) A.quest.init();       // Top Speed Quest — top speed + fastest 60–100
-      if (A.weathernow) A.weathernow.init();
-      if (A.battery) A.battery.init();
-      if (A.coords) A.coords.init();
-      if (A.destarrow) A.destarrow.init();
+      wakeLazyInstruments();             // tripmeter/gmeter/weathernow/battery/coords/destarrow/speedalert/dimmer
       if (A.riderarrows) A.riderarrows.init(); // edge arrows to off-screen convoy riders
-      if (A.speedalert) A.speedalert.init(); // overspeed banner (no rail card)
-      if (A.dimmer) A.dimmer.init();         // night-drive glare overlay
-      if (A.tripextras) A.tripextras.init(); // ETA-card weather + share + save
+      wakeTripextrasOnFirstRouteOrTrip(); // ETA-card weather + share + save, loaded on first route/trip
       A.auth.boot();   // decide: show auth screen, or enter app + connect (net.connect)
       // OTA handshake, deliberately LAST and only on the success path: the
       // bundle that is running proved it can boot (map up, UI wired, auth

@@ -1287,3 +1287,16 @@ suite count (32), every per-suite check count, and the 10 baseline keys from goi
   3. New `test/wiregate.test.js` (39th suite, 19 checks) — 6 pure logic groups + a parked-fidelity proof that drives the REAL `js/sim.js` (via `test/harness.js`'s lightweight `installBrowser()`/`loadModule()` loader, not full jsdom) through two streams — one resent every tick, one gated by the real `wiregate.shouldSend()` — and asserts bit-identical rendered position/heading at every sampled instant. RED→GREEN proven by breaking the heartbeat clause (caught a real bug in the test's own gap-measurement helper along the way — see the file's own comment on `maxSendGap()`).
   4. Measured (own baseline this stage, 3 runs each): N=60 moving 2635.63→1611.47/1611.52/1615.94 B/client/s (≈1613 mean, **−38.8%**, clears the ≥30% bar); N=60 parked 2485.81→179.72/131.46/145.38 (≈152 mean, **−93.9%**, clears the ≥60% bar). Stretch/closes-when bar (≤0.6×≈1581) **not met** (1613 vs 1581, ~2% short) — reported honestly per the directive's explicit instruction not to tune thresholds to the bench fixture. Default-mode pin ratcheted 900→850 (`test/server-baseline.json`).
   Not done that cycle (explicitly out of scope): T2.7 (hotspot flush + per-tick scope cache), any push, `test/concurrency.js` rewrite onto the stub.
+
+## P-E server metrics detail (moved from STATE.md §6, cycle 13 stage, budget trim — P-E closed and shipped cycle 12)
+
+Full per-cycle rows, kept for reference now that STATE.md §6 carries only the closing summary:
+- Server: WS bytes/client/s, app-level (default mode, gated): 810-856 (cycle 10) → 687-749 (post-wiregate+deflate; pin 850×1.20=1020, unaffected — app-level).
+- Server: WS bytes/client/s, app-level, N=60 moving (reference, not gated): 2563-2638 (cycle 10) → 1613 (cy11) → 1591 (cy12, deflate) — unchanged within noise, protocol untouched.
+- Server: real TCP bytes/client/s (`wireBytesPerClientPerSec`, new cy12), N=60 moving: 1563 mean (`WS_DEFLATE=0`) → 324 mean, deflate on — ≈0.21×. Target ≤0.6× — met.
+- Server: real TCP bytes/client/s, N=60 parked: 189 mean (`WS_DEFLATE=0`, noisy at this scale) → 49 mean, deflate on — ≈0.26×. Target ≤0.6× — met.
+- Server: RSS at N=60, end-of-run: ≈80.6 MB (`WS_DEFLATE=0`) → ≈100.2 MB on — Δ≈19.6 MB (≈327 KB/conn, ≈3.2× the code comment's ≈100 KB/conn estimate). Bounded, kill-switch reverts; not gated.
+- Server: tick-callback duration (retired as a P-E gate, cy12 — informational forever): `fast350` p50 swung 3-4ms vs 90-100ms on identical code, same cycle — contamination, not a stable cost; non-idle self-time led by `processChunk`/`writev` (deflate's own cost), not app logic.
+- Server: unchangedRowShare (suppression check, unaffected by T2.6b): 0.21-0.23 moving / 0.92 parked (cy10, pre-wiregate) → ~0.29-0.34 moving / ~0.04-0.40 parked.
+
+Measuring commands: `node test/wire-bench.js`, `node test/wire-bench.js --clients 60 --secs 10 [--parked] [--profile]`.

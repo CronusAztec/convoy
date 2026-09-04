@@ -177,6 +177,13 @@
     ST.on('route', refresh);
     ST.on('trip', refresh);
     ST.on('units', function () { wxCache = {}; refresh(); }); // °F/°C flip → refetch
+    // Cycle 13: this module now loads lazily on the FIRST 'route'/'trip'
+    // event (js/app.js) — by definition this init() runs strictly AFTER that
+    // event already fired and the subscriptions above therefore missed it.
+    // refresh() reads live S.route/S.trip, so calling it once here catches
+    // the eta-card up to the state that triggered the load. Idempotent
+    // (ensureButtons()/paintWx() both check for their own DOM/cache first).
+    refresh();
   }
 
   A.tripextras = { init: init };

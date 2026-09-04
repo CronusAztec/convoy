@@ -740,13 +740,14 @@ function testBootCost() {
 function testRealBootGraphSurfaces() {
   H.group('js/ui.js — panels render against the REAL boot graph (index.html\'s own <script> tags, not the full jsdom module SET)');
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
-  const LAZY_MODULES = ['data', 'voice', 'radar', 'scanners', 'race', 'dragy'];
+  const LAZY_MODULES = ['data', 'voice', 'radar', 'scanners', 'race', 'dragy',
+    'tripmeter', 'gmeter', 'weathernow', 'battery', 'coords', 'destarrow', 'speedalert', 'dimmer', 'tripextras'];
   // app.js only wires a DOMContentLoaded listener assuming a live map/socket/
   // GPS (same reason MODULE_ORDER and test/harness.js's bootRealUi() both
   // exclude it) — nothing under test calls into it.
   const bootModules = bootModuleNames(html).filter((m) => m !== 'app');
   const stillLazy = LAZY_MODULES.filter((m) => !bootModules.includes(m));
-  H.ok('the derived boot-graph list still excludes all six known-lazy modules — a self-check that the parser found the real tags, not a stale array (if this fails, a module was un-lazied and this gate\'s panel list may need a deliberate update)',
+  H.ok('the derived boot-graph list still excludes all fifteen known-lazy modules — a self-check that the parser found the real tags, not a stale array (if this fails, a module was un-lazied and this gate\'s panel list may need a deliberate update)',
     stillLazy.length === LAZY_MODULES.length,
     'still excluded: ' + stillLazy.join(', ') + '; now present: ' + LAZY_MODULES.filter((m) => bootModules.includes(m)).join(', '));
 
