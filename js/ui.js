@@ -4487,15 +4487,36 @@
       if (A.mapview && A.mapview.setPlayerGhost) A.mapview.setPlayerGhost(v);
       if (A.mapview && A.mapview.setGhostLayersVisible) A.mapview.setGhostLayersVisible(v);
       if (A.ghost) { if (v) A.ghost.start(); else A.ghost.stop(); }
-      if (A.radar) A.radar.setActive(v);
+      // js/radar.js is lazy (A.lazy.radar, js/config.js) — a toggle pulls it in.
+      A.lazy.radar().then(function (r) { r.setActive(v); }).catch(function () {});
       updateGhostChip();
     });
-    // if ghost was already on (persisted), apply it now that the map is live
+    // if ghost was already on (persisted), apply it now that the map is live.
+    // Load immediately (not at idle) — this is the returning ghost-mode rider,
+    // one same-origin fetch behind instead of a whole idle tick.
     if (S.settings.ghost) {
       if (A.mapview && A.mapview.setPlayerGhost) A.mapview.setPlayerGhost(true);
       if (A.mapview && A.mapview.setGhostLayersVisible) A.mapview.setGhostLayersVisible(true);
       if (A.ghost) A.ghost.start();
-      if (A.radar) A.radar.setActive(true);
+      A.lazy.radar().then(function (r) { r.setActive(true); }).catch(function () {});
+    }
+
+    // js/scanners.js is lazy (5.7 KB gzip, A.lazy.scanners) — shim the chip so
+    // a first tap loads it, runs the same legal gate the module used to run on
+    // itself, then hands off. Remove this shim's own listener as soon as the
+    // module resolves: js/scanners.js re-wires #chip-scan itself once loaded,
+    // and leaving both listeners in place would open the directory twice on
+    // the second tap.
+    var scanChip = document.getElementById('chip-scan');
+    if (scanChip) {
+      var scanShim = function () {
+        A.lazy.scanners().then(function (s) {
+          scanChip.removeEventListener('click', scanShim);
+          if (A.ui && A.ui.legalGate) A.ui.legalGate('scanner', s.open);
+          else s.open();
+        }).catch(function () { toast('Scanners unavailable — try again', 'warn'); });
+      };
+      scanChip.addEventListener('click', scanShim);
     }
     ST.on('auth', function () { renderAccount(); });
     ST.on('profile', function () { if (openName === 'profile') renderAccount(); });

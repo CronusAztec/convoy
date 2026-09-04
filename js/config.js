@@ -79,4 +79,22 @@
       return A.util.loadScript('js/voice.js' + liveStamp()).then(function () { return A.voice; });
     });
   };
+
+  // Generic lazy-module factory (cycle 4): the same shape as A.data.ensure /
+  // A.voiceLoader.ensure above, generalised so a third and fourth module don't
+  // each need their own hand-rolled copy. `check()` returns the loaded module
+  // (or a falsy value if it hasn't landed yet) — the module itself is what
+  // assigns `A.<key>` when its script runs, same as every module in the app.
+  A.lazy = A.lazy || {};
+  A.lazy.module = function (key, check) {
+    return function () {
+      var have = check();
+      if (have) return Promise.resolve(have);
+      return A.util.loadOnce(key, function () {
+        return A.util.loadScript('js/' + key + '.js' + liveStamp()).then(check);
+      });
+    };
+  };
+  A.lazy.scanners = A.lazy.module('scanners', function () { return A.scanners; });
+  A.lazy.radar = A.lazy.module('radar', function () { return A.radar; });
 })();

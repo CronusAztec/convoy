@@ -298,10 +298,11 @@ function bootRealUi() {
   // it here too would set A.data.loaded/A.voice before a single test ran,
   // permanently taking the fast path and making the lazy/failure branch this
   // file exists to test unreachable. So: everything else index.html loads,
-  // MINUS 'data' and 'voice' — those two are loaded lazily, on demand, by the
-  // real A.data.ensure() / A.voiceLoader.ensure() calls under test.
+  // MINUS 'data', 'voice', 'radar' and 'scanners' — those four are loaded
+  // lazily, on demand, by the real A.data.ensure() / A.voiceLoader.ensure() /
+  // A.lazy.radar() / A.lazy.scanners() calls under test.
   const MODULE_ORDER = ['config', 'telemetry', 'util', 'state', 'themes', 'detectors', 'space',
-    'mapview', 'sim', 'net', 'routing', 'ghost', 'radar', 'overlays', 'scanners',
+    'mapview', 'sim', 'net', 'routing', 'ghost', 'overlays',
     'racetimer', 'dragy', 'wake', 'places', 'triplog', 'speedo', 'hud', 'compass',
     'clock', 'tripmeter', 'gmeter', 'quest', 'weathernow', 'battery', 'coords',
     'destarrow', 'riderarrows', 'speedalert', 'dimmer', 'tripextras', 'party',
@@ -364,9 +365,114 @@ async function checkOverlappingOpensRenderOnce() {
   A.ui.openPanel(null);
 }
 
+/* ---------------- cycle 4: js/scanners.js + js/radar.js off the boot path
+   (directive task 3). Same bootRealUi() harness; MODULE_ORDER above already
+   excludes 'radar' and 'scanners' so their lazy path is reachable. ---------- */
+
+async function checkScannerSecondTapAfterLoadRunsGateOnce() {
+  group('js/scanners.js — a tap after the module has already loaded runs the legal gate once, not twice (the shim-removal bug)');
+  const { doc, A, scriptOutcomes } = bootRealUi();
+  A.ui.init(); // wires the js/ui.js shim onto #chip-scan (production does this from js/app.js)
+  var gateCalls = 0;
+  // Both the js/ui.js shim and js/scanners.js's own self-wiring call
+  // A.ui.legalGate('scanner', ...) — spying here catches whichever listener(s)
+  // are actually attached to the chip at the moment each click fires, which is
+  // exactly what this test needs to distinguish "one gate call" from "two".
+  A.ui.legalGate = function () { gateCalls++; };
+  const chip = doc.getElementById('chip-scan');
+  scriptOutcomes.push('ok'); // js/scanners.js actually loads and self-wires #chip-scan
+  chip.click(); // tap 1: only the shim is wired yet -> one A.lazy.scanners() call
+  await sleep(15); // cross the load boundary: js/scanners.js has now parsed
+  chip.click(); // tap 2: a single later tap
+  await sleep(10);
+  ok('two total taps (one before load, one after) call the legal gate exactly twice, not three times ' +
+    '(three would mean the second tap fired both the leftover shim and the module\'s own listener)',
+    gateCalls === 2, 'gateCalls=' + gateCalls);
+}
+
+async function checkScannerFailedLoadRetries() {
+  group('js/scanners.js — a failed load leaves #chip-scan clickable with a toast, and a retry (loadOnce clears its cache on rejection) opens the directory');
+  const { doc, A, scriptOutcomes } = bootRealUi();
+  A.ui.init(); // wires the js/ui.js shim onto #chip-scan (production does this from js/app.js)
+  A.state.consent = { version: '1.2' };
+  A.state.featureAck = { scanner: Date.now() }; // skip the legal-notice modal so open() runs directly
+  const chip = doc.getElementById('chip-scan');
+  scriptOutcomes.push('fail'); // js/scanners.js's injected <script> fires onerror
+  chip.click();
+  await sleep(15);
+  const toasts = doc.getElementById('toasts');
+  ok('a toast told the rider scanners could not load', !!toasts && /scanner/i.test(toasts.textContent),
+    toasts && toasts.textContent);
+  ok('#chip-scan is still in the DOM with the shim still attached (no permanent break)', !!chip);
+
+  scriptOutcomes.push('ok'); // retry: the real file loads this time
+  chip.click();
+  await sleep(15);
+  const overlay = doc.getElementById('scanners-overlay');
+  ok('the retry succeeds and opens the scanner directory', !!overlay && overlay.hidden === false);
+}
+
+async function checkNativeAlertReachesRadarWithGhostOff() {
+  group('js/native.js — a BLE detector alert reaches js/radar.js (pulling the lazy module in) even with Ghost Mode off — the alerting-regression guard');
+  const { doc, A, scriptOutcomes } = bootRealUi();
+  A.state.settings.ghost = false;
+  ok('js/radar.js has not been loaded yet (Ghost Mode was never turned on)', !A.radar);
+
+  var alertCb;
+  A.config.plugins = {
+    RadarDetector: {
+      addListener: function (ev, cb) { if (ev === 'alert') alertCb = cb; },
+      startScan: function () { return Promise.resolve({ scanning: true }); }
+    }
+  };
+  await A.native.startDetector();
+  ok('the native alert listener is wired', typeof alertCb === 'function');
+
+  scriptOutcomes.push('ok'); // js/radar.js loads, pulled in by the alert (not dropped)
+  alertCb({ band: 'Ka', strength: 9 });
+  await sleep(20);
+  ok('the alert pulled js/radar.js in even though Ghost Mode is off', !!A.radar);
+
+  // Turn the HUD on after the fact (as if the rider enables Ghost Mode later)
+  // and confirm the alert that arrived while it was off is still there, not
+  // silently dropped by the naive `if (A.radar)` guard the lazy migration
+  // could otherwise have introduced. This harness never runs A.mapview.init()
+  // (no real MapLibre instance), so stub the two ring-layer calls setActive()
+  // makes — unrelated to what this check is about, and always guarded by
+  // `if (A.mapview...)` in production where the map is guaranteed live by now.
+  A.mapview.setRingsVisible = function () {};
+  A.mapview.setRingsData = function () {};
+  A.radar.setActive(true);
+  const banner = doc.getElementById('radar-alerts').innerHTML;
+  ok('the detector alert that arrived before Ghost Mode was on renders once the HUD turns on',
+    /Ka-band/.test(banner) && /RADAR/.test(banner), banner);
+}
+
+async function checkGhostPersistedOnBootLoadsRadarImmediately() {
+  group('js/ui.js init() — S.settings.ghost persisted true ends with A.radar.setActive(true) having been called, loaded immediately not at idle');
+  const { A, scriptOutcomes } = bootRealUi();
+  A.state.settings.ghost = true;
+  scriptOutcomes.push('ok'); // js/radar.js loads
+  // Same test-harness gap as the check above: no real MapLibre instance here.
+  // init()'s ghost-boot block also touches setGhostLayersVisible/setPlayerGhost
+  // before ever reaching the radar call this check is actually about.
+  A.mapview.setRingsVisible = function () {};
+  A.mapview.setRingsData = function () {};
+  A.mapview.setGhostLayersVisible = function () {};
+  A.mapview.setPlayerGhost = function () {};
+  A.ui.init();
+  await sleep(20);
+  ok('A.radar was loaded immediately at boot because Ghost Mode was already persisted on', !!A.radar);
+  ok('A.radar.isActive() is true after boot', !!A.radar && A.radar.isActive());
+}
+
 (async function runRemainingGroupsInSequence() {
   await checkRetryAfterRejection();
   await checkFailedGarageLeavesAWayBack();
   await checkOverlappingOpensRenderOnce();
+  await checkScannerSecondTapAfterLoadRunsGateOnce();
+  await checkScannerFailedLoadRetries();
+  await checkNativeAlertReachesRadarWithGhostOff();
+  await checkGhostPersistedOnBootLoadsRadarImmediately();
   process.exit(report());
 })();

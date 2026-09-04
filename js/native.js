@@ -74,15 +74,22 @@
       toast(det.connected ? ('Radar detector connected' + (det.family ? ' (' + det.family + ')' : ''))
         : 'Radar detector disconnected', det.connected ? 'success' : 'info');
       ST.emit('detector:state', { connected: det.connected, family: det.family });
-      if (!det.connected && A.radar && A.radar.clearDetectorAlert) A.radar.clearDetectorAlert();
+      // js/radar.js is lazy (A.lazy.radar) — an alert reaches it whether or not
+      // Ghost Mode is on, so a disconnect must pull the module in too rather
+      // than silently drop the clear (guardrail: alerting paths are never
+      // lazy-gated away).
+      if (!det.connected) A.lazy.radar().then(function (r) { r.clearDetectorAlert(); }).catch(function () {});
     });
     p.addListener('alert', function (a) {
       if (!a || !a.band) return;
       // Hand the FULL alert to the radar HUD, which classifies it (cop vs speed
       // reader), drives the sonar/board, and uploads high-confidence police
-      // contacts to the shared map.
-      if (A.radar && A.radar.onDetectorAlert) A.radar.onDetectorAlert(a);
-      else if (A.radar && A.radar.setDetectorAlert) A.radar.setDetectorAlert(a.band, a.strength || 0);
+      // contacts to the shared map. Same as the disconnect above: this must
+      // pull the lazy module in, never drop the alert because it isn't loaded.
+      A.lazy.radar().then(function (r) {
+        if (r.onDetectorAlert) r.onDetectorAlert(a);
+        else if (r.setDetectorAlert) r.setDetectorAlert(a.band, a.strength || 0);
+      }).catch(function () {});
     });
     // Streamed during listDevices() — surface into any open device picker.
     p.addListener('device', function (d) { if (d && d.id) ST.emit('detector:device', d); });
@@ -99,7 +106,7 @@
     var p = get('RadarDetector'); if (!p) return;
     p.stopScan().catch(function () {});
     det.scanning = false; det.connected = false;
-    if (A.radar && A.radar.clearDetectorAlert) A.radar.clearDetectorAlert();
+    A.lazy.radar().then(function (r) { r.clearDetectorAlert(); }).catch(function () {});
   }
 
   // Enumerate nearby BLE devices for the picker. Resolves to an array of

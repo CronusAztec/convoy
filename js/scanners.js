@@ -335,6 +335,12 @@
   // receiving public-safety radio in a moving car is restricted in a number of
   // US states and licensed in some countries, and the rider is told once before
   // the directory opens rather than only in the Terms.
+  //
+  // This module is lazy now (A.lazy.scanners, js/config.js) — js/ui.js's init()
+  // wires a SHIM on this same chip that loads this file on the first tap and
+  // removes its own listener once loaded, precisely so that this self-wiring
+  // (unchanged, and still needed for every tap after the module is loaded)
+  // ends up as the only listener left on the chip.
   var chip = document.getElementById('chip-scan');
   if (chip) chip.addEventListener('click', function () {
     if (A.ui && A.ui.legalGate) A.ui.legalGate('scanner', open);

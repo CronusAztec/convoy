@@ -142,11 +142,11 @@ ok("the reason still holds: js/themes.js builds the tag id as 'theme-css-' + def
 // static id is added or removed on purpose, update the number here so the
 // change is visible in the diff instead of silent.
 group('D3 — informational pins (update the number when the tree changes on purpose; never a ratchet)');
-ok('98 direct document.getElementById(\'<literal>\') sites (measured ' + direct.length + ')', direct.length === 98);
+ok('101 direct document.getElementById(\'<literal>\') sites (measured ' + direct.length + ')', direct.length === 101);
 ok('7 literal lookups through the js/radar.js byId() wrapper (measured ' + viaWrapper.length + ')', viaWrapper.length === 7);
 ok('71 static id="…" in index.html (measured ' + staticIds.size + ')', staticIds.size === 71);
-ok('21 referenced ids that are not static: 20 assigned in js/ + 1 allowlisted (measured ' + notStatic.length + ' = ' + jsAssignedRefs.length + ' + ' + notStatic.filter((id) => ALLOW[id]).length + ')',
-  notStatic.length === 21 && jsAssignedRefs.length === 20);
+ok('22 referenced ids that are not static: 21 assigned in js/ + 1 allowlisted (measured ' + notStatic.length + ' = ' + jsAssignedRefs.length + ' + ' + notStatic.filter((id) => ALLOW[id]).length + ')',
+  notStatic.length === 22 && jsAssignedRefs.length === 21);
 ok('3 non-literal getElementById calls, all known: the js/radar.js wrapper itself and the two computed theme tags in js/themes.js (measured ' + dynamicLookups.length + ': ' + dynamicLookups.join(', ') + ')',
   dynamicLookups.length === 3 && dynamicLookups.every((d) => /^js\/(radar|themes)\.js:/.test(d)));
 
