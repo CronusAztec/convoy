@@ -60,9 +60,9 @@ const MODULE_ORDER = [
 // Lifted from testBootCost()'s own scriptTags matcher (cycle 8, directive task
 // 2) so the real-boot-graph gate below derives its module list from
 // index.html instead of hardcoding a second array that can drift from it.
-const BOOT_SCRIPT_TAG_RE = /<script\b[^>]*src="js\/([^"?]+)\.js(?:\?[^"]*)?"[^>]*>/g;
-function bootScriptTags(html) { return Array.from(html.matchAll(BOOT_SCRIPT_TAG_RE)); }
-function bootModuleNames(html) { return bootScriptTags(html).map((m) => m[1]); }
+// Moved into test/harness.js (cycle 9, task 3) so test/lazydata.test.js can
+// share it too, rather than writing a third copy of the regex.
+const { bootScriptTags, bootModuleNames } = H;
 
 function buildWindow() {
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');

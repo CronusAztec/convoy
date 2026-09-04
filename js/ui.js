@@ -3273,6 +3273,12 @@
   // the card can be built in one pass without a loading flash.
   var authCfg = { providers: [], email: false, magicLink: false };
   var authCfgLoaded = false;
+  // buildCarSetup() reads the lazy name/make/paint/vibe catalog synchronously.
+  // Only register/guest/showOAuthSetup need it — welcome/login etc. don't, so
+  // they must not wait on it. .catch keeps a failed fetch from ever rejecting;
+  // buildCarSetup's own seed covers that case.
+  function withCatalog(fn) { A.data.ensure().catch(function () { return null; }).then(fn); }
+
   function withAuthConfig(fn) {
     A.auth.config().then(function (cfg) { authCfg = cfg; authCfgLoaded = true; fn(cfg); });
   }
@@ -3296,24 +3302,37 @@
     return i;
   }
 
+  // Last-resort seed for a failed js/data.js load (withCatalog's .catch) —
+  // same bug class as renderConvoy() (cycle 8).
+  var FALLBACK_NAMES = ['Rider', 'Ace', 'Nomad'];
+  var FALLBACK_MAKES = { Toyota: ['Camry', 'Corolla', 'RAV4'], Honda: ['Civic', 'Accord', 'CR-V'] };
+  var FALLBACK_MAKE_LIST = Object.keys(FALLBACK_MAKES);
+  var FALLBACK_PAINTS = [{ hex: '#1a1a1a', name: 'Black' }, { hex: '#ffffff', name: 'White' }];
+  var FALLBACK_VIBES = ['Cruising'];
+
   // Reusable car-setup fields (name, avatar, car, paint, pledge). Returns getProfile()+onPledge().
   function buildCarSetup(card, defaults) {
     // `defaults.name` pre-fills the display name — used after a provider sign-in,
     // where the provider already told us what this person calls themselves. It is
     // only ever a starting value; the field stays editable.
-    var name = (defaults && defaults.name) || U.pick(D.NAMES);
-    var make = U.pick(D.MAKE_LIST);
-    var model = U.pick(D.MAKES[make]);
-    var paint = U.pick(D.PAINTS);
+    var names = (D.NAMES && D.NAMES.length) ? D.NAMES : FALLBACK_NAMES;
+    var makeList = (D.MAKE_LIST && D.MAKE_LIST.length) ? D.MAKE_LIST : FALLBACK_MAKE_LIST;
+    var makes = (makeList === D.MAKE_LIST) ? D.MAKES : FALLBACK_MAKES;
+    var paints = (D.PAINTS && D.PAINTS.length) ? D.PAINTS : FALLBACK_PAINTS;
+
+    var name = (defaults && defaults.name) || U.pick(names);
+    var make = U.pick(makeList);
+    var model = U.pick(makes[make]);
+    var paint = U.pick(paints);
 
     var nameInput = mkText(name, 'Display name');
     var emojiGrid = mkEmojiGrid(0);
     var yearSel = mkSelect(yearList(), 2022);
-    var makeSel = mkSelect(D.MAKE_LIST, make);
-    var modelSel = mkSelect(D.MAKES[make], model);
+    var makeSel = mkSelect(makeList, make);
+    var modelSel = mkSelect(makes[make], model);
     var trimSel = mkSelect(trimsFor(make, model));
     var paintHex = paint.hex, paintName = paint.name;
-    var swatches = mkSwatches(D.PAINTS, paintHex, function (hex, n) { paintHex = hex; paintName = n; });
+    var swatches = mkSwatches(paints, paintHex, function (hex, n) { paintHex = hex; paintName = n; });
 
     function refillTrims() {
       trimSel.innerHTML = '';
@@ -3350,7 +3369,7 @@
           name: nm,
           handle: nm.toLowerCase().replace(/[^a-z0-9]/g, ''),
           emoji: emojiGrid.getValue(),
-          vibe: U.pick(D.VIBES),
+          vibe: U.pick((D.VIBES && D.VIBES.length) ? D.VIBES : FALLBACK_VIBES),
           car: {
             year: +yearSel.value, make: makeSel.value, model: modelSel.value,
             trim: trimSel.value || '',
@@ -3567,43 +3586,47 @@
     card.appendChild(errEl);
     card.appendChild(U.el('div', 'section-label', 'Your ride'));
 
-    var setup = buildCarSetup(card, { name: sug.name });
-    var btn = U.el('button', 'btn btn-primary btn-block btn-lg', 'Finish &amp; ride →');
-    btn.disabled = true;
-    setup.onPledge(function (ok) { btn.disabled = !ok; });
-    btn.addEventListener('click', function () {
-      errEl.hidden = true;
-      if (!uInput.value.trim()) { showErr(errEl, 'Pick a username'); return; }
-      // Recorded before the account exists: the boxes were ticked on this
-      // screen, and the record has to survive even if the call below fails and
-      // they retry.
-      ST.setConsent(setup.getConsent());
-      btn.disabled = true; btn.textContent = 'Setting up…';
-      A.auth.oauthComplete(uInput.value.trim(), setup.getProfile()).then(function (r) {
-        if (!r.ok) {
-          showErr(errEl, r.error);
-          btn.disabled = false; btn.innerHTML = 'Finish &amp; ride →';
-          return;
-        }
-        root.innerHTML = '';
-        root.appendChild(buildRecoveryCard(r.recoveryCode, 'I saved it, start riding →',
-          function () { closeAuthEnter('Welcome, ' + S.profile.name); },
-          'You\'re in. Save your recovery code',
-          'Providers go down and accounts get locked. This is your way back in that doesn\'t depend on one.'));
-        root.scrollTop = 0;
-        focusFirstIn(root);
+    // Bypasses withAuthConfig (entered straight from js/auth.js) but still
+    // needs the catalog buildCarSetup() reads.
+    withCatalog(function () {
+      var setup = buildCarSetup(card, { name: sug.name });
+      var btn = U.el('button', 'btn btn-primary btn-block btn-lg', 'Finish &amp; ride →');
+      btn.disabled = true;
+      setup.onPledge(function (ok) { btn.disabled = !ok; });
+      btn.addEventListener('click', function () {
+        errEl.hidden = true;
+        if (!uInput.value.trim()) { showErr(errEl, 'Pick a username'); return; }
+        // Recorded before the account exists: the boxes were ticked on this
+        // screen, and the record has to survive even if the call below fails and
+        // they retry.
+        ST.setConsent(setup.getConsent());
+        btn.disabled = true; btn.textContent = 'Setting up…';
+        A.auth.oauthComplete(uInput.value.trim(), setup.getProfile()).then(function (r) {
+          if (!r.ok) {
+            showErr(errEl, r.error);
+            btn.disabled = false; btn.innerHTML = 'Finish &amp; ride →';
+            return;
+          }
+          root.innerHTML = '';
+          root.appendChild(buildRecoveryCard(r.recoveryCode, 'I saved it, start riding →',
+            function () { closeAuthEnter('Welcome, ' + S.profile.name); },
+            'You\'re in. Save your recovery code',
+            'Providers go down and accounts get locked. This is your way back in that doesn\'t depend on one.'));
+          root.scrollTop = 0;
+          focusFirstIn(root);
+        });
       });
-    });
-    card.appendChild(btn);
+      card.appendChild(btn);
 
-    beginModalGate();
-    root.hidden = false;
-    root.classList.remove('closing');
-    root.innerHTML = '';
-    root.appendChild(card);
-    root.scrollTop = 0;
-    requestAnimationFrame(function () { root.classList.add('show'); });
-    focusFirstIn(root);
+      beginModalGate();
+      root.hidden = false;
+      root.classList.remove('closing');
+      root.innerHTML = '';
+      root.appendChild(card);
+      root.scrollTop = 0;
+      requestAnimationFrame(function () { root.classList.add('show'); });
+      focusFirstIn(root);
+    });
   }
 
   // Landing screen for a password-reset link. The token has already been pulled
@@ -4083,7 +4106,10 @@
   // Async only because the provider list comes from the server. A.auth.config()
   // caches after the first call, so every later render resolves immediately.
   function renderAuth(mode) {
-    withAuthConfig(function (cfg) { buildAuth(mode, cfg); });
+    withAuthConfig(function (cfg) {
+      if (mode === 'register' || mode === 'guest') withCatalog(function () { buildAuth(mode, cfg); });
+      else buildAuth(mode, cfg);
+    });
   }
 
   function buildAuth(mode, cfg) {
@@ -4640,6 +4666,7 @@
     nearbyFilter: function () { return nearbyFilter; }, // mapview reads this to color dots by active filter
     // Does this rider match the active Nearby filter right now? (mapview uses
     // this so only matching riders get the brighter road/sight dot color.)
-    nearbyMatches: function (npc) { return A.sim.proximityMatch(npc, nearbyFilter); }
+    nearbyMatches: function (npc) { return A.sim.proximityMatch(npc, nearbyFilter); },
+    FALLBACK_NAMES: FALLBACK_NAMES // for tests, like A.party.FALLBACK_CONVOY_NAMES
   };
 })();

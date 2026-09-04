@@ -10,6 +10,17 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 
+/* Module boot list, derived from index.html's own <script src="js/*.js">
+   tags rather than hardcoded — so it can never drift from what production
+   actually boots. Moved here (cycle 9, task 3) from test/frontend.test.js
+   (which cannot be require()'d for just these two functions — it's a
+   runnable script that calls process.exit() at the end) so
+   test/lazydata.test.js can share it instead of writing a third copy of the
+   regex, per this cycle's directive. frontend.test.js now reads these off H. */
+const BOOT_SCRIPT_TAG_RE = /<script\b[^>]*src="js\/([^"?]+)\.js(?:\?[^"]*)?"[^>]*>/g;
+function bootScriptTags(html) { return Array.from(html.matchAll(BOOT_SCRIPT_TAG_RE)); }
+function bootModuleNames(html) { return bootScriptTags(html).map((m) => m[1]); }
+
 /* ---------------- tiny DOM shim ----------------
    Only what the modules under test touch at load time. Anything unexpected
    throws loudly rather than silently returning undefined. */
@@ -508,5 +519,5 @@ async function waitFor(predicate, timeoutMs) {
 
 module.exports = {
   installBrowser, installAudio, loadModule, makeEl, group, ok, near, report, fmt, ROOT,
-  bootRealUi, sleep, waitFor
+  bootRealUi, sleep, waitFor, bootScriptTags, bootModuleNames
 };
