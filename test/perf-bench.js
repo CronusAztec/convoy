@@ -28,12 +28,36 @@
        "same-origin only" without editing index.html;
      - --dump-dom --virtual-time-budget=<N> drives the page through navigation,
        resource loads, 'load', and the PROBE's own setTimeout entirely inside
-       Chromium's virtual clock, then prints the final DOM once. --idle reuses
-       the exact same one-shot mechanism with a 30 s (virtual) budget instead
-       of tacking on a second live session — no CDP needed for either number.
-     - CPU throttling (Emulation.setCPUThrottlingRate) has no CLI flag; it is
-       DevTools-protocol only, so `--cpu` stays a stretch item (STATE.md
-       handoff: "only after the report is written") rather than blocking P0a.
+       Chromium's virtual clock, then prints the final DOM once. Boot mode
+       (no flags) still uses this path.
+     - --idle does NOT use virtual time (cycle 17 fix). Under
+       --virtual-time-budget there is no compositor driving BeginFrames, so
+       requestAnimationFrame callbacks fire roughly once per 10 *virtual*
+       seconds regardless of what the page does — a standalone probe proved
+       this (one rAF fire in 10 virtual seconds on a page that does nothing
+       but rAF-loop). That made every previous --idle number, including the
+       ones behind T1.1's "bench confirmation pending" caveat, a false
+       reading: the UNFIXED js/sim.js (re-arms rAF every frame, forever)
+       measured *lower* (rafPerSec 0) than the FIXED one (0.03) because both
+       were really measuring "how many virtual frames Chromium chose to
+       produce", not the app's own behaviour. --idle now drives the page over
+       a real-time Chrome DevTools Protocol session (raw WebSocket + fetch,
+       both Node globals, no new dependency): spawn Chromium with
+       --remote-debugging-port=0, read the assigned port from
+       <profile-dir>/DevToolsActivePort, open a CDP WebSocket, Page.navigate,
+       poll (host-side, real time) for window.__idleStarted, then sleep the
+       real event loop for IDLE_WINDOW_MS and read the counters back with one
+       Runtime.evaluate. A frame-production counter (window.__frames, counted
+       through the ORIGINAL requestAnimationFrame captured before IDLE_COUNTERS
+       wraps it, so counting frames never inflates the "armed" count) guards
+       against the same failure mode ever passing silently again: if
+       framesPerSec < 1 the run is real-time but still not rendering, and the
+       bench reports `invalid` instead of a number.
+     - CPU throttling (Emulation.setCPUThrottlingRate) is DevTools-protocol
+       only — no CLI flag. Cycle 17 gave --idle a CDP session, so `--cpu N`
+       now works for --idle (Emulation.setCPUThrottlingRate before
+       Page.navigate). Boot mode still runs at the --dump-dom virtual-time
+       path and has no CDP session, so `--cpu` is not wired there.
 
    No new dependency: http/fs/path/zlib/child_process are all Node built-ins,
    the same set test/browser.test.js uses. SKIPs with exit 0 (never fails
@@ -130,11 +154,16 @@ const COUNTERS = '<script>\n' +
   '</script>';
 
 const IDLE_COUNTERS = '<script>\n' +
-  'window.__iv=0;window.__to=0;window.__raf=0;window.__lt=0;\n' +
+  'window.__iv=0;window.__to=0;window.__raf=0;window.__lt=0;window.__frames=0;\n' +
   'window.__idleStarted=false;window.__mapReadyMs=null;\n' +
   'var _si=window.setInterval;window.setInterval=function(){if(window.__idleStarted)window.__iv++;return _si.apply(window,arguments)};\n' +
   'var _st=window.setTimeout;window.setTimeout=function(){if(window.__idleStarted)window.__to++;return _st.apply(window,arguments)};\n' +
   'var _rq=window.requestAnimationFrame;window.requestAnimationFrame=function(){if(window.__idleStarted)window.__raf++;return _rq.apply(window,arguments)};\n' +
+  // Frame-production sanity guard (cycle 17): counts REAL compositor frames
+  // through the un-wrapped native rAF, independent of window.__raf above, so
+  // a run that never renders (see the --virtual-time-budget failure mode in
+  // the header comment) can be told apart from one that genuinely idles.
+  '(function f(){if(window.__idleStarted)window.__frames++;_rq(f)})();\n' +
   'try{new PerformanceObserver(function(l){if(window.__idleStarted)window.__lt+=l.getEntries().length}).observe({type:"longtask",buffered:true})}catch(e){}\n' +
   '(function(){\n' +
   '  var waited=0;\n' +
@@ -177,36 +206,6 @@ function probeScript(delayMs) {
     '</script>';
 }
 
-// Idle probe: wait for window.__idleStarted (map_ready or the 7s fallback,
-// set by IDLE_COUNTERS above), THEN measure a further 30s window — not 30s
-// from page load, which is the fixture bug Task 2 exists to fix.
-function idleProbeScript(windowMs) {
-  return '<script>\n' +
-    'window.addEventListener("load",function(){\n' +
-    '  function waitStart(){\n' +
-    '    if(!window.__idleStarted){setTimeout(waitStart,50);return;}\n' +
-    '    setTimeout(function(){\n' +
-    '      var nav=performance.getEntriesByType("navigation")[0]||{};\n' +
-    '      var out={\n' +
-    '        dcl:Math.round(nav.domContentLoadedEventEnd||0),\n' +
-    '        load:Math.round(nav.loadEventEnd||0),\n' +
-    '        longTasks:window.__lt||0,\n' +
-    '        rafArmed:window.__raf||0,\n' +
-    '        intervalsArmed:window.__iv||0,\n' +
-    '        timeoutsArmed:window.__to||0,\n' +
-    '        idle:true,\n' +
-    '        mapReady:window.__mapReadyMs!==null,\n' +
-    '        mapReadyMs:window.__mapReadyMs===null?null:Math.round(window.__mapReadyMs)\n' +
-    '      };\n' +
-    '      var p=document.createElement("pre");p.id="__probe";p.hidden=true;p.textContent=JSON.stringify(out);\n' +
-    '      document.body.appendChild(p);\n' +
-    '    },' + windowMs + ');\n' +
-    '  }\n' +
-    '  waitStart();\n' +
-    '});\n' +
-    '</script>';
-}
-
 /* In-process server on an OS-assigned port. Every request is logged so the
    bench can report requests/gzipBytes/apiCalls without trusting the browser's
    own (CSP-stripped, non-production) Resource Timing entries for byte counts —
@@ -231,7 +230,10 @@ function startServer(delayMs, idle, mapLibLocal) {
       let html = body.toString('utf8');
       html = html.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>\s*/i, '');
       html = html.replace('<head>', '<head>\n' + (idle ? IDLE_COUNTERS : COUNTERS));
-      html = html.replace('</body>', (idle ? idleProbeScript(delayMs) : probeScript(delayMs)) + '\n</body>');
+      // Idle mode reads window state directly over CDP (runIdleCdp below), so
+      // it needs no page-side <pre id="__probe"> writer — only boot mode still
+      // dumps the DOM and needs one.
+      if (!idle) html = html.replace('</body>', probeScript(delayMs) + '\n</body>');
       if (mapLibLocal) {
         html = html.replace(MAPLIBRE_CDN_JS, '/test/.cache/' + MAPLIBRE_JS);
         html = html.replace(MAPLIBRE_CDN_CSS, '/test/.cache/' + MAPLIBRE_CSS);
@@ -262,7 +264,12 @@ function runChromium(url, virtualTimeBudget) {
     ], { stdio: ['ignore', 'pipe', 'ignore'] });
     let out = '';
     child.stdout.on('data', (d) => { out += d; });
-    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('chrome timed out after 30s')); }, 30000);
+    // Kill timer derived from the caller's own budget (cycle 17: the old
+    // hardcoded 30000 was briefly shorter than a 45000ms virtualTimeBudget a
+    // now-removed --idle path used — a latent hazard, not the false-green bug
+    // itself, which was virtual time producing no frames at all; see header).
+    const killMs = Math.max(30000, virtualTimeBudget + 15000);
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('chrome timed out after ' + killMs + 'ms')); }, killMs);
     child.on('error', (e) => { clearTimeout(timer); reject(e); });
     child.on('close', (code) => {
       clearTimeout(timer);
@@ -278,24 +285,121 @@ function parseProbe(dom) {
   return JSON.parse(m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'));
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/* Real-time CDP session for --idle (cycle 17 — see header comment for why
+   virtual time can't measure rendering at all). Spawned detached so
+   closeCdp() can SIGKILL the whole process group: headless Chrome forks
+   zygote/gpu/network/renderer children that a plain child.kill() on the
+   parent PID alone leaves as orphans (confirmed on this box — three defunct
+   chrome-headless children survived the old --idle path's runs). */
+function openCdp(bin) {
+  return new Promise((resolve, reject) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cprof-cdp-'));
+    const child = spawn(bin, [
+      '--headless', '--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage', '--hide-scrollbars',
+      '--window-size=390,844', '--host-resolver-rules=MAP * 127.0.0.1, EXCLUDE localhost',
+      '--user-data-dir=' + dir, '--remote-debugging-port=0', 'about:blank'
+    ], { stdio: ['ignore', 'ignore', 'ignore'], detached: true });
+    let settled = false;
+    const fail = (e) => { if (!settled) { settled = true; reject(e); } };
+    child.on('error', fail);
+    (async () => {
+      let port = null;
+      for (let i = 0; i < 100 && !port; i++) {
+        try {
+          const first = fs.readFileSync(path.join(dir, 'DevToolsActivePort'), 'utf8').split('\n')[0].trim();
+          if (first) port = first;
+        } catch (e) { /* not written yet */ }
+        if (!port) await sleep(100);
+      }
+      if (!port) return fail(new Error('DevToolsActivePort never appeared within 10s'));
+      let list;
+      try { list = await (await fetch('http://127.0.0.1:' + port + '/json/list')).json(); }
+      catch (e) { return fail(e); }
+      const target = list.find((t) => t.type === 'page');
+      if (!target) return fail(new Error('no page target in /json/list'));
+      const ws = new WebSocket(target.webSocketDebuggerUrl);
+      const pending = new Map();
+      let nextId = 0;
+      ws.onmessage = (ev) => {
+        const m = JSON.parse(ev.data);
+        if (m.id && pending.has(m.id)) { pending.get(m.id)(m.result); pending.delete(m.id); }
+      };
+      ws.onerror = () => fail(new Error('CDP WebSocket error'));
+      await new Promise((res) => { ws.onopen = res; });
+      const send = (method, params) => new Promise((res) => {
+        const id = ++nextId;
+        pending.set(id, res);
+        ws.send(JSON.stringify({ id, method, params: params || {} }));
+      });
+      if (!settled) { settled = true; resolve({ child, dir, ws, send }); }
+    })();
+  });
+}
+
+function closeCdp(session) {
+  try { session.ws.close(); } catch (e) { /* already closed */ }
+  try { process.kill(-session.child.pid, 'SIGKILL'); } catch (e) { try { session.child.kill('SIGKILL'); } catch (e2) { /* already dead */ } }
+  try { fs.rmSync(session.dir, { recursive: true, force: true }); } catch (e) { /* best effort */ }
+}
+
+/* Drives one --idle navigation in real time over CDP: navigate, poll
+   window.__idleStarted host-side (map_ready or IDLE_COUNTERS' 7s fallback),
+   sleep the real event loop for windowMs, then read every counter back with
+   one Runtime.evaluate. cpuRate > 1 throttles via Emulation before
+   navigation (task 4, --cpu). */
+async function runIdleCdp(bin, url, windowMs, cpuRate) {
+  const session = await openCdp(bin);
+  try {
+    await session.send('Page.enable');
+    await session.send('Runtime.enable');
+    if (cpuRate && cpuRate > 1) await session.send('Emulation.setCPUThrottlingRate', { rate: cpuRate });
+    await session.send('Page.navigate', { url });
+    const t0 = Date.now();
+    let started = false;
+    while (Date.now() - t0 < 20000) {
+      const r = await session.send('Runtime.evaluate', { expression: 'window.__idleStarted===true', returnByValue: true });
+      if (r && r.result && r.result.value === true) { started = true; break; }
+      await sleep(200);
+    }
+    if (!started) return { failure: 'window.__idleStarted never became true within 20s of real time' };
+    await sleep(windowMs);
+    const r = await session.send('Runtime.evaluate', {
+      expression: 'JSON.stringify({longTasks:window.__lt||0,rafArmed:window.__raf||0,' +
+        'intervalsArmed:window.__iv||0,timeoutsArmed:window.__to||0,frames:window.__frames||0,' +
+        'mapReady:window.__mapReadyMs!==null,mapReadyMs:window.__mapReadyMs===null?null:Math.round(window.__mapReadyMs),' +
+        'simStarted:!!(window.App&&window.App.sim)})',
+      returnByValue: true
+    });
+    if (!r || !r.result || typeof r.result.value !== 'string') return { failure: 'CDP Runtime.evaluate returned no usable result' };
+    return JSON.parse(r.result.value);
+  } finally {
+    closeCdp(session);
+  }
+}
+
+const IDLE_WINDOW_MS = 30000;
+
 /* One run: fresh server (so its request log starts empty) + one navigation.
    mapLib: null (cache cold, unchanged legacy behaviour) or the cache paths
    from mapLibreCachePaths() (splice in a real MapLibre, --idle only). */
-async function oneRun(idle, mapLib) {
-  const delayMs = idle ? 30000 : 300;
-  // Idle's window no longer starts at page load (see IDLE_COUNTERS/
-  // idleProbeScript above) — it starts at map_ready or a 7s fallback, THEN
-  // runs 30s. Budget covers worst case: ~8s of navigation/boot + 7s fallback
-  // + 30s window, with room to spare.
-  const virtualTimeBudget = idle ? 45000 : 1500;
+async function oneRun(idle, mapLib, cpuRate) {
+  const delayMs = idle ? IDLE_WINDOW_MS : 300;
+  const virtualTimeBudget = idle ? 45000 : 1500; // boot mode only now; --idle no longer uses virtual time
   const { server, requests, port } = await startServer(delayMs, idle, !!mapLib);
   let probe = null;
   let failure = null;
   try {
-    probe = parseProbe(await runChromium('http://127.0.0.1:' + port + '/', virtualTimeBudget));
+    if (idle) {
+      probe = await runIdleCdp(BIN, 'http://127.0.0.1:' + port + '/', IDLE_WINDOW_MS, cpuRate);
+      if (probe && probe.failure) { failure = probe.failure; probe = null; }
+    } else {
+      probe = parseProbe(await runChromium('http://127.0.0.1:' + port + '/', virtualTimeBudget));
+    }
   } catch (e) { failure = e.message; }
   finally { server.close(); }
-  if (failure || !probe) return { failure: failure || 'no probe output in the dumped DOM' };
+  if (failure || !probe) return { failure: failure || 'no probe output' };
 
   // The C1 recipe's own log showed a duplicate '/' request (the navigation
   // plus a second internal fetch of the same document); dedupe it so
@@ -309,6 +413,13 @@ async function oneRun(idle, mapLib) {
   const apiCalls = deduped.filter((r) => r.api).length;
   const gzipBytes = assets.reduce((s, r) => s + r.gz, 0);
 
+  if (idle) {
+    return {
+      frames: probe.frames, rafArmed: probe.rafArmed, longTasks: probe.longTasks,
+      mapReady: probe.mapReady === true, mapReadyMs: typeof probe.mapReadyMs === 'number' ? probe.mapReadyMs : null,
+      simStarted: probe.simStarted === true
+    };
+  }
   return {
     dcl: probe.dcl, load: probe.load, longTasks: probe.longTasks,
     requests: assets.length, gzipBytes, apiCalls,
@@ -327,21 +438,40 @@ function medianOf(runs, key) {
   return median(runs.map((r) => r[key]));
 }
 
-async function bench(idle, runCount, mapLib) {
+function round2(n) { return Math.round(n * 100) / 100; }
+
+async function bench(idle, runCount, mapLib, cpuRate) {
   const runs = [];
   for (let i = 0; i < runCount; i++) {
-    const r = await oneRun(idle, mapLib);
+    const r = await oneRun(idle, mapLib, cpuRate);
     if (r.failure) throw new Error('run ' + (i + 1) + '/' + runCount + ' failed: ' + r.failure);
     runs.push(r);
   }
   if (idle) {
+    const windowSecs = IDLE_WINDOW_MS / 1000;
+    const medFrames = medianOf(runs, 'frames');
+    const medRaf = medianOf(runs, 'rafArmed');
+    const framesPerSec = round2(medFrames / windowSecs);
+    // Sanity guard (cycle 17): a run that produces no real frames cannot tell
+    // a fixed rAF loop from a broken one — both read ~0 (see header comment,
+    // this is exactly the bug that made the previous --idle number a
+    // false-green). Report the failure explicitly instead of a number.
+    const idleObj = {
+      mapReady: runs.every((r) => r.mapReady), mapReadyMs: medianOf(runs, 'mapReadyMs'),
+      simStarted: runs.every((r) => r.simStarted),
+      framesPerSec, longTasks30s: medianOf(runs, 'longTasks')
+    };
+    if (framesPerSec >= 1) {
+      idleObj.rafArmedPerSec = round2(medRaf / windowSecs);
+      idleObj.rafPerFrame = round2(medRaf / Math.max(medFrames, 1));
+    } else {
+      idleObj.rafArmedPerSec = null;
+      idleObj.rafPerFrame = null;
+      idleObj.invalid = 'no frame production (framesPerSec < 1) — this run is not rendering; rafArmedPerSec/rafPerFrame are unmeasured, not zero';
+    }
     return {
       mode: 'idle', cspStripped: true, runs: runCount, mapLib: mapLib ? 'local' : 'absent',
-      idle: {
-        mapReady: runs.every((r) => r.mapReady), mapReadyMs: medianOf(runs, 'mapReadyMs'),
-        rafPerSec: Math.round((medianOf(runs, 'rafArmed') / 30) * 100) / 100,
-        longTasks30s: medianOf(runs, 'longTasks')
-      }
+      cpu: cpuRate || 1, idle: idleObj
     };
   }
   return {
@@ -357,9 +487,11 @@ async function main() {
   const idle = args.includes('--idle');
   const runsIdx = args.indexOf('--runs');
   const runCount = runsIdx >= 0 ? parseInt(args[runsIdx + 1], 10) : 3;
-  if (args.includes('--cpu')) {
-    console.log('NOTE: --cpu (DevTools Emulation.setCPUThrottlingRate) is not implemented — ' +
-      'it has no CLI flag, only the CDP protocol; STATE.md handoff files it as stretch. Running at cpu=1.');
+  const cpuIdx = args.indexOf('--cpu');
+  const cpuRate = cpuIdx >= 0 ? parseInt(args[cpuIdx + 1], 10) : 1;
+  if (cpuIdx >= 0 && !idle) {
+    console.log('NOTE: --cpu only applies to --idle (it needs the CDP session Emulation.setCPUThrottlingRate ' +
+      'uses; boot mode still runs through --dump-dom --virtual-time-budget, which has no CDP session). Running boot at cpu=1.');
   }
   // mapLib is only relevant to --idle: boot mode's own metrics (requests,
   // gzipBytes, apiCalls) must keep meaning "same-origin only", which a local
@@ -370,7 +502,7 @@ async function main() {
   H.group('perf-bench — lab boot cost, real Chromium, same-origin only (' + BIN + ')');
   let result;
   try {
-    result = await bench(idle, runCount, mapLib);
+    result = await bench(idle, runCount, mapLib, idle ? cpuRate : 1);
   } catch (e) {
     H.ok('bench completed ' + runCount + ' navigation(s) and parsed a probe from each', false, e.message);
     process.exit(H.report());
@@ -379,9 +511,11 @@ async function main() {
   console.log(JSON.stringify(result));
 
   if (idle) {
-    H.ok('idle bench (30 s virtual time on the map shell, gated on map_ready/7s fallback) produced rafPerSec + longTasks30s',
-      typeof result.idle.rafPerSec === 'number' && typeof result.idle.longTasks30s === 'number',
+    H.ok('idle bench produced real frame production (framesPerSec >= 1) before trusting rafArmedPerSec/rafPerFrame',
+      typeof result.idle.framesPerSec === 'number' && result.idle.framesPerSec >= 1 && !result.idle.invalid,
       JSON.stringify(result.idle));
+    H.ok('idle bench confirms window.App.sim actually started (simStarted)',
+      result.idle.simStarted === true, JSON.stringify(result.idle));
     H.ok('mapLib is reported (' + result.mapLib + ') so the number is never read without its fixture',
       result.mapLib === 'local' || result.mapLib === 'absent', result.mapLib);
   } else {
