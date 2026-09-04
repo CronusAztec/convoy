@@ -4014,9 +4014,13 @@ const httpServer = http.createServer((req, res) => {
 // compressed stream alongside a secret can sometimes infer the secret from
 // compressed-length changes. Tick frames carry no secrets (rider id/lat/lng/
 // heading, all either public-to-viewers-in-scope or already known to the
-// attacker if they're a rider themselves), and auth tokens never ride a WS
-// data frame (server/auth.js issues them over HTTPS) -- so this does not
-// apply here, but it is a real property of the option being turned on.
+// attacker if they're a rider themselves). The `hello` message's `m.token`
+// (a Supabase JWT, read by userFromToken() at :382) DOES ride a WS data
+// frame, but an attacker can't get a socket onto this server in the first
+// place to mount a same-stream chosen-plaintext attack unless they're
+// already on an allowlisted origin (verifyClient: wsOriginOk, above) --
+// that origin check, not "tokens never cross the socket", is the actual
+// mitigation here.
 //
 // WS_DEFLATE=0 is a same-code kill switch: revert by restarting the process
 // with that env var set, no redeploy needed.
