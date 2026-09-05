@@ -372,7 +372,9 @@ button svg, .ctl svg, .search-icon svg {
 :root[data-glass="off"] #radar-dock,
 :root[data-glass="off"] .hot-legend,
 :root[data-glass="off"] .rider-arrow,
-:root[data-glass="off"] .rlabel {
+:root[data-glass="off"] .rlabel,
+:root[data-glass="off"] .modal-card,
+:root[data-glass="off"] .speedo {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   background: var(--surface-solid);

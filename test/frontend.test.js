@@ -1001,6 +1001,20 @@ function analyzeGlassBudget(css) {
   return { blurred, neutralized, ungated, malformedOverrideSelectors };
 }
 
+// js/themes.js injects a SECOND stylesheet at runtime (`[data-theme="…"] …`
+// blocks appended to <head> by ensureCss()) that analyzeGlassBudget() above
+// never sees — it only reads css/styles.css. A theme's backdrop-filter rule
+// is selector-prefixed with its own `[data-theme="id"] ` (or defensively
+// `:root[data-theme="id"] `), so before it can be checked against the
+// styles.css `neutralized` map it has to be stripped back to the bare
+// selector the base stylesheet actually gates (cycle 21, closing the
+// cycle-20 review's HIGH #1: `.modal-card`/`.speedo` under the frost theme).
+function bareThemeSelector(sel) {
+  return sel
+    .replace(/^:root\[data-theme="[^"]*"\]\s*/, '')
+    .replace(/^\[data-theme="[^"]*"\]\s*/, '');
+}
+
 function testGlassBudget() {
   H.group('css/styles.css — every backdrop-filter surface has a :root[data-glass="off"] opaque neutralizer (T2.4a)');
 
@@ -1020,11 +1034,42 @@ function testGlassBudget() {
     fx.malformedOverrideSelectors.indexOf('[data-glass="off"] .fx-badprefix') !== -1,
     'malformed=' + fx.malformedOverrideSelectors.join(','));
 
+  // Normalization fixture, independent of both real stylesheets: a theme
+  // injecting `[data-theme="x"] .fx-plain { backdrop-filter: blur(9px); }`
+  // must resolve to the bare `.fx-plain` and be recognised against a
+  // `:root[data-glass="off"] .fx-plain` override coming from a *different*
+  // corpus (the base stylesheet), the same split that the real check below
+  // performs across css/styles.css and js/themes.js.
+  const themeNormBase = analyzeGlassBudget(
+    ':root[data-glass="off"] .fx-plain { backdrop-filter: none; background: var(--surface-solid); }');
+  const themeNormInjected = analyzeGlassBudget('[data-theme="x"] .fx-plain { backdrop-filter: blur(9px); }');
+  const themeNormBare = themeNormInjected.blurred.map(bareThemeSelector);
+  const themeNormUngated = themeNormBare.filter((s) => !(s in themeNormBase.neutralized));
+  H.ok('fixture: a theme-injected [data-theme="x"] .fx-plain normalizes to .fx-plain and is not ungated when .fx-plain has a :root neutralizer',
+    themeNormUngated.length === 0, 'ungated=' + themeNormUngated.join(','));
+
   const css = fs.readFileSync(path.join(ROOT, 'css', 'styles.css'), 'utf8');
   const real = analyzeGlassBudget(css);
   atOrBelowBaseline('always-on blurred surfaces with no data-glass="off" neutralizer',
     'ungatedBlurSurfaces', real.ungated.length,
     real.ungated.length ? real.ungated.join(', ') : (real.blurred.length + ' blurred selectors, all gated'));
+
+  // Second corpus: every theme's injected `css:` string (js/themes.js
+  // ensureCss()), normalized back to its bare selector and checked against
+  // the SAME styles.css `neutralized` map above — a theme has no overrides
+  // of its own, it only ever borrows the base stylesheet's gate. Loading the
+  // real module (not a static extraction) means reshapeCss() and the
+  // generated `custom` theme are covered too, exactly as they run in the app.
+  const themeDom = buildWindow();
+  installAsGlobals(themeDom.window);
+  const themeApp = loadModules(themeDom.window);
+  const themeCss = themeApp.themes.list().map((t) => t.css || '').join('\n');
+  const themeAnalysis = analyzeGlassBudget(themeCss);
+  const themeBlurredBare = themeAnalysis.blurred.map(bareThemeSelector);
+  const themeUngated = themeBlurredBare.filter((s) => !(s in real.neutralized));
+  atOrBelowBaseline('theme-injected (js/themes.js) blurred surfaces with no matching styles.css data-glass="off" neutralizer',
+    'ungatedThemeBlurSurfaces', themeUngated.length,
+    themeUngated.length ? themeUngated.join(', ') : (themeBlurredBare.length + ' theme-blurred selectors, all gated by styles.css'));
 
   H.ok('every [data-glass="off"] override selector is prefixed with :root (frost-theme specificity guard)',
     real.malformedOverrideSelectors.length === 0,

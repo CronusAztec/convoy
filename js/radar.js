@@ -655,6 +655,25 @@
     return { type: 'FeatureCollection', features: feats };
   }
 
+  // The rings are a pure function of the player's position and the distance
+  // unit, so re-tessellating them at 1.4 Hz while parked (tick()'s TICK_MS)
+  // is 195 destPoint() calls plus a full GeoJSON source update/re-tessellate
+  // for a byte-identical result. 5 decimal places (~1.1 m) is below any
+  // movement a rider would notice on a 0.5-mile ring and above GPS jitter
+  // that would otherwise defeat the guard (T1.7, cycle 21). c is [lng, lat]
+  // (A.sim.playerPos()'s own shape — same array ringFC() itself consumes).
+  var lastRingSig = '';
+  function ringSig(c) {
+    return c ? unit() + '|' + c[1].toFixed(5) + ',' + c[0].toFixed(5) : '';
+  }
+  function pushRings() {
+    if (!A.mapview || !A.mapview.setRingsData) return;
+    var sig = ringSig(A.sim ? A.sim.playerPos() : null);
+    if (sig === lastRingSig) return;
+    lastRingSig = sig;
+    A.mapview.setRingsData(ringFC());
+  }
+
   /* ---------------- floating map labels ---------------- */
   function renderLabels(targets) {
     var m = map();
@@ -732,7 +751,7 @@
     }
     renderDock();
     updateSonar(targets);
-    if (A.mapview && A.mapview.setRingsData) A.mapview.setRingsData(ringFC());
+    pushRings();
     positionSweep(); // 700ms catch-all (covers marker moving under a static camera)
   }
 
@@ -812,7 +831,11 @@
       clearLabels();
       if (A.mapview) {
         if (A.mapview.setRingsVisible) A.mapview.setRingsVisible(false);
+        // lastRingSig must reset here too, or re-engaging the radar from the
+        // same spot (sig unchanged) leaves the map with no rings until the
+        // rider moves — pushRings() would see the old sig and skip the push.
         if (A.mapview.setRingsData) A.mapview.setRingsData({ type: 'FeatureCollection', features: [] });
+        lastRingSig = '';
       }
       var md = map();
       if (md) { md.off('move', positionSweep); md.off('render', positionSweep); }

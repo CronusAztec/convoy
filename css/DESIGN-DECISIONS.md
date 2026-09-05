@@ -78,15 +78,20 @@ neutralizer is caught, not silently shipped.
   every selector whose translucency is pure decoration — `.glass`, `.brand`, `#search-input`,
   `.search-results`, `.avatar-btn`, `.chip`, `.ctl`, `#dock`, `.panel`, `.eta-card`, `.toast`,
   `.verify-banner`, `.pop-card`, `.wt-btn`, `.wt-meta`, `.ralert-foot`, `.rstat`, `#radar-dock`,
-  `.hot-legend`, `.rider-arrow`, `.rlabel`. `--surface-solid` is defined by every theme
-  (`css/styles.css:112`/`:149`, and every entry in `js/themes.js`, including the derived value for
-  user custom themes), so this never invents a colour outside the active theme. `.search-results` /
-  `.toast` / `.pop-card` already use `var(--surface-solid)` as their normal background — the override
-  is a harmless no-op for those three. `.verify-banner`'s normal background is a warn-tinted
-  `color-mix(... var(--surface-solid))`; the glass-off override loses that tint in favour of a flat
-  `--surface-solid` — a small, deliberate simplification for a rare, 8px-blur banner, not an
-  oversight. `.rider-arrow`/`.rlabel` are small map-overlay labels on `var(--surface)` (0.72 alpha);
-  making them opaque under `data-glass="off"` makes their text *more* legible over the map, not less.
+  `.hot-legend`, `.rider-arrow`, `.rlabel`, `.modal-card`, `.speedo`. `--surface-solid` is defined by
+  every theme (`css/styles.css:112`/`:149`, and every entry in `js/themes.js`, including the derived
+  value for user custom themes), so this never invents a colour outside the active theme.
+  `.search-results` / `.toast` / `.pop-card` already use `var(--surface-solid)` as their normal
+  background — the override is a harmless no-op for those three. `.verify-banner`'s normal background
+  is a warn-tinted `color-mix(... var(--surface-solid))`; the glass-off override loses that tint in
+  favour of a flat `--surface-solid` — a small, deliberate simplification for a rare, 8px-blur banner,
+  not an oversight. `.rider-arrow`/`.rlabel` are small map-overlay labels on `var(--surface)` (0.72
+  alpha); making them opaque under `data-glass="off"` makes their text *more* legible over the map,
+  not less. `.modal-card`/`.speedo` (cycle 21) don't declare a `backdrop-filter` of their own in
+  `css/styles.css` — they only need this override because the frost theme blurs them (see "Theme CSS
+  is a second stylesheet" below); both are no-op adds visually (`.modal-card`'s base rule already sets
+  `background: var(--surface-solid)`, and `.speedo` carries the `.glass` class this list already
+  neutralizes).
 - **Group B — blur removed only**, background untouched: `.modal-backdrop` (a full-screen scrim over
   the app behind every modal — forcing `--surface-solid` on it would black out that app instead of
   dimming it) and `.maplibregl-ctrl-attrib` (a legal map-attribution surface with its own
@@ -114,6 +119,23 @@ across `.glass, .chip, .ctl, .panel, #dock, .eta-card, .toast, .btn, .modal-card
 #search-input` since before this mission. A no-blur Slipstream is a look this codebase has already
 built and kept — this cycle generalises the same idea into a quality *mode* available under every
 theme, rather than a theme-specific override.
+
+**Theme CSS is a second stylesheet (cycle 21):** `js/themes.js`'s `ensureCss()` injects each theme's
+`css:` string into its own `<style>` tag at runtime — a real, separate stylesheet that
+`testGlassBudget()` originally never read, so a theme could add a `backdrop-filter` outside
+`css/styles.css` and reopen this exact budget invisibly. That happened once already: the frost theme
+(`js/themes.js:581-586`) blurs `.glass, .panel, #dock, .eta-card, .chip, .ctl, .toast, .modal-card,
+.speedo`, and the last two had no `:root[data-glass="off"]` neutralizer in `css/styles.css` — every
+modal and the speedometer stayed blurred under `data-glass="off"` for any frost-theme rider. Fixed by
+adding both to the Group-A list, and closed for good by widening the gate itself: `testGlassBudget()`
+now also loads the real `js/themes.js` module (the same `buildWindow()`/`loadModules()` fixture
+`testThemes()` already builds) and analyzes every registered theme's injected CSS as a second corpus,
+normalizing each theme-prefixed selector (`[data-theme="id"] .foo` → `.foo`) before checking it
+against the same `css/styles.css` neutralizer map (`ungatedThemeBlurSurfaces` in
+`test/frontend-baseline.json`, pinned at **0**). **Rule for the next theme:** any `backdrop-filter`
+a theme's `css:` adds must either target a selector already in the Group-A/B list above, or add its
+own `:root[data-glass="off"]` override — the gate now fails loudly on either, so this cannot reopen
+silently a second time.
 
 **Real-device measurement (STATE.md §8):** this box cannot measure GPU cost — the only true
 before/after is `adb shell dumpsys gfxinfo <pkg>` jank % on a mid-range Android phone, HUD rail /
