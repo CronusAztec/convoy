@@ -5,7 +5,10 @@ in every cycle, with no human present. Its job: publish the tree the reviewer ju
 **GitHub**, the **live site** (https://odoreeci.tech) and **installed APKs** (via the OTA channel).
 Every command below is copy-paste. Do the gates in order and stop at the first one that fails.
 
-Mission dir: `/opt/data/forge/missions/20260903-002914-ce0d/stages/`
+Mission dir: **resolve it, never hardcode it** — this runbook was written for mission
+`20260903-002914-ce0d`, which has since ended; that directory still exists on disk, so a hardcoded
+path silently reads a *dead mission's* review and decides a real-rider deploy from it. Use the
+newest review under the newest mission dir (the `MDIR=` line in §0 does this).
 
 ## 0. Gates — decide first, act second
 
@@ -13,12 +16,16 @@ Mission dir: `/opt/data/forge/missions/20260903-002914-ce0d/stages/`
 cd /opt/data/convoy
 git status --porcelain | wc -l                 # G1: must print 0 (clean tree, on main)
 git branch --show-current                      #     must print main
-R=$(ls /opt/data/forge/missions/20260903-002914-ce0d/stages/*-review.md | tail -1); echo "$R"
-grep -m1 -E "Verdict|verdict" "$R"             # G2: SHIP-QUALITY / ACCEPTABLE / BROKEN
+MDIR=$(ls -1dt /opt/data/forge/missions/*/ | head -1); echo "mission: $MDIR"   # newest mission, not a hardcoded id
+R=$(ls -1 "$MDIR"stages/*-review.md | tail -1); echo "$R"   # G2 source: newest review of the CURRENT mission
+grep -m1 -oE "SHIP-QUALITY|ACCEPTABLE|BROKEN" "$R"   # G2: the verdict word itself. (The old
+   # `grep -E "Verdict|verdict"` matched the claims-audit TABLE HEADER of recent reviews, not the verdict —
+   # verified across all 8 reviews of mission 20260903-173653-75d3, incl. c17's BROKEN.)
 grep -cE "^### BLOCKER|\*\*BLOCKER|BLOCKER —|BLOCKER-severity" "$R"   # G2b: count of BLOCKER findings
 grep -cE "^### HIGH|\*\*HIGH\b|HIGH —" "$R"                           # G2c: count of HIGH findings
 npm test 2>&1 | tail -3                        # G3: "All N suites passed." (N >= 23)
-grep -oE '\?v=cy[0-9]+' index.html | sort | uniq -c   # G4: exactly ONE stamp value (45 occurrences)
+grep -oE '\?v=cy[0-9]+' index.html | sort | uniq -c   # G4: exactly ONE stamp value (the COUNT drifts as
+                                                     #     scripts are lazy-loaded — only "one value" is the gate)
 ```
 
 | Gate result | GitHub push | Live deploy |
