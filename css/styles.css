@@ -701,6 +701,8 @@ body.radar-on .map-controls-left { display: none; }
   max-width: calc(100vw - 32px);
   display: flex; flex-direction: column;
   border-radius: var(--radius);
+  /* T2.4b: fixed+explicit geometry, already clip-path'd — see DESIGN-DECISIONS.md "Containment". */
+  contain: layout style paint;
   clip-path: polygon(var(--cut) 0, 100% 0, 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, 0 100%, 0 var(--cut));
   background: var(--surface);
   backdrop-filter: blur(26px) saturate(160%);
@@ -1500,6 +1502,8 @@ body.radar-on .map-controls-left { display: none; }
   overflow-y: auto;
   padding: 26px 26px 22px;
   border-radius: var(--radius);
+  /* T2.4b: already a clip+scroll container — see DESIGN-DECISIONS.md "Containment". */
+  contain: layout style paint;
   clip-path: polygon(var(--cut) 0, 100% 0, 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, 0 100%, 0 var(--cut));
   background: var(--surface-solid);
   border: 1px solid var(--line-strong);
@@ -3455,6 +3459,8 @@ body.radar-on #radar-sweep {
   text-align: center;
   line-height: 1.15;
   user-select: none; -webkit-user-select: none;
+  /* T2.4b: no paint — glow box-shadows would clip. See DESIGN-DECISIONS.md "Containment". */
+  contain: layout style;
 }
 .hud-card .hc-v {
   display: block;

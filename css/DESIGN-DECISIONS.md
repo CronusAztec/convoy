@@ -142,3 +142,27 @@ before/after is `adb shell dumpsys gfxinfo <pkg>` jank % on a mid-range Android 
 chips / dock visible, Settings → Glass blur On vs Off. **Eyeball check with glass off:** every
 panel/card must still read as a solid surface with legible text, and the modal scrim must still show
 the app dimmed behind it, not blacked out.
+
+## Containment (mission 20260903-173653-75d3, aspect P-C, T2.4b, cycle 22)
+
+`contain: layout style paint` on `.panel` (`:696`) and `.modal-card` (`:1499`); `contain: layout style`
+(no `paint`) on `.hud-card` (`:3461`). `.panel` is `position: fixed` with explicit
+`top`/`right`/`bottom`/`width`, so its own box geometry comes from positioning, not content — layout
+containment can't move it, and its existing `clip-path` already clips it, so `paint` adds no new visible
+clip. `.modal-card` is already `overflow-y: auto` + `clip-path` — already a clip+scroll container, so
+`paint` is a no-op on what's visible. `.hud-card` gets **no** `paint`: its text is rewritten every tick
+(the app's hottest style/layout invalidation source) and it carries glow `box-shadow`s that paint
+containment would clip. `.hud-rail` was deliberately left out for the same glow-clip reason.
+
+**Verified geometry-neutral, not just claimed**: `test/perf-bench.js --geometry` (new this cycle) took
+a rect+`overflow`/`zIndex`/`position` snapshot of a 13-selector allowlist before this CSS landed,
+confirmed `geoDiffs: 0` after, and was mutation-tested (a deliberate CSS change on `.panel-head`
+reliably produces `geoDiffs > 0`, naming the selector) before being trusted.
+
+**Measured, not assumed**: `test/perf-bench.js --idle` now reads `Performance.getMetrics` deltas
+(`layoutCount`/`recalcStyleCount`/…) straddling the idle window. Pre-CSS noise floor at n=3:
+`layoutCount` {1,3,1} (median 1, spread 2). Post-CSS: {2,1,1} (median 1) — **no effect clearing the
+noise floor on this box**. The CSS was kept anyway (geometry-neutral, correct invalidation hygiene) but
+**T2.4b's containment half is closed as no-measurable-win, not as a win** — no `containedSurfaces`
+ratchet was added. A real read needs `adb shell dumpsys gfxinfo <pkg>` with a side panel open
+(STATE.md §8 item 4), which this box cannot run.

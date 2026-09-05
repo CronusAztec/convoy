@@ -407,12 +407,32 @@ function closeCdp(session) {
    sleep the real event loop for windowMs, then read every counter back with
    one Runtime.evaluate. cpuRate > 1 throttles via Emulation before
    navigation (task 4, --cpu). */
+// Performance.getMetrics deltas (task 1, cycle 22): reads Chromium's own
+// layout/style-recalc counters straddling the idle window, so T2.4b's
+// containment claim ("fewer layouts on this app") is a number, not a guess.
+// Degrade-never-throw (directive): any failure of Performance.enable or
+// either getMetrics call leaves every new key null and perfDomain:false —
+// it must never fail the run or the gate. metricsOf() tolerates both the
+// bare {metrics:[...]} shape Performance.getMetrics actually returns through
+// this file's already-unwrapped send() and a defensively-checked {result:
+// {metrics:[...]}} shape, since this is the first caller in the file to use
+// a CDP method whose result isn't itself named "result".
+function metricsOf(m) {
+  const arr = (m && Array.isArray(m.metrics)) ? m.metrics : (m && m.result && Array.isArray(m.result.metrics)) ? m.result.metrics : null;
+  if (!arr) return null;
+  const o = {};
+  for (const entry of arr) o[entry.name] = entry.value;
+  return o;
+}
+
 async function runIdleCdp(bin, url, windowMs, cpuRate) {
   const session = await openCdp(bin);
   try {
     await session.send('Page.enable');
     await session.send('Runtime.enable');
     if (cpuRate && cpuRate > 1) await session.send('Emulation.setCPUThrottlingRate', { rate: cpuRate });
+    let perfDomain = true;
+    try { await session.send('Performance.enable'); } catch (e) { perfDomain = false; }
     await session.send('Page.navigate', { url });
     const t0 = Date.now();
     let started = false;
@@ -422,7 +442,19 @@ async function runIdleCdp(bin, url, windowMs, cpuRate) {
       await sleep(200);
     }
     if (!started) return { failure: 'window.__idleStarted never became true within 20s of real time' };
+
+    let m0 = null;
+    if (perfDomain) {
+      try { m0 = metricsOf(await session.send('Performance.getMetrics')); if (!m0) perfDomain = false; } catch (e) { perfDomain = false; }
+    }
+
     await sleep(windowMs);
+
+    let m1 = null;
+    if (perfDomain) {
+      try { m1 = metricsOf(await session.send('Performance.getMetrics')); if (!m1) perfDomain = false; } catch (e) { perfDomain = false; }
+    }
+
     const r = await session.send('Runtime.evaluate', {
       expression: 'JSON.stringify({longTasks:window.__lt||0,rafArmed:window.__raf||0,' +
         'intervalsArmed:window.__iv||0,timeoutsArmed:window.__to||0,frames:window.__frames||0,' +
@@ -431,7 +463,26 @@ async function runIdleCdp(bin, url, windowMs, cpuRate) {
       returnByValue: true
     });
     if (!r || !r.result || typeof r.result.value !== 'string') return { failure: 'CDP Runtime.evaluate returned no usable result' };
-    return JSON.parse(r.result.value);
+    const probe = JSON.parse(r.result.value);
+
+    if (perfDomain && m0 && m1) {
+      probe.perfDomain = true;
+      probe.layoutCount = (m1.LayoutCount || 0) - (m0.LayoutCount || 0);
+      probe.recalcStyleCount = (m1.RecalcStyleCount || 0) - (m0.RecalcStyleCount || 0);
+      probe.layoutDurationMs = round2(((m1.LayoutDuration || 0) - (m0.LayoutDuration || 0)) * 1000);
+      probe.recalcStyleDurationMs = round2(((m1.RecalcStyleDuration || 0) - (m0.RecalcStyleDuration || 0)) * 1000);
+      probe.layoutObjects = Math.round(m1.LayoutObjects || 0);
+      probe.nodes = Math.round(m1.Nodes || 0);
+    } else {
+      probe.perfDomain = false;
+      probe.layoutCount = null;
+      probe.recalcStyleCount = null;
+      probe.layoutDurationMs = null;
+      probe.recalcStyleDurationMs = null;
+      probe.layoutObjects = null;
+      probe.nodes = null;
+    }
+    return probe;
   } finally {
     closeCdp(session);
   }
@@ -475,7 +526,11 @@ async function oneRun(idle, mapLib, cpuRate) {
     return {
       frames: probe.frames, rafArmed: probe.rafArmed, longTasks: probe.longTasks,
       mapReady: probe.mapReady === true, mapReadyMs: typeof probe.mapReadyMs === 'number' ? probe.mapReadyMs : null,
-      simStarted: probe.simStarted === true
+      simStarted: probe.simStarted === true,
+      perfDomain: probe.perfDomain === true,
+      layoutCount: probe.layoutCount, recalcStyleCount: probe.recalcStyleCount,
+      layoutDurationMs: probe.layoutDurationMs, recalcStyleDurationMs: probe.recalcStyleDurationMs,
+      layoutObjects: probe.layoutObjects, nodes: probe.nodes
     };
   }
   return {
@@ -527,6 +582,27 @@ async function bench(idle, runCount, mapLib, cpuRate) {
       idleObj.rafPerFrame = null;
       idleObj.invalid = 'no frame production (framesPerSec < 1) — this run is not rendering; rafArmedPerSec/rafPerFrame are unmeasured, not zero';
     }
+    // Performance.getMetrics deltas (task 1): degrade to nulls, never throw,
+    // if any run's CDP session couldn't read the Performance domain.
+    idleObj.perfDomain = runs.every((r) => r.perfDomain === true);
+    if (idleObj.perfDomain) {
+      const medLayoutCount = medianOf(runs, 'layoutCount');
+      idleObj.layoutCount = medLayoutCount;
+      idleObj.recalcStyleCount = medianOf(runs, 'recalcStyleCount');
+      idleObj.layoutDurationMs = round2(medianOf(runs, 'layoutDurationMs'));
+      idleObj.recalcStyleDurationMs = round2(medianOf(runs, 'recalcStyleDurationMs'));
+      idleObj.layoutObjects = medianOf(runs, 'layoutObjects');
+      idleObj.nodes = medianOf(runs, 'nodes');
+      idleObj.layoutsPerSec = round2(medLayoutCount / windowSecs);
+    } else {
+      idleObj.layoutCount = null;
+      idleObj.recalcStyleCount = null;
+      idleObj.layoutDurationMs = null;
+      idleObj.recalcStyleDurationMs = null;
+      idleObj.layoutObjects = null;
+      idleObj.nodes = null;
+      idleObj.layoutsPerSec = null;
+    }
     return {
       mode: 'idle', cspStripped: true, runs: runCount, mapLib: mapLib ? 'local' : 'absent',
       cpu: cpuRate || 1, idle: idleObj
@@ -540,8 +616,144 @@ async function bench(idle, runCount, mapLib, cpuRate) {
   };
 }
 
+/* Geometry gate (task 2b, cycle 22): a fixed allowlist of structural container
+   selectors, each matched element's getBoundingClientRect() (rounded to whole
+   pixels) plus computed overflow/zIndex/position. This replaces a screenshot
+   gate for T2.4b's containment risk: `contain: layout|paint|size` and
+   `content-visibility` only ever go wrong by moving/clipping element geometry,
+   never by silently changing pixels a rect comparison can't see — see the
+   cycle-22 directive's "Why this work order" section. A selector matching zero
+   elements is recorded as count:0, not dropped, so a selector that stops
+   matching at runtime is itself a regression signal. */
+const GEO_SELECTORS = [
+  '.hud-rail', '.hud-card', '.panel', '.panel-head', '.panel-body',
+  '.modal-backdrop', '.modal-card', '.chips', '.dock', '#map', '.topbar', '.speedo', '.hud-overlay'
+];
+
+async function runGeometryCdp(bin, url) {
+  const session = await openCdp(bin);
+  try {
+    await session.send('Page.enable');
+    await session.send('Runtime.enable');
+    await session.send('Page.navigate', { url });
+    const t0 = Date.now();
+    let started = false;
+    while (Date.now() - t0 < 20000) {
+      const r = await session.send('Runtime.evaluate', { expression: 'window.__idleStarted===true', returnByValue: true });
+      if (r && r.result && r.result.value === true) { started = true; break; }
+      await sleep(200);
+    }
+    if (!started) return { failure: 'window.__idleStarted never became true within 20s of real time' };
+    // Let one just-finished boot layout settle before measuring — the same
+    // 500ms-class gap --idle's own map-ready/7s fallback already tolerates.
+    await sleep(500);
+    const expr = 'JSON.stringify((' + JSON.stringify(GEO_SELECTORS) + ').map(function(sel){\n' +
+      '  var els=document.querySelectorAll(sel);var rects=[];\n' +
+      '  for(var i=0;i<els.length;i++){\n' +
+      '    var r=els[i].getBoundingClientRect();var cs=getComputedStyle(els[i]);\n' +
+      '    rects.push({x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height),\n' +
+      '      overflow:cs.overflow,zIndex:cs.zIndex,position:cs.position});\n' +
+      '  }\n' +
+      '  return {selector:sel,count:els.length,rects:rects};\n' +
+      '}))';
+    const r = await session.send('Runtime.evaluate', { expression: expr, returnByValue: true });
+    if (!r || !r.result || typeof r.result.value !== 'string') return { failure: 'CDP Runtime.evaluate returned no usable geometry result' };
+    return { elements: JSON.parse(r.result.value) };
+  } finally {
+    closeCdp(session);
+  }
+}
+
+// 1px tolerance on rect fields (directive task 2b); overflow/zIndex/position
+// compared exactly since containment risk includes clip/stacking, not just size.
+function compareGeometry(base, cur) {
+  const baseBySel = {};
+  for (const g of base) baseBySel[g.selector] = g;
+  let geoElements = 0;
+  let geoDiffs = 0;
+  const firstDiffs = [];
+  for (const curGroup of cur) {
+    const baseGroup = baseBySel[curGroup.selector] || { rects: [] };
+    const n = Math.max(curGroup.rects.length, baseGroup.rects.length);
+    for (let i = 0; i < n; i++) {
+      geoElements++;
+      const b = baseGroup.rects[i];
+      const c = curGroup.rects[i];
+      if (!b || !c) {
+        geoDiffs++;
+        if (firstDiffs.length < 5) firstDiffs.push(curGroup.selector + '[' + i + ']: ' + (!b ? 'missing in baseline' : 'missing now'));
+        continue;
+      }
+      const diffFields = [];
+      for (const f of ['x', 'y', 'w', 'h']) if (Math.abs(b[f] - c[f]) > 1) diffFields.push(f);
+      if (b.overflow !== c.overflow) diffFields.push('overflow');
+      if (b.zIndex !== c.zIndex) diffFields.push('zIndex');
+      if (b.position !== c.position) diffFields.push('position');
+      if (diffFields.length) {
+        geoDiffs++;
+        if (firstDiffs.length < 5) firstDiffs.push(curGroup.selector + '[' + i + ']: ' + diffFields.join(','));
+      }
+    }
+  }
+  return { geoElements, geoDiffs, firstDiffs };
+}
+
+async function runGeometryMode(args) {
+  const outIdx = args.indexOf('--geo-out');
+  const cmpIdx = args.indexOf('--geo-cmp');
+  const outPath = outIdx >= 0 ? args[outIdx + 1] : null;
+  const cmpPath = cmpIdx >= 0 ? args[cmpIdx + 1] : null;
+  if (!outPath && !cmpPath) {
+    console.error('--geometry requires --geo-out <path> or --geo-cmp <path>');
+    process.exit(1);
+    return;
+  }
+  const mapLib = mapLibreCachePaths();
+  // One retry on a fresh session/navigation: observed on this shared box, a
+  // getBoundingClientRect()+getComputedStyle sweep taken right as the map/HUD
+  // are still settling can occasionally exceed CDP_SEND_TIMEOUT_MS under
+  // contention (STATE.md "Bench noise: CDP timings on a shared box vary
+  // ±10%") — a fresh attempt has always cleared it in practice. Two straight
+  // failures is reported honestly, never retried silently into a third.
+  let result = null;
+  let lastErr = null;
+  for (let attempt = 0; attempt < 2 && !result; attempt++) {
+    const { server, port } = await startServer(0, true, !!mapLib);
+    try {
+      result = await runGeometryCdp(BIN, 'http://127.0.0.1:' + port + '/');
+    } catch (e) {
+      lastErr = e;
+    } finally {
+      server.close();
+    }
+  }
+  if (!result) {
+    console.log(JSON.stringify({ mode: 'geometry', failure: (lastErr && lastErr.message) || 'unknown geometry measurement failure' }));
+    process.exit(1);
+    return;
+  }
+  if (result.failure) {
+    console.log(JSON.stringify({ mode: 'geometry', failure: result.failure }));
+    process.exit(1);
+    return;
+  }
+  if (outPath) {
+    fs.writeFileSync(outPath, JSON.stringify(result.elements));
+    console.log(JSON.stringify({
+      mode: 'geometry', wrote: outPath,
+      geoElements: result.elements.reduce((s, g) => s + g.count, 0)
+    }));
+  } else {
+    const base = JSON.parse(fs.readFileSync(cmpPath, 'utf8'));
+    const cmp = compareGeometry(base, result.elements);
+    console.log(JSON.stringify(Object.assign({ mode: 'geometry' }, cmp)));
+    process.exit(cmp.geoDiffs > 0 ? 1 : 0);
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
+  if (args.includes('--geometry')) { await runGeometryMode(args); return; }
   const idle = args.includes('--idle');
   const runsIdx = args.indexOf('--runs');
   const runCount = runsIdx >= 0 ? parseInt(args[runsIdx + 1], 10) : 3;

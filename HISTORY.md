@@ -1353,3 +1353,7 @@ Measuring commands: `node test/wire-bench.js`, `node test/wire-bench.js --client
 4. **Stamp**: `node test/stamp.test.js` correctly went RED once the CSS/JS edits landed (local stamp `cy135` == last-pushed `cy135`); bumped every `?v=cy135`→`?v=cy136` in `index.html`, re-ran `pack-ota.js --offline` (`bundle-1.0.136.zip`).
 
 **Cycle-20 review found a real gap the same cycle** (closed cycle 21): the frost theme (`js/themes.js`) injects its own `backdrop-filter` on `.modal-card`/`.speedo` from a stylesheet `testGlassBudget()` never read — see STATE.md §5/`HISTORY.md`'s cycle-21 entry for the fix.
+
+## STATE.md §9 history line archived (cycle 22, to keep STATE.md under budget)
+
+- 2026-09-04 cycle 17 (IMPLEMENT, improve-directive): rebuilt `test/perf-bench.js --idle` on a real-time CDP session — correct fix, but the stage's own repro recipe left `js/sim.js` reverted (T1.1 silently undone in the local tree, production unaffected) and ended with its own `npm test` run unread. Caught by the cycle-17 review; fixed cycle 18. Full narrative: `HISTORY.md`.
