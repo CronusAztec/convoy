@@ -78,7 +78,8 @@
   }
   // js/vitals.js: woken at load+idle like A.data/A.voice below, not on a bus
   // event — it has nothing to observe until the page has painted, and
-  // reports itself once at session end via A.telemetry.beforeEnd().
+  // reports itself once, at the earlier of session end (A.telemetry.beforeEnd())
+  // or a 20s-after-wake timer (cycle 23: 'end' alone never fired on real devices).
   function wakeVitalsOnLoadIdle() {
     A.lazy.vitals().then(function (m) { if (m && m.init) m.init(); }).catch(function () {});
   }

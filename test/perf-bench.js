@@ -496,18 +496,46 @@ const IDLE_WINDOW_MS = 30000;
 async function oneRun(idle, mapLib, cpuRate) {
   const delayMs = idle ? IDLE_WINDOW_MS : 300;
   const virtualTimeBudget = idle ? 45000 : 1500; // boot mode only now; --idle no longer uses virtual time
-  const { server, requests, port } = await startServer(delayMs, idle, !!mapLib);
   let probe = null;
   let failure = null;
-  try {
-    if (idle) {
-      probe = await runIdleCdp(BIN, 'http://127.0.0.1:' + port + '/', IDLE_WINDOW_MS, cpuRate);
-      if (probe && probe.failure) { failure = probe.failure; probe = null; }
-    } else {
-      probe = parseProbe(await runChromium('http://127.0.0.1:' + port + '/', virtualTimeBudget));
+  let requests = null;
+
+  if (idle) {
+    // One retry on a fresh server + CDP session — the same shape as
+    // runGeometryMode's task-2b fix (cycle 22 review, MEDIUM-1). The idle
+    // path does strictly more CDP round-trips per run (Page.enable,
+    // Runtime.enable, Performance.enable, Performance.getMetrics x2, a 30s
+    // real-time sleep, then the same final Runtime.evaluate geometry-mode's
+    // fix already covers) and had no equivalent protection: one failed
+    // attempt used to throw and fail the whole bench(), even though a fresh
+    // attempt has always cleared the timeout in practice on this shared box.
+    // Two straight failures is reported honestly, never retried into a third.
+    for (let attempt = 0; attempt < 2 && !probe; attempt++) {
+      const started = await startServer(delayMs, idle, !!mapLib);
+      try {
+        const p = await runIdleCdp(BIN, 'http://127.0.0.1:' + started.port + '/', IDLE_WINDOW_MS, cpuRate);
+        if (p && p.failure) { failure = p.failure; } else { probe = p; requests = started.requests; failure = null; }
+      } catch (e) { failure = e.message; }
+      finally { started.server.close(); }
     }
+    if (failure || !probe) return { failure: failure || 'no probe output' };
+    return {
+      frames: probe.frames, rafArmed: probe.rafArmed, longTasks: probe.longTasks,
+      mapReady: probe.mapReady === true, mapReadyMs: typeof probe.mapReadyMs === 'number' ? probe.mapReadyMs : null,
+      simStarted: probe.simStarted === true,
+      perfDomain: probe.perfDomain === true,
+      layoutCount: probe.layoutCount, recalcStyleCount: probe.recalcStyleCount,
+      layoutDurationMs: probe.layoutDurationMs, recalcStyleDurationMs: probe.recalcStyleDurationMs,
+      layoutObjects: probe.layoutObjects, nodes: probe.nodes
+    };
+  }
+
+  const boot = await startServer(delayMs, idle, !!mapLib);
+  requests = boot.requests;
+  try {
+    probe = parseProbe(await runChromium('http://127.0.0.1:' + boot.port + '/', virtualTimeBudget));
   } catch (e) { failure = e.message; }
-  finally { server.close(); }
+  finally { boot.server.close(); }
   if (failure || !probe) return { failure: failure || 'no probe output' };
 
   // The C1 recipe's own log showed a duplicate '/' request (the navigation
@@ -522,17 +550,7 @@ async function oneRun(idle, mapLib, cpuRate) {
   const apiCalls = deduped.filter((r) => r.api).length;
   const gzipBytes = assets.reduce((s, r) => s + r.gz, 0);
 
-  if (idle) {
-    return {
-      frames: probe.frames, rafArmed: probe.rafArmed, longTasks: probe.longTasks,
-      mapReady: probe.mapReady === true, mapReadyMs: typeof probe.mapReadyMs === 'number' ? probe.mapReadyMs : null,
-      simStarted: probe.simStarted === true,
-      perfDomain: probe.perfDomain === true,
-      layoutCount: probe.layoutCount, recalcStyleCount: probe.recalcStyleCount,
-      layoutDurationMs: probe.layoutDurationMs, recalcStyleDurationMs: probe.recalcStyleDurationMs,
-      layoutObjects: probe.layoutObjects, nodes: probe.nodes
-    };
-  }
+  // idle mode already returned above — this path is boot mode only.
   return {
     dcl: probe.dcl, load: probe.load, longTasks: probe.longTasks,
     requests: assets.length, gzipBytes, apiCalls,

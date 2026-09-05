@@ -8,6 +8,15 @@
    remaining criteria, P-B's mobile LCP, or P-C's INP/dropped-frame rows can
    ever get a real number. See STATE.md §6 "Field Web Vitals".
 
+   Cycle 23: production's own rollup showed 0 vitals AND 0 'end' events across
+   every cy133 session — Android kills the WebView outright often enough that
+   A.telemetry.beforeEnd() alone never fires. report() now runs at the EARLIER
+   of that hook or a 20s-after-load timer, whichever wins, marked with a
+   vitals_idle/vitals_end event so production's own event counts can tell
+   "the trigger never fires" from "the transport lost it". Honesty caveat:
+   20s under-counts CLS and INP versus a full session — read the field p75s
+   as a floor, not a ceiling, until a longer-lived signal replaces this one.
+
    Deliberately zero boot cost: not <script>-tagged in index.html at all,
    loaded only via A.lazy.vitals() from js/app.js's load+idle warm, same shape
    as A.data/A.voice. A rider who never gets a chance to load+idle (killed
@@ -32,6 +41,7 @@
   var inp = null;
   var lt = 0;           // count of long tasks (field twin of the lab metric)
   var reported = false;
+  var idleTimer = null; // cleared the instant either trigger reports
 
   function safeObserve(type, extra, onEntries) {
     try {
@@ -58,9 +68,12 @@
     });
     safeObserve('longtask', null, function (entries) { lt += entries.length; });
 
-    // report() runs right before the session's own 'end' event, whichever
-    // fires first (backgrounded, or pagehide) — never on a timer of its own.
+    // report() runs at the EARLIER of: the session's own 'end' (backgrounded
+    // or pagehide), or 20s after this module woke up (load+idle, see
+    // js/app.js's wakeVitalsOnLoadIdle) — whichever fires first. See the
+    // module comment above for why 'end' alone is not enough.
     if (A.telemetry && A.telemetry.beforeEnd) A.telemetry.beforeEnd(report);
+    idleTimer = setTimeout(function () { report('idle'); }, 20000);
   }
 
   function nav() {
@@ -75,14 +88,19 @@
     return out;
   }
 
-  function report() {
+  function report(trigger) {
     if (reported) return;
     reported = true;
+    if (idleTimer != null) { clearTimeout(idleTimer); idleTimer = null; }
     var o = nav();
     if (lcp != null) o.lcp = Math.round(lcp);
     o.cls = Math.round(cls * 1000);   // 0.083 -> 83; server divides back for display
     if (inp != null) o.inp = Math.round(inp);
     if (lt) o.lt = lt;
+    // H1 (lifecycle: 'end' never fires) vs H2 (transport: it fires but the
+    // report never lands) is otherwise indistinguishable from the rollup —
+    // this marker event is the whole diagnostic, see the module comment.
+    if (A.telemetry && A.telemetry.track) A.telemetry.track(trigger === 'idle' ? 'vitals_idle' : 'vitals_end');
     if (A.telemetry && A.telemetry.vitals) A.telemetry.vitals(o);
   }
 

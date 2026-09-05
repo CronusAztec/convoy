@@ -314,6 +314,78 @@ group('client — field vitals (js/vitals.js): lazy, zero boot cost, reports exa
   ok('a second end() reports nothing at all — the vitals report is exactly-once, not per-call',
     sends.length === 0, 'sends=' + sends.length);
 
+  /* ---------------- cycle 23 (Task 1): report at the earlier of beforeEnd
+     or a 20s load-idle timer. Production's own rollup showed 0 vitals AND 0
+     'end' events across every cy133 session — beforeEnd alone never fires on
+     real devices, so it can no longer be the only trigger. Same idiom as the
+     "load + idle" group above: record setTimeout/clearTimeout calls instead
+     of waiting on a real 20s timer. */
+  function withFakeTimers(fn) {
+    const realST = global.setTimeout, realCT = global.clearTimeout;
+    const pending = [];
+    let nextId = 1;
+    global.setTimeout = function (f, ms) { const id = nextId++; pending.push({ id: id, fn: f, ms: ms }); return id; };
+    global.clearTimeout = function (id) {
+      const i = pending.findIndex(function (e) { return e.id === id; });
+      if (i >= 0) pending.splice(i, 1);
+    };
+    try { fn(pending); } finally { global.setTimeout = realST; global.clearTimeout = realCT; }
+  }
+
+  // (i) the 20s idle timer alone, no end() ever — must still produce one report.
+  withFakeTimers(function (pending) {
+    win.localStorage.clear();
+    T = loadTelemetry();
+    loadModule('js/vitals.js');
+    win.App.vitals.init();
+    const idle = pending.find(function (e) { return e.ms === 20000; });
+    ok('init() arms a 20s idle report timer', !!idle, JSON.stringify(pending.map(function (e) { return e.ms; })));
+    sends.length = 0;
+    if (idle) idle.fn();
+    T.flush(true);
+    const events = lastBatch().events || [];
+    const vEvents = events.filter(function (e) { return e.k === 'vitals'; });
+    ok('the 20s idle timer alone (no end() ever) produces exactly one vitals event',
+      vEvents.length === 1, JSON.stringify(events));
+    const marker = events.filter(function (e) { return e.k === 'event' && e.name === 'vitals_idle'; });
+    ok('...marked vitals_idle, so production can tell "trigger never fires" (H1) from "transport lost it" (H2)',
+      marker.length === 1, JSON.stringify(events));
+  });
+
+  // (ii) idle fires first — a LATER end() must not send a second vitals event.
+  withFakeTimers(function (pending) {
+    win.localStorage.clear();
+    T = loadTelemetry();
+    loadModule('js/vitals.js');
+    win.App.vitals.init();
+    const idle = pending.find(function (e) { return e.ms === 20000; });
+    if (idle) idle.fn();
+    T.flush(true);   // send the idle report now, the way a real 'load+idle' flush would
+    sends.length = 0;
+    T.end('hidden');
+    const events = lastBatch().events || [];
+    ok('idle-then-end: the end() flush carries no second vitals event',
+      !events.some(function (e) { return e.k === 'vitals'; }), JSON.stringify(events));
+  });
+
+  // (iii) end() fires first — must clear the idle timer and report exactly once.
+  withFakeTimers(function (pending) {
+    win.localStorage.clear();
+    T = loadTelemetry();
+    loadModule('js/vitals.js');
+    win.App.vitals.init();
+    sends.length = 0;
+    T.end('hidden');
+    const stillArmed = pending.some(function (e) { return e.ms === 20000; });
+    ok('end-then-idle: end() clears the 20s idle timer so it cannot fire again later',
+      !stillArmed, JSON.stringify(pending));
+    const events = lastBatch().events || [];
+    const vEvents = events.filter(function (e) { return e.k === 'vitals'; });
+    ok('end() alone still produces exactly one vitals event', vEvents.length === 1, JSON.stringify(events));
+    const marker = events.filter(function (e) { return e.k === 'event' && e.name === 'vitals_end'; });
+    ok('...marked vitals_end', marker.length === 1, JSON.stringify(events));
+  });
+
   delete win.PerformanceObserver;
   delete global.PerformanceObserver;
 }

@@ -732,6 +732,16 @@ function testBootCost() {
     .filter((m) => /rel="stylesheet"/.test(m[0]) && /href="https?:\/\//.test(m[0]));
   atOrBelowBaseline('boot render-blocking external stylesheets — <link rel="stylesheet"> tags whose href is a third-party URL (each one is a full DNS+TLS+download+parse chain before first paint)',
     'bootRenderBlockingExternal', externalStylesheets.length, externalStylesheets.map((m) => m[0]).join(' | '));
+  // cycle 23 (Task 2): a cross-origin <script> with no `crossorigin` attribute
+  // has its runtime exceptions sanitised by the browser into an opaque
+  // "Script error." with no message/file/line/stack — 100% of production's
+  // crash signal on the days measured. Structural gate, not a numeric
+  // ratchet: any future cross-origin script must carry the attribute too.
+  const externalScripts = Array.from(html.matchAll(/<script\b[^>]*>/g))
+    .filter((m) => /src="https?:\/\//.test(m[0]));
+  H.ok('every cross-origin <script> carries crossorigin="anonymous" (else its exceptions are unmasked as opaque "Script error.")',
+    externalScripts.length > 0 && externalScripts.every((m) => /\bcrossorigin="anonymous"/.test(m[0])),
+    externalScripts.map((m) => m[0]).join(' | '));
 }
 
 function testSelfHostedFonts() {

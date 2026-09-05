@@ -146,7 +146,7 @@ the app dimmed behind it, not blacked out.
 ## Containment (mission 20260903-173653-75d3, aspect P-C, T2.4b, cycle 22)
 
 `contain: layout style paint` on `.panel` (`:696`) and `.modal-card` (`:1499`); `contain: layout style`
-(no `paint`) on `.hud-card` (`:3461`). `.panel` is `position: fixed` with explicit
+(no `paint`) on `.hud-card` (`:3454`). `.panel` is `position: fixed` with explicit
 `top`/`right`/`bottom`/`width`, so its own box geometry comes from positioning, not content — layout
 containment can't move it, and its existing `clip-path` already clips it, so `paint` adds no new visible
 clip. `.modal-card` is already `overflow-y: auto` + `clip-path` — already a clip+scroll container, so
