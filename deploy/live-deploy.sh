@@ -42,7 +42,7 @@ case "$action" in
   update)
     TARBALL="${TARBALL:-/tmp/convoy-site.tgz}"
     ( cd "$ROOT" && tar -czf "$TARBALL" --exclude=node_modules --exclude=.git --exclude=.claude \
-        index.html css js legal server README.md DEPLOY.md LICENSE THIRD-PARTY-NOTICES.md )
+        index.html css js legal server fonts landing README.md DEPLOY.md LICENSE THIRD-PARTY-NOTICES.md )
     export TARBALL
     node "$HERE/deploy.js" update
     ;;

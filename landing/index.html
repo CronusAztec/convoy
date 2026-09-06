@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<title>Convoy. The passenger runs the map.</title>
+<meta name="description" content="Convoy is a passenger-side map for riders: live riders around you, convoys with chat and walkie-talkie, routes with an ETA, and a ghost-mode radar HUD. Android and web."/>
+<meta name="theme-color" content="#0c0d0f"/>
+<link rel="canonical" href="https://odoreeci.tech/landing"/>
+<meta property="og:type" content="website"/>
+<meta property="og:site_name" content="Convoy"/>
+<meta property="og:title" content="Convoy. The passenger runs the map."/>
+<meta property="og:description" content="Live riders around you, convoys with chat and walkie-talkie, routes with an ETA, and a radar HUD. The driver drives."/>
+<meta property="og:url" content="https://odoreeci.tech/landing"/>
+<meta property="og:image" content="https://odoreeci.tech/landing/img/og.png"/>
+<meta property="og:image:width" content="1200"/>
+<meta property="og:image:height" content="630"/>
+<meta name="twitter:card" content="summary_large_image"/>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23dde1e7' stroke-width='2' stroke-linejoin='round'><path d='M12 3 20 7.5 20 16.5 12 21 4 16.5 4 7.5Z'/><path d='M12 8 16 10.3 16 14.7 12 17 8 14.7 8 10.3Z'/></svg>"/>
+<link rel="preload" as="font" type="font/woff2" crossorigin href="/fonts/chakra-petch-v13-latin-700.woff2"/>
+<link rel="preload" as="font" type="font/woff2" crossorigin href="/fonts/chakra-petch-v13-latin-400.woff2"/>
+<link rel="preload" as="image" href="/landing/img/map-riders.webp" fetchpriority="high"/>
+<style>
+/* ============================================================
+   CONVOY landing page. Self-contained; one external script
+   (landing.js) because the server's CSP forbids inline JS.
+   Tokens are lifted from css/styles.css so this page and the app
+   share one visual vocabulary: near-black neutrals, Chakra Petch,
+   Share Tech Mono for numerics, cut-corner surfaces.
+   Shape rule: UI chrome (buttons, chips, cards) is cut-corner;
+   device frames are rounded because they are devices.
+   ============================================================ */
+@font-face { font-family: 'Chakra Petch'; font-style: normal; font-weight: 400; font-display: swap;
+  src: url(/fonts/chakra-petch-v13-latin-ext-400.woff2) format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+@font-face { font-family: 'Chakra Petch'; font-style: normal; font-weight: 400; font-display: swap;
+  src: url(/fonts/chakra-petch-v13-latin-400.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: 'Chakra Petch'; font-style: normal; font-weight: 600; font-display: swap;
+  src: url(/fonts/chakra-petch-v13-latin-600.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: 'Chakra Petch'; font-style: normal; font-weight: 700; font-display: swap;
+  src: url(/fonts/chakra-petch-v13-latin-ext-700.woff2) format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+@font-face { font-family: 'Chakra Petch'; font-style: normal; font-weight: 700; font-display: swap;
+  src: url(/fonts/chakra-petch-v13-latin-700.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: 'Share Tech Mono'; font-style: normal; font-weight: 400; font-display: swap;
+  src: url(/fonts/share-tech-mono-v16-latin-400.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+
+:root {
+  --bg: #0c0d0f;
+  --bg-2: #111317;
+  --surface: #15171b;
+  --surface-2: #1a1d23;
+  --text: #dde1e7;
+  --text-dim: #8b929d;
+  --line: rgba(255, 255, 255, .1);
+  --line-strong: rgba(255, 255, 255, .22);
+  --accent: #2f6df6;           /* Velocity Blue: the default paint and the rider's own dot */
+  --accent-ink: #ffffff;
+  --good: #36c065;             /* "other riders on your road", used only for the live chip */
+  --font: 'Chakra Petch', system-ui, sans-serif;
+  --mono: 'Share Tech Mono', ui-monospace, monospace;
+  --cut: 12px;
+  --cut-sm: 7px;
+  --ease: cubic-bezier(.22, .85, .3, 1);
+  --wrap: 1180px;
+  --pad: clamp(18px, 4vw, 40px);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 400 17px/1.55 var(--font);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+img { display: block; max-width: 100%; height: auto; }
+a { color: inherit; text-decoration: none; }
+p { text-wrap: pretty; }
+h1, h2, h3 { font-weight: 700; letter-spacing: -.01em; text-wrap: balance; line-height: 1.05; }
+h2 { font-size: clamp(30px, 4.2vw, 48px); }
+h3 { font-size: 20px; line-height: 1.2; }
+.lede { color: var(--text-dim); font-size: clamp(17px, 1.5vw, 19px); max-width: 60ch; }
+.wrap { width: min(var(--wrap), 100% - 2 * var(--pad)); margin-inline: auto; }
+.mono { font-family: var(--mono); letter-spacing: .04em; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+/* ---------- buttons: cut-corner, same geometry as the app ---------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+  height: 50px; padding: 0 22px;
+  clip-path: polygon(var(--cut-sm) 0, 100% 0, 100% calc(100% - var(--cut-sm)), calc(100% - var(--cut-sm)) 100%, 0 100%, 0 var(--cut-sm));
+  font: 700 15px var(--font); letter-spacing: .04em; white-space: nowrap;
+  color: var(--text); background: rgba(255, 255, 255, .06); border: 1px solid var(--line-strong);
+  transition: transform 160ms var(--ease), filter 160ms var(--ease), background 160ms var(--ease), border-color 160ms var(--ease);
+  cursor: pointer;
+}
+.btn:hover { transform: translateY(-1px); border-color: rgba(255, 255, 255, .4); }
+.btn:active { transform: scale(.98); }
+.btn svg { width: 18px; height: 18px; flex: none; }
+.btn-primary { color: var(--accent-ink); background: var(--accent); border-color: transparent; }
+.btn-primary:hover { filter: brightness(1.08); }
+.btn-sm { height: 40px; padding: 0 16px; font-size: 13px; }
+
+/* ---------- header ---------- */
+.top {
+  position: sticky; top: 0; z-index: 10;
+  background: rgba(12, 13, 15, .94);
+  border-bottom: 1px solid var(--line);
+}
+.top .wrap { display: flex; align-items: center; gap: 28px; height: 64px; }
+.brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: .12em; font-size: 15px; }
+.brand svg { width: 26px; height: 26px; }
+.nav { display: flex; gap: 22px; margin-left: 8px; font-size: 14px; color: var(--text-dim); }
+.nav a:hover { color: var(--text); }
+.top .cta { margin-left: auto; }
+@media (max-width: 760px) { .nav { display: none; } }
+
+/* ---------- phone frame ---------- */
+.phone {
+  --w: 300px;
+  width: var(--w); aspect-ratio: 390 / 844;
+  padding: 7px; border-radius: 34px;
+  background: #0a0b0d; border: 1px solid var(--line-strong);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, .55), 0 2px 0 rgba(255, 255, 255, .06) inset;
+}
+.phone img { width: 100%; height: 100%; object-fit: cover; border-radius: 27px; background: var(--surface); }
+
+/* ---------- hero ---------- */
+.hero { padding: clamp(40px, 7vw, 88px) 0 clamp(40px, 6vw, 72px); overflow: hidden; }
+.hero .wrap { display: grid; grid-template-columns: minmax(0, 6fr) minmax(0, 6fr); gap: clamp(28px, 5vw, 64px); align-items: center; }
+.hero h1 { font-size: clamp(42px, 5.4vw, 74px); line-height: .98; max-width: 13ch; }
+.hero .lede { margin: 26px 0 34px; }
+.actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.stage { position: relative; height: clamp(540px, 54vw, 740px); }
+.stage .phone { position: absolute; }
+.stage .p1 { --w: clamp(230px, 24vw, 330px); left: 6%; top: 0; z-index: 2; }
+.stage .p2 { --w: clamp(190px, 20vw, 280px); right: 4%; top: 12%; z-index: 1; }
+@media (prefers-reduced-motion: no-preference) {
+  .stage .phone { animation: rise 900ms var(--ease) both; }
+  .stage .p2 { animation-delay: 140ms; }
+  @keyframes rise { from { opacity: 0; transform: translateY(28px); } to { opacity: 1; transform: none; } }
+}
+@media (max-width: 860px) {
+  .hero .wrap { grid-template-columns: 1fr; }
+  .hero h1 { max-width: none; }
+  .stage { height: auto; display: flex; gap: 14px; justify-content: center; align-items: flex-start; }
+  .stage .phone { position: static; }
+  .stage .p1 { --w: min(48%, 300px); }
+  .stage .p2 { --w: min(40%, 250px); margin-top: 40px; }
+}
+
+/* ---------- generic section ---------- */
+section { padding: clamp(56px, 8vw, 112px) 0; }
+.split { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: clamp(28px, 6vw, 80px); align-items: center; }
+.split.flip > .copy { order: 2; }
+.copy h2 { margin-bottom: 18px; }
+.copy .lede { margin-bottom: 26px; }
+.facts { list-style: none; border-top: 1px solid var(--line); }
+.facts li { display: grid; grid-template-columns: 150px 1fr; gap: 16px; padding: 13px 0; border-bottom: 1px solid var(--line); font-size: 15px; }
+.facts b { font-family: var(--mono); font-weight: 400; color: var(--text-dim); letter-spacing: .06em; text-transform: uppercase; font-size: 12px; padding-top: 3px; }
+.shots { display: flex; gap: 24px; justify-content: center; align-items: flex-start; }
+.shots .phone { --w: clamp(220px, 22vw, 320px); }
+.shots .phone + .phone { margin-top: 56px; }
+@media (max-width: 860px) {
+  .split, .split.flip { grid-template-columns: 1fr; }
+  .split.flip > .copy { order: 0; }
+  .shots .phone { --w: min(46%, 300px); }
+  .facts li { grid-template-columns: 1fr; gap: 4px; }
+}
+
+/* ---------- radar band ---------- */
+.band { background: var(--bg-2); border-block: 1px solid var(--line); }
+.band .wrap { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: clamp(24px, 5vw, 64px); align-items: center; }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .22em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 14px; }
+.hud {
+  border: 1px solid var(--line-strong);
+  clip-path: polygon(var(--cut) 0, 100% 0, 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, 0 100%, 0 var(--cut));
+  background: #0a0b0d;
+}
+.hud img { width: 100%; }
+.note { margin-top: 22px; padding: 14px 16px; border: 1px solid var(--line); font-size: 14px; color: var(--text-dim); background: var(--surface); }
+.note b { color: var(--text); font-weight: 600; }
+@media (max-width: 860px) { .band .wrap { grid-template-columns: 1fr; } }
+
+/* ---------- bento ---------- */
+.bento { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; margin-top: 44px; }
+.cell {
+  position: relative; overflow: hidden;
+  background: var(--surface); border: 1px solid var(--line);
+  clip-path: polygon(var(--cut) 0, 100% 0, 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, 0 100%, 0 var(--cut));
+  padding: 24px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.cell p { color: var(--text-dim); font-size: 15px; max-width: 46ch; }
+.cell h3 { margin-top: 2px; }
+.c-routes { grid-column: span 5; grid-row: span 2; }
+.c-garage { grid-column: span 7; }
+.c-scan { grid-column: span 3; }
+.c-drag { grid-column: span 4; }
+.c-more { grid-column: span 7; }
+.c-theme { grid-column: span 5; }
+/* The routes tile shows the top of a phone: a fixed-height window, the frame
+   overflows the bottom edge and is clipped by the cell. */
+.c-routes .art { margin: 18px auto -24px; width: min(72%, 280px); height: 430px; overflow: hidden; }
+.c-routes .phone { --w: 100%; box-shadow: 0 18px 50px rgba(0, 0, 0, .5); }
+.c-garage .art { margin: 8px -24px -24px -24px; border-top: 1px solid var(--line); background: #0a0b0d; }
+.c-garage .art img { width: 100%; max-height: 240px; object-fit: cover; object-position: left top; }
+.runs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.runs span { font-family: var(--mono); font-size: 13px; letter-spacing: .05em; padding: 6px 10px; border: 1px solid var(--line-strong); background: var(--bg-2); }
+.swatches { display: flex; gap: 8px; margin-top: 6px; }
+.swatches i { width: 22px; height: 22px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, .25); }
+.c-more ul { list-style: none; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 22px; color: var(--text-dim); font-size: 15px; }
+.c-more li { padding-left: 14px; position: relative; }
+.c-more li::before { content: ''; position: absolute; left: 0; top: .72em; width: 6px; height: 1px; background: var(--text-dim); }
+@media (max-width: 960px) {
+  .c-routes { grid-column: span 6; }
+  .c-garage { grid-column: span 6; }
+  .c-scan, .c-drag { grid-column: span 6; }
+  .c-more { grid-column: span 12; }
+  .c-theme { grid-column: span 12; }
+}
+@media (max-width: 640px) {
+  .bento { grid-template-columns: 1fr; grid-auto-rows: auto; }
+  .cell { grid-column: auto !important; grid-row: auto !important; }
+  .c-routes .art { width: min(70%, 260px); height: 360px; }
+  .c-more ul { grid-template-columns: 1fr; }
+}
+
+/* ---------- safety ---------- */
+.safety .wrap { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: clamp(28px, 6vw, 80px); align-items: start; }
+.safety h2 { max-width: 18ch; }
+.gate { border: 1px solid var(--line-strong); background: var(--surface); padding: 22px; clip-path: polygon(var(--cut) 0, 100% 0, 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, 0 100%, 0 var(--cut)); }
+.gate .warn { border: 1px solid rgba(255, 176, 0, .45); background: rgba(255, 176, 0, .08); padding: 14px 16px; margin-bottom: 16px; }
+.gate .warn b { display: block; color: #ffd27a; margin-bottom: 4px; }
+.gate .warn p { font-size: 14px; color: var(--text-dim); }
+.gate ul { list-style: none; display: grid; gap: 10px; }
+.gate li { display: grid; grid-template-columns: 22px 1fr; gap: 12px; font-size: 15px; align-items: start; }
+.gate li i { width: 20px; height: 20px; border: 1px solid var(--line-strong); background: var(--bg-2); margin-top: 2px; }
+.gate .cap { margin-top: 16px; font-family: var(--mono); font-size: 12px; letter-spacing: .06em; color: var(--text-dim); text-transform: uppercase; }
+.legal-links { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 22px; font-size: 15px; }
+.legal-links a { border-bottom: 1px solid var(--line-strong); padding-bottom: 2px; }
+.legal-links a:hover { border-color: var(--text); }
+@media (max-width: 860px) { .safety .wrap { grid-template-columns: 1fr; } }
+
+/* ---------- install ---------- */
+.install { background: var(--bg-2); border-top: 1px solid var(--line); }
+.install .wrap { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: clamp(28px, 6vw, 80px); align-items: center; }
+.install .phone { --w: clamp(220px, 24vw, 300px); margin-inline: auto; }
+.fine { margin-top: 18px; font-size: 14px; color: var(--text-dim); max-width: 52ch; }
+@media (max-width: 860px) { .install .wrap { grid-template-columns: 1fr; } }
+
+/* ---------- footer ---------- */
+footer { padding: 36px 0 48px; border-top: 1px solid var(--line); font-size: 14px; color: var(--text-dim); }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 18px 36px; align-items: center; }
+footer .links { display: flex; flex-wrap: wrap; gap: 18px; }
+footer .links a:hover { color: var(--text); }
+footer .attr { margin-left: auto; text-align: right; font-size: 13px; }
+@media (max-width: 760px) { footer .attr { margin-left: 0; text-align: left; } }
+
+/* ---------- reveal on scroll (transform/opacity only) ---------- */
+@media (prefers-reduced-motion: no-preference) {
+  .rv { opacity: 0; transform: translateY(18px); transition: opacity 700ms var(--ease), transform 700ms var(--ease); }
+  .rv.in { opacity: 1; transform: none; }
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="Convoy, back to top">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 20 7.5 20 16.5 12 21 4 16.5 4 7.5Z"/><path d="M12 8 16 10.3 16 14.7 12 17 8 14.7 8 10.3Z"/></svg>
+      CONVOY
+    </a>
+    <nav class="nav" aria-label="Sections">
+      <a href="#live">Live map</a>
+      <a href="#convoy">Convoys</a>
+      <a href="#radar">Radar</a>
+      <a href="#more">More</a>
+      <a href="#safety">Safety</a>
+    </nav>
+    <a class="btn btn-sm cta" href="/">Open in browser</a>
+  </div>
+</header>
+
+<main id="top">
+
+<section class="hero">
+  <div class="wrap">
+    <div>
+      <h1>The passenger runs the map.</h1>
+      <p class="lede">Live riders around you, convoys with chat and walkie-talkie, routes with an ETA, and a radar HUD. The driver drives.</p>
+      <div class="actions">
+        <a class="btn btn-primary" href="/convoy.apk">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/></svg>
+          Download for Android
+        </a>
+        <a class="btn" href="/">Open in browser</a>
+      </div>
+    </div>
+    <div class="stage" role="group" aria-label="Convoy on a phone: the live map with riders, and a convoy panel">
+      <div class="phone p1"><img src="/landing/img/map-riders.webp" width="780" height="1688" alt="Convoy map at street level, six riders shown as colored car markers around you, with the HUD instrument cards and the Map, Nearby, Convoy, Profile dock" fetchpriority="high"/></div>
+      <div class="phone p2"><img src="/landing/img/convoy.webp" width="780" height="1688" alt="Convoy panel: Friday night cruise with three riders linked, their distances, group chat and an SOS button" loading="eager"/></div>
+    </div>
+  </div>
+</section>
+
+<section id="live">
+  <div class="wrap split">
+    <div class="copy rv">
+      <h2>Riders stream in live, not on a delay.</h2>
+      <p class="lede">Everyone in range shows up as their actual car in their actual paint. Positions arrive once a second and glide at 60 fps. Tap a car to see who is driving, wave, or invite them.</p>
+      <ul class="facts">
+        <li><b>Filters</b><span>Nearby, friends, radius, my road, in sight ahead.</span></li>
+        <li><b>Friends</b><span>Add riders by username, see who is online, invite them to a convoy even when they are off your map.</span></li>
+        <li><b>Global</b><span>A worldwide layer of every rider, clustered, and honestly marked about five minutes behind.</span></li>
+      </ul>
+    </div>
+    <div class="shots rv">
+      <div class="phone"><img src="/landing/img/nearby.webp" width="780" height="1688" alt="Nearby panel listing six riders with their cars, distance from you, and Invite buttons" loading="lazy"/></div>
+      <div class="phone"><img src="/landing/img/globe.webp" width="780" height="1688" alt="The app booting on a dark globe over North America before landing on your street" loading="lazy"/></div>
+    </div>
+  </div>
+</section>
+
+<section id="convoy">
+  <div class="wrap split flip">
+    <div class="copy rv">
+      <h2>Form a convoy. Stay on the same page.</h2>
+      <p class="lede">Name it, invite riders from the map or your friends list, and members get tethered to you with a live link line. Up to six riders, open or locked, join by code.</p>
+      <ul class="facts">
+        <li><b>Chat</b><span>Group chat for the convoy, plus a rally point everyone can see on the map.</span></li>
+        <li><b>Voice</b><span>Walkie-talkie: push-to-talk, open mic, or toggle. Peer-to-peer WebRTC with a relay fallback, and never outside your convoy.</span></li>
+        <li><b>SOS</b><span>One button tells the whole convoy you have stopped and need help.</span></li>
+      </ul>
+    </div>
+    <div class="shots rv">
+      <div class="phone"><img src="/landing/img/convoy-map.webp" width="780" height="1688" alt="Map view with convoy members tethered to you by link lines and a badge showing three riders in the convoy" loading="lazy"/></div>
+      <div class="phone"><img src="/landing/img/convoy.webp" width="780" height="1688" alt="Convoy panel with member list, distances, group chat and the rally point message" loading="lazy"/></div>
+    </div>
+  </div>
+</section>
+
+<section id="radar" class="band">
+  <div class="wrap">
+    <div class="copy rv">
+      <p class="eyebrow">Ghost mode</p>
+      <h2>Go invisible. Turn on the radar.</h2>
+      <p class="lede">Ghost mode hides you from riders outside your convoy and opens a HUD: live aircraft overhead, police stations and speed cameras from OpenStreetMap, a sonar that pings as targets close in, and a risk score for the road ahead. On Android it pairs with a Bluetooth radar detector.</p>
+      <div class="note"><b>Some of this is restricted where you live.</b> Radar and enforcement layers, detector pairing, scanner audio and the drag timer each explain what is limited where before they switch on. Cancel, and they stay off.</div>
+    </div>
+    <div class="rv">
+      <div class="hud"><img src="/landing/img/radar-detail.webp" width="780" height="558" alt="Ghost mode HUD: scan timer, risk score 0 of 25, status card, and the bottom bar with speed limit 65, mute, mic and alert controls" loading="lazy"/></div>
+    </div>
+  </div>
+</section>
+
+<section id="more">
+  <div class="wrap">
+    <div class="copy rv">
+      <h2>Routes, a garage, scanners, and a drag timer.</h2>
+      <p class="lede">The rest of the dashboard, all inside the same map.</p>
+    </div>
+    <div class="bento">
+      <article class="cell c-routes rv">
+        <h3>Routes with a real ETA</h3>
+        <p>Search any place or tap the map. Traffic-aware routing with distance, time and arrival, spoken turn-by-turn, and a chase camera that plays the trip at 1x, 5x or 20x. Reroutes around speed cameras when you ask it to.</p>
+        <div class="art"><div class="phone"><img src="/landing/img/route.webp" width="780" height="1688" alt="A route drawn across downtown with a destination pin and an ETA card showing distance, minutes and arrival time" loading="lazy"/></div></div>
+      </article>
+      <article class="cell c-garage rv">
+        <h3>Your car is your marker</h3>
+        <p>Year, make, model, paint, finish, body, engine, drive, horsepower, mods. Fourteen paint presets or any color. On everyone else's map you are your car, in your color.</p>
+        <div class="art"><img src="/landing/img/garage-card.webp" width="700" height="310" alt="Garage card: 2022 Alfa Romeo Giulietta Super, Velocity Blue, Gloss, with Coupe, 3.0L, RWD 382hp and Stock chips" loading="lazy"/></div>
+      </article>
+      <article class="cell c-scan rv">
+        <h3>Police scanners</h3>
+        <p>Live law-enforcement scanner feeds near you, in the browser. US coverage via OpenMHz.</p>
+      </article>
+      <article class="cell c-drag rv">
+        <h3>Drag timer</h3>
+        <p>GPS-timed runs from a standing start, with personal bests on your profile.</p>
+        <div class="runs"><span>0-60 mph</span><span>0-100 km/h</span><span>1/8 mile</span><span>1/4 mile</span><span>60-130 mph</span></div>
+      </article>
+      <article class="cell c-more rv">
+        <h3>Also on the map</h3>
+        <ul>
+          <li>Precipitation radar overlay</li>
+          <li>Live traffic-flow heatmap</li>
+          <li>Hazard pins reported by riders</li>
+          <li>Cruise-loop planner from where you are</li>
+          <li>Parking pin dropped when a trip ends</li>
+          <li>Speedometer and trip meter cards</li>
+        </ul>
+      </article>
+      <article class="cell c-theme rv">
+        <h3>Make it yours</h3>
+        <p>Eleven themes or build your own, six accent colors or any hex, five map styles, miles or kilometers, and every HUD card can be switched off.</p>
+        <div class="swatches" role="img" aria-label="Six accent color swatches: slate, blue, green, amber, red, purple"><i style="background:#9aa3b0"></i><i style="background:#2f6df6"></i><i style="background:#00ff9c"></i><i style="background:#ffb000"></i><i style="background:#ff2b5e"></i><i style="background:#a44cf2"></i></div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section id="safety" class="safety">
+  <div class="wrap">
+    <div class="copy rv">
+      <h2>Built for the passenger, and only the passenger.</h2>
+      <p class="lede">Every screen assumes someone else is driving. That is the condition the whole app rests on, and it is the first thing you agree to: three separate confirmations stand in front of every way in, guest or account.</p>
+      <p class="lede">Crash reports never include a location, a message or an account, and you can switch them off in Settings. Delete your account from the app, or from the website without installing anything.</p>
+      <div class="legal-links">
+        <a href="/terms">Terms of Service</a>
+        <a href="/privacy">Privacy Policy</a>
+        <a href="/delete-account">Delete your account</a>
+      </div>
+    </div>
+    <div class="gate rv" role="group" aria-label="The in-app consent gate">
+      <div class="warn">
+        <b>If you're driving, put the phone down.</b>
+        <p>Convoy is built for the passenger. Never operate it, look at it, or react to it while you're in control of a moving vehicle.</p>
+      </div>
+      <ul>
+        <li><i aria-hidden="true"></i><span>I'm the passenger, or the car is parked. The driver's eyes stay on the road.</span></li>
+        <li><i aria-hidden="true"></i><span>I'm 16 or older.</span></li>
+        <li><i aria-hidden="true"></i><span>I agree to the Terms of Service and the Privacy Policy.</span></li>
+      </ul>
+      <p class="cap">The consent gate, as it appears in the app</p>
+    </div>
+  </div>
+</section>
+
+<section id="install" class="install">
+  <div class="wrap">
+    <div class="copy rv">
+      <h2>Get riding.</h2>
+      <p class="lede">Android 7.0 and up as a direct download, or straight in the browser on any phone. Ride as a guest with no account; sign up when you want friends and a profile that follows you.</p>
+      <div class="actions">
+        <a class="btn btn-primary" href="/convoy.apk">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/></svg>
+          Download for Android
+        </a>
+        <a class="btn" href="/">Open in browser</a>
+      </div>
+      <p class="fine">The APK installs outside the Play Store: when Android asks, allow installs from this source. The app updates itself afterwards.</p>
+    </div>
+    <div class="rv">
+      <div class="phone"><img src="/landing/img/signin.webp" width="780" height="1688" alt="Sign-in screen with Log in, Create account and Continue as guest" loading="lazy"/></div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span class="brand" style="letter-spacing:.12em"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 20 7.5 20 16.5 12 21 4 16.5 4 7.5Z"/><path d="M12 8 16 10.3 16 14.7 12 17 8 14.7 8 10.3Z"/></svg>CONVOY</span>
+    <div class="links">
+      <a href="/terms">Terms</a>
+      <a href="/privacy">Privacy</a>
+      <a href="/notices">Third-party notices</a>
+      <a href="/delete-account">Delete account</a>
+    </div>
+    <div class="attr">Screens are from the current build; the in-app HUD carries the Slipstream name.<br/>Map data &copy; OpenStreetMap contributors &middot; &copy; CARTO</div>
+  </div>
+</footer>
+
+<script src="/landing/landing.js" defer></script>
+</body>
+</html>

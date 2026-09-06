@@ -3580,7 +3580,19 @@ const ROOT = path.resolve(__dirname, '..');
 // Explicit allowlist of top-level paths that may be served. Anything else 404s.
 // (Formerly a denylist, which silently served any new file added at the repo root —
 // a path-traversal-class bug waiting for the next config/backup file to land here.)
-const ALLOWED_TOP = ['/', '/index.html', '/js', '/css', '/legal', '/convoy.apk', '/fonts'];
+const ALLOWED_TOP = ['/', '/index.html', '/js', '/css', '/legal', '/convoy.apk', '/fonts', '/landing'];
+
+/* ---- landing page ----
+   The marketing page lives under landing/ (index.html + img/) and is reached
+   at /landing (and /about). The app itself stays at / — every OAuth redirect,
+   magic link and Android App Link points at the root, so the landing page is
+   a sibling, never a replacement. Same shape as the legal pages: a clean path
+   rewritten to a file inside an allowlisted directory. */
+const LANDING_PAGES = {
+  '/landing': 'landing/index.html',
+  '/landing/': 'landing/index.html',
+  '/about': 'landing/index.html'
+};
 
 /* ---- legal pages ----
    Served at clean, stable, linkable paths because other people's rules point at
@@ -3622,7 +3634,8 @@ const MIME = {
   '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg',
   '.ico': 'image/x-icon', '.md': 'text/markdown; charset=utf-8', '.map': 'application/json',
   '.apk': 'application/vnd.android.package-archive',  // downloadable Android build (/convoy.apk)
-  '.woff2': 'font/woff2'  // self-hosted boot fonts (cycle 19, /fonts/*.woff2)
+  '.woff2': 'font/woff2',  // self-hosted boot fonts (cycle 19, /fonts/*.woff2)
+  '.webp': 'image/webp'    // landing-page screenshots (/landing/img/*.webp)
 };
 
 // Per-IP rate limit + concurrency cap for the CPU-bound /api/tts route (spawns piper).
@@ -3927,6 +3940,9 @@ const httpServer = http.createServer((req, res) => {
   // resolve whether or not the file layout under legal/ ever changes.
   if (Object.prototype.hasOwnProperty.call(LEGAL_PAGES, urlPath)) {
     urlPath = '/' + LEGAL_PAGES[urlPath];
+  }
+  if (Object.prototype.hasOwnProperty.call(LANDING_PAGES, urlPath)) {
+    urlPath = '/' + LANDING_PAGES[urlPath];
   }
 
   if (urlPath === '/') urlPath = '/index.html';

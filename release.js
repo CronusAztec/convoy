@@ -258,7 +258,7 @@ function buildTarball() {
     // registered with Google Play. Leaving it out of the tarball ships a build
     // where every one of those 404s — which is a store-policy violation, not a
     // cosmetic gap.
-    'index.html', 'css', 'js', 'legal', 'server',
+    'index.html', 'css', 'js', 'legal', 'server', 'fonts', 'landing',
     'README.md', 'DEPLOY.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md'
   );
   run('tar', args, { cwd: ROOT, label: 'tarball' });

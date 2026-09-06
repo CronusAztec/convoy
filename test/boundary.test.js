@@ -122,8 +122,10 @@ H.group('Server code is never served over HTTP');
     H.ok('/server is not in the allowlist', !allowed.some((a) => /^\/server/.test(a)), allowed.join(' '));
     // Ceiling raised 6 -> 7 in cycle 20: '/fonts' joined in cycle 19 (T2.5,
     // self-hosted boot fonts) — a static asset path, same shape as /css or /js,
-    // not a server-code surface. "Stays small" is the intent, not a frozen count.
-    H.ok('the allowlist stays small', allowed.length <= 7, allowed.length + ' entries: ' + allowed.join(' '));
+    // not a server-code surface. Raised 7 -> 8 on 2026-09-06: '/landing' (the
+    // marketing page + its screenshots), same shape again. "Stays small" is
+    // the intent, not a frozen count.
+    H.ok('the allowlist stays small', allowed.length <= 8, allowed.length + ' entries: ' + allowed.join(' '));
   }
 }
 
