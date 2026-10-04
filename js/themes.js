@@ -164,8 +164,7 @@
       s + '.panel, ' + s + '.eta-card, ' + s + '.modal-card { clip-path: none; }',
       s + '.chip { border-radius: 999px; }',
       s + '.btn, ' + s + '.dock-btn, ' + s + '.toast { border-radius: ' + Math.round(r * 0.7) + 'px; }',
-      s + '#dock, ' + s + '.panel, ' + s + '.eta-card, ' + s + '.modal-card, ' + s + '.glass, ' +
-      s + '.speedo { border-radius: ' + r + 'px; }',
+      s + '#dock, ' + s + '.panel, ' + s + '.eta-card, ' + s + '.modal-card, ' + s + '.glass { border-radius: ' + r + 'px; }',
       s + '.ctl { border-radius: ' + Math.round(r * 0.6) + 'px; }',
       s + '.toggle { border-radius: 999px; }',
       s + '.toggle .knob { border-radius: 50%; }',
@@ -513,7 +512,7 @@
       '[data-theme="toon"] .glass, [data-theme="toon"] .chip, [data-theme="toon"] .ctl,\n' +
       '[data-theme="toon"] .panel, [data-theme="toon"] #dock, [data-theme="toon"] .eta-card,\n' +
       '[data-theme="toon"] .toast, [data-theme="toon"] .btn, [data-theme="toon"] .modal-card,\n' +
-      '[data-theme="toon"] .speedo, [data-theme="toon"] #search-input {\n' +
+      '[data-theme="toon"] #search-input {\n' +
       '  border: 2px solid #181410;\n' +
       '  backdrop-filter: none; -webkit-backdrop-filter: none;\n' +
       '}\n' +
@@ -546,7 +545,7 @@
     name: 'Frost',
     dark: false,
     // #0a84ff measured 3.43:1 against the rendered background; #0060c7 stays in
-    // the same blue family at 5.11:1. Measured on .speedo span, not the surface
+    // the same blue family at 5.11:1. Measured on a mono readout span, not the surface
     // token — .glass is translucent, so the map shows through.
     accent: '#0060c7',
     fontsUrl: 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap',
@@ -581,7 +580,7 @@
     css: reshapeCss('frost', 20) + '\n' +
       '[data-theme="frost"] .glass, [data-theme="frost"] .panel, [data-theme="frost"] #dock,\n' +
       '[data-theme="frost"] .eta-card, [data-theme="frost"] .chip, [data-theme="frost"] .ctl,\n' +
-      '[data-theme="frost"] .toast, [data-theme="frost"] .modal-card, [data-theme="frost"] .speedo {\n' +
+      '[data-theme="frost"] .toast, [data-theme="frost"] .modal-card {\n' +
       '  backdrop-filter: blur(28px) saturate(180%); -webkit-backdrop-filter: blur(28px) saturate(180%);\n' +
       '}\n' +
       '[data-theme="frost"] #hud-vignette { display: none; }\n' +

@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CAPACITOR_DEBUG</key>
+	<string>$(CAPACITOR_DEBUG)</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Slipstream</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<!-- Social sign-in comes back through here. The provider round-trip
+			     runs in SFSafariViewController (@capacitor/browser) and ends at
+			     this app-owned scheme, which @capacitor/app delivers to JS as an
+			     appUrlOpen event (js/native.js). Same scheme as the Android
+			     intent-filter, so the server's native redirect is one URL. -->
+			<key>CFBundleURLName</key>
+			<string>tech.odoreeci.convoy</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>tech.odoreeci.convoy</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<!-- The app uses only the system TLS stack (https/wss), which is exempt
+	     from export compliance; declaring it skips the question on every
+	     upload. Revisit if an encryption library is ever added. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<!-- Purpose strings. Every one of these is shown to the rider verbatim by
+	     the system prompt, and App Review reads them against what the app
+	     actually does — keep them specific. -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Slipstream shows your car to riders nearby and your convoy, and finds riders around you for voice chat. Your position is only shared while the app is open and you are visible.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Slipstream keeps your pin moving for your convoy while the app is in the background on a drive. Nothing is shared when the app is closed.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Slipstream uses the microphone for walkie-talkie voice chat with your convoy and riders nearby. Audio is sent live and never recorded.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Slipstream can take a photo for your rider profile.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Slipstream can pick a photo from your library for your rider profile.</string>
+	<!-- location: keep the convoy pin live after the rider backgrounds the app
+	     (BackgroundLocationPlugin.swift). audio: a walkie-talkie call in
+	     progress keeps running with the screen off, like any voice-chat app. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+		<string>audio</string>
+	</array>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>armv7</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<true/>
+</dict>
+</plist>

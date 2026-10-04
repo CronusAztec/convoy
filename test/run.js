@@ -3,12 +3,10 @@
 const { spawnSync } = require('child_process');
 const path = require('path');
 
-const suites = ['physics.test.js', 'behaviour.test.js', 'boundary.test.js',
-  'auth.test.js', 'supabase.test.js', 'store.test.js',
-  'mailer.test.js', 'oauth.test.js', 'overpass.test.js',
-  'serverpolicy.test.js', 'httpcache.test.js', 'globals.test.js', 'hotspots.test.js', 'net.test.js',
-  'routegeo.test.js', 'voice.test.js', 'aircraft.test.js', 'riderarrows.test.js', 'telemetry.test.js', 'deletion.test.js',
-  'sdk-inventory.test.js', 'ota.test.js', 'admin.test.js', 'bugstats.test.js', 'browser.test.js', 'ghostbbox.test.js', 'fetchtimeout.test.js', 'partyresume.test.js', 'visibility.test.js', 'domids.test.js', 'chatlog.test.js', 'frontend.test.js', 'mapboot.test.js', 'perf-bench.js', 'stamp.test.js', 'lazydata.test.js', 'leaks.test.js', 'wire-bench.js', 'wiregate.test.js', 'wsdeflate.test.js', 'lazyinstruments.test.js', 'simidle.test.js', 'glassbudget.test.js', 'radarrings.test.js', 'landing.test.js'];
+const suites = ['physics.test.js', 'behaviour.test.js', 'auth.test.js', 'supabase.test.js', 'store.test.js',
+  'mailer.test.js', 'oauth.test.js', 'serverpolicy.test.js', 'httpcache.test.js', 'globals.test.js', 'net.test.js',
+  'routegeo.test.js', 'voice.test.js', 'riderarrows.test.js', 'telemetry.test.js', 'deletion.test.js',
+  'sdk-inventory.test.js', 'ota.test.js', 'admin.test.js', 'bugstats.test.js', 'browser.test.js', 'fetchtimeout.test.js', 'partyresume.test.js', 'visibility.test.js', 'domids.test.js', 'chatlog.test.js', 'frontend.test.js', 'mapboot.test.js', 'perf-bench.js', 'stamp.test.js', 'lazydata.test.js', 'leaks.test.js', 'wire-bench.js', 'wiregate.test.js', 'wsdeflate.test.js', 'simidle.test.js', 'glassbudget.test.js', 'landing.test.js'];
 let failed = 0;
 
 for (const s of suites) {

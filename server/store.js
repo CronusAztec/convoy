@@ -1,7 +1,7 @@
 /* Convoy — account store, backed by Supabase.
 
    Identity (passwords, sessions, refresh tokens) lives in Supabase Auth via
-   supabase.js. Account data (profile, friends, stats, PBs, recovery codes) lives
+   supabase.js. Account data (profile, friends, blocks, recovery codes) lives
    in the project's Postgres via db.js.
 
    READ MODEL: every account is held in memory and refreshed on write. The whole
@@ -145,7 +145,6 @@ function blank(id, username, profile, email, emailVerified, provider) {
     reqOut: [],
     blocked: [],
     blockedBy: [],
-    stats: { pb: {}, runs: 0, wins: 0 },
     createdAt: Date.now()
   };
 }
@@ -605,7 +604,7 @@ async function magicSignIn(user, hashedToken, ip) {
      1. flush queued writes, so an in-flight profile/stat write cannot land after
         the row is gone (it would be dropped as a permanent FK error and logged
         as if something were broken);
-     2. delete the Postgres profile, which cascades to stats, PBs, friendships,
+     2. delete the Postgres profile, which cascades to friendships,
         friend requests and recovery codes;
      3. delete the GoTrue user, which revokes every session and refresh token the
         account had anywhere;
@@ -804,55 +803,6 @@ async function recentReportCount(reporterId, windowMs) {
   catch (e) { return 0; }   // never let a counting failure block a real report
 }
 
-/* ---------------- stats ---------------- */
-function getStats(id) {
-  const u = byId[id];
-  if (!u || !u.stats) return { pb: {} };
-  if (!u.stats.pb || typeof u.stats.pb !== 'object') u.stats.pb = {};
-  return u.stats;
-}
-
-// Record a dragy personal best. Only persists when it beats the stored time for
-// the same modeId (lower is better). Returns the updated stats object.
-function recordPB(id, modeId, time, trap) {
-  const u = byId[id];
-  if (!u) return { pb: {} };
-  if (!u.stats || !u.stats.pb) u.stats = { pb: {}, runs: 0, wins: 0 };
-  const prev = u.stats.pb[modeId];
-  if (!prev || time < prev.time) {
-    const when = Date.now();
-    u.stats.pb[modeId] = { time: time, trap: trap != null ? trap : null, when: when };
-    db.queuePB(id, modeId, time, trap != null ? trap : null, when);
-  }
-  return u.stats;
-}
-
-// Race counters. Deliberately SEPARATE calls:
-//   recordRun — exactly once per racer per race, on a finish OR a DNF.
-//   recordWin — additionally, for the fastest legal finisher.
-function statsOf(id) {
-  const u = byId[id];
-  if (!u) return null;
-  if (!u.stats) u.stats = { pb: {} };
-  if (typeof u.stats.runs !== 'number') u.stats.runs = 0;
-  if (typeof u.stats.wins !== 'number') u.stats.wins = 0;
-  return u.stats;
-}
-function recordRun(id) {
-  const s = statsOf(id);
-  if (!s) return { pb: {} };
-  s.runs++;
-  db.queueRunIncrement(id);
-  return s;
-}
-function recordWin(id) {
-  const s = statsOf(id);
-  if (!s) return { pb: {} };
-  s.wins++;
-  db.queueWinIncrement(id);
-  return s;
-}
-
 /* ---------------- friends ---------------- */
 function friendLite(u) {
   // Defensive on `profile`: it is a jsonb column now, so a row touched outside
@@ -969,8 +919,7 @@ function adminSearch(q, limit) {
         u.id === needle) {
       out.push({ id: u.id, username: u.username, email: u.email || '',
                  emailVerified: !!u.emailVerified, provider: u.provider,
-                 createdAt: u.createdAt,
-                 stats: { runs: (u.stats && u.stats.runs) || 0, wins: (u.stats && u.stats.wins) || 0 } });
+                 createdAt: u.createdAt });
       if (out.length >= (limit || 50)) break;
     }
   }
@@ -983,7 +932,7 @@ function adminSearch(q, limit) {
    exactly the half it cannot produce, and that is the half an operator is
    usually looking for.
 
-   Capped and deliberately thin (no email, no stats): this is a presence view,
+   Capped and deliberately thin (no email): this is a presence view,
    not an export. The panel's account search is where you go for one person's
    details. */
 function adminRoster(limit) {
@@ -998,40 +947,6 @@ function adminRoster(limit) {
   return out;
 }
 
-// Set absolute race counters (the app only ever increments; corrections and
-// resets are an admin power). Clamped sane — this writes a number riders see.
-async function setStats(id, patch) {
-  const u = byId[id];
-  if (!u) return { error: 'no such account' };
-  const s = statsOf(id);
-  const clamp = (v) => Math.max(0, Math.min(10000000, Math.floor(Number(v) || 0)));
-  s.runs = clamp(patch.runs != null ? patch.runs : s.runs);
-  s.wins = clamp(patch.wins != null ? patch.wins : s.wins);
-  await db.query('update public.user_stats set runs = $2, wins = $3, updated_at = now() where user_id = $1',
-    [id, s.runs, s.wins]);
-  return { ok: true, stats: s };
-}
-
-// Set or clear ONE dragy PB. The app's recordPB only accepts improvements by
-// design (replaying a log can't worsen a PB); corrections are an admin power,
-// so this upserts unconditionally — or deletes the row for rec === null.
-async function setPB(id, modeId, rec) {
-  const u = byId[id];
-  if (!u) return { error: 'no such account' };
-  const s = statsOf(id);
-  if (rec === null) {
-    delete s.pb[modeId];
-    await db.query('delete from public.dragy_pbs where user_id = $1 and mode_id = $2', [id, modeId]);
-    return { ok: true, stats: s };
-  }
-  const when = Date.now();
-  s.pb[modeId] = { time: rec.time, trap: rec.trap != null ? rec.trap : null, when: when };
-  await db.query(
-    'insert into public.dragy_pbs (user_id, mode_id, time_s, trap, achieved_at) values ($1, $2, $3, $4, to_timestamp($5 / 1000.0)) ' +
-    'on conflict (user_id, mode_id) do update set time_s = $3, trap = $4, achieved_at = to_timestamp($5 / 1000.0)',
-    [id, modeId, rec.time, rec.trap != null ? rec.trap : null, when]);
-  return { ok: true, stats: s };
-}
 
 // Rename. The riskiest panel action because the username keys THREE layers:
 // our memory indexes, the profiles row, and GoTrue (app_metadata.username,
@@ -1112,7 +1027,6 @@ module.exports = {
   friendLite, sendFriendRequest, acceptFriend, declineFriend, removeFriend, areFriends,
   blockUser, unblockUser, blockedBetween, blockList,
   fileReport, recentReportCount,
-  getStats, recordPB, recordRun, recordWin,
   // control panel
-  adminSearch, adminRoster, setStats, setPB, renameUser, listReports, setReportStatus
+  adminSearch, adminRoster, renameUser, listReports, setReportStatus
 };

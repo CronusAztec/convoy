@@ -1,3 +1,5 @@
+> **2026-10-04 store-readiness cut.** The radar HUD, scanners, drag timer, racing, map overlays, instrument HUD cards (speedometer, compass, clock, …), drive log and parking pin were removed with their CSS, so selectors named below such as `.speedo`, `#radar-dock`, `.rstat`, `.ralert-foot`, `.hot-legend`, `.rlabel`, `#hud-rail` and `.det-*` no longer exist. The decisions recorded here still describe why the surviving surfaces look the way they do; the lists are left as written for the history.
+
 # Design-identity allowlist (plan amendment §5(a))
 
 `node /opt/data/skills/creative/impeccable/scripts/detect.mjs --json index.html css/styles.css js/ui.js`

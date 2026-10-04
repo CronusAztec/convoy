@@ -54,12 +54,11 @@ const MAPLIBRE_CSS = 'https://cdn.jsdelivr.net/npm/maplibre-gl@' + MAPLIBRE_VER 
 const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 
 /* One rider's presence state. Ghost is deliberately NOT one of these: it is a
-   modifier, not a state — a ghosted rider is still cruising or parked or
-   racing, and an operator needs both facts at once. */
+   modifier, not a state — a ghosted rider is still cruising or parked, and an
+   operator needs both facts at once. */
 function riderStatus(r) {
   if (!r.pos) return { key: 'nofix', label: 'no GPS fix', color: '#f59e0b' };
   if (r.ageMs != null && r.ageMs > MAP_STALE_MS) return { key: 'stale', label: 'stale', color: '#6b7280' };
-  if (r.racing) return { key: 'racing', label: 'racing', color: '#ef4444' };
   if (r.mode === 'parked') return { key: 'parked', label: 'parked', color: '#60a5fa' };
   return { key: 'cruise', label: 'cruising', color: '#4ade80' };
 }

@@ -1,7 +1,7 @@
 {
   "name": "convoy",
   "version": "0.3.0",
-  "description": "Convoy — ride together. Passenger-side multiplayer map app.",
+  "description": "Convoy \u2014 ride together. Passenger-side map of live riders around you, with convoys and voice.",
   "private": true,
   "scripts": {
     "test": "node test/run.js",
@@ -12,15 +12,20 @@
     "android:sync": "npm run copy-web && cap sync android",
     "android:open": "cap open android",
     "test:blocking": "node test/block-integration.js",
-    "test:race": "node test/race-lifecycle.js",
     "test:fuzz": "node test/ws-fuzz.js",
     "test:concurrent": "node test/concurrency.js",
-    "gate": "node test/run.js && node test/frontend.test.js && echo GATE-OK"
+    "gate": "node test/run.js && node test/frontend.test.js && echo GATE-OK",
+    "ios:add": "npm run copy-web && cap add ios",
+    "ios:sync": "npm run copy-web && cap sync ios",
+    "ios:open": "cap open ios"
   },
   "dependencies": {
     "@capacitor/android": "^8.0.0",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/browser": "^8.0.5",
     "@capacitor/core": "^8.0.0",
-    "@capacitor/geolocation": "^8.0.0"
+    "@capacitor/geolocation": "^8.0.0",
+    "@capacitor/ios": "^8.5.2"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.4.0",

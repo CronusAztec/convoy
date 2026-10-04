@@ -17,8 +17,6 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         // Register the native plugins before the bridge initializes.
         registerPlugin(BackgroundLocationPlugin.class);
-        registerPlugin(RadarDetectorPlugin.class);
-        registerPlugin(SabrePlugin.class);
         registerPlugin(VoicePlugin.class);
         registerPlugin(AuthPlugin.class);
         registerPlugin(LiveUpdatePlugin.class);

@@ -12,16 +12,12 @@
 
    What it checks is that a block cannot be routed around. Each numbered step is
    a path that reached the other rider before it was closed: the map, the convoy
-   roster and chat backlog, invites, waves, friend requests, and races. The race
-   ones mattered most — race:fix streams live GPS at speed.
+   roster and chat backlog, invites, waves and friend requests.
 
-   Two steps guard bugs that would come back silently rather than loudly:
+   One step guards a bug that would come back silently rather than loudly:
      2b  asserts the ORDER of the roster update and rider:remove. The client
          refuses rider:remove for a convoy member, so the roster has to go first,
-         and asserting only the end state would not catch a regression.
-     9c  asserts a mid-race block abandons the race for BOTH riders with nothing
-         recorded. Routing it through leaveRace instead charged a DNF to whoever
-         happened not to be the host. */
+         and asserting only the end state would not catch a regression. */
 'use strict';
 const WebSocket = require('../server/node_modules/ws');
 
@@ -215,77 +211,6 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       context: 'chat', evidence: { quoted: 'a rude message', at: Date.now() }
     }, aTok);
     ok('accepts a valid report', rep.status === 200 && !!rep.body.id, rep.body);
-
-    head('9b. a race cannot be used to route around a block');
-    // Both are still blocked at this point. B hosts, A tries to join.
-    A.clear(); B.clear();
-    B.send({ t: 'race:create', modeId: '0-60' });
-    await sleep(500);
-    const bRace = B.frames.filter((m) => m.t === 'race:state').pop();
-    ok('B created a race', !!bRace, bRace);
-    if (bRace) {
-      A.send({ t: 'race:join', id: bRace.race.id });
-      const joinErr = await A.want((m) => m.t === 'err' || m.t === 'race:state');
-      ok('A is refused entry', !!(joinErr && joinErr.t === 'err'), joinErr);
-      ok('refusal names nobody',
-        !!(joinErr && !/blocked/i.test(joinErr.msg || '')), joinErr && joinErr.msg);
-    }
-    // And an invite from the blocked host never lands.
-    A.clear();
-    B.send({ t: 'race:invite', to: aId });
-    await sleep(500);
-    ok('race invite never arrives', A.seen((m) => m.t === 'race:invite').length === 0);
-    B.send({ t: 'race:end' });
-    await sleep(300);
-
-    head('9c. blocking mid-race costs the blocker nothing');
-    // Unblock first so they can actually race, then block once it is running.
-    // `list` is from step 3 and still in scope — A.frames was cleared in 9b, so
-    // re-reading the block list from the frame buffer here would find nothing.
-    const bAccountId = list && list.blocked[0] && list.blocked[0].id;
-    ok('have B account id to unblock', !!bAccountId);
-    A.send({ t: 'block:remove', userId: bAccountId });
-    await A.want((m) => m.t === 'block:list' && m.blocked.length === 0, 3000);
-    await sleep(400);
-    A.clear(); B.clear();
-    A.send({ t: 'race:create', modeId: '0-60' });
-    await sleep(400);
-    const raceFrame = A.frames.filter((m) => m.t === 'race:state').pop();
-    ok('A hosts a race', !!raceFrame, raceFrame);
-    if (raceFrame) {
-      B.send({ t: 'race:join', id: raceFrame.race.id });
-      await sleep(500);
-      A.send({ t: 'race:ready', on: true });
-      B.send({ t: 'race:ready', on: true });
-      await sleep(400);
-      A.send({ t: 'race:start' });
-      await sleep(4200);   // 3s countdown + margin
-      const running = A.frames.filter((m) => m.t === 'race:state').pop();
-      ok('race is running', !!(running && running.race.status === 'running'), running && running.race.status);
-
-      A.clear(); B.clear();
-      A.send({ t: 'block:add', to: bId, username: B_NAME });
-      await sleep(1200);
-
-      // The race is ABANDONED for both, not left by one: whoever happened to be
-      // host must not decide whether the other takes a DNF.
-      ok('A is told the race was abandoned',
-        A.seen((m) => m.t === 'err' && /abandoned/i.test(m.msg || '')).length === 1,
-        A.seen((m) => m.t === 'err').map((m) => m.msg));
-      ok('B is told too  <- B did not block anyone and must not be left racing alone',
-        B.seen((m) => m.t === 'err' && /abandoned/i.test(m.msg || '')).length === 1,
-        B.seen((m) => m.t === 'err').map((m) => m.msg));
-
-      const aNull = A.seen((m) => m.t === 'race:state' && m.race === null);
-      const bNull = B.seen((m) => m.t === 'race:state' && m.race === null);
-      ok('A race torn down client-side', aNull.length === 1);
-      ok('B race torn down client-side', bNull.length === 1);
-      // The run counter is checked in SQL after this suite — /api/me does not
-      // expose stats, and the blocker is removed from the race so a DNF would
-      // never show up in a broadcast either way. Printed so the SQL check has a
-      // username to look for.
-      console.log('    (verify in SQL: user_stats.runs for ' + A_NAME + ' must stay 0)');
-    }
 
     head('10. unblock restores visibility');
     A.clear(); B.clear();

@@ -1,7 +1,8 @@
 /* Convoy — platform config.
-   Detects whether we're running inside a Capacitor native shell (Android APK)
-   or as a regular web page. Exposes A.config so net.js / auth.js can build
-   absolute server URLs only when needed — on the web everything stays same-origin. */
+   Detects whether we're running inside a Capacitor native shell (the Android
+   or iOS app) or as a regular web page. Exposes A.config so net.js / auth.js
+   can build absolute server URLs only when needed — on the web everything
+   stays same-origin. */
 (function () {
   'use strict';
   var A = (window.App = window.App || {});
@@ -13,14 +14,20 @@
 
   var cap = window.Capacitor;
   var isNative = !!(cap && typeof cap.isNativePlatform === 'function' && cap.isNativePlatform());
+  // 'android' | 'ios' | 'web'. The two native shells differ in small ways the
+  // app has to know about (which plugins exist, Apple's sign-in rule), so the
+  // platform is exposed rather than re-derived from the user agent.
+  var platform = isNative && typeof cap.getPlatform === 'function' ? cap.getPlatform() : 'web';
 
-  // On native (Capacitor WebView) the origin is https://localhost, so relative
-  // /api paths and same-origin websockets would miss the server. Point at the
-  // deployed backend instead. On the web this is '' and '' + '/api/x' = '/api/x'.
+  // On native (Capacitor WebView) the origin is https://localhost (Android) or
+  // capacitor://localhost (iOS), so relative /api paths and same-origin
+  // websockets would miss the server. Point at the deployed backend instead.
+  // On the web this is '' and '' + '/api/x' = '/api/x'.
   var BASE = isNative ? 'https://odoreeci.tech' : '';
 
   A.config = {
     isNative: isNative,
+    platform: platform,
     base: BASE,
     // Absolute ws/wss URL when native; null tells net.js to derive same-origin.
     wsUrl: BASE ? BASE.replace(/^http/, 'ws') + '/ws' : null,
@@ -95,37 +102,6 @@
       });
     };
   };
-  A.lazy.scanners = A.lazy.module('scanners', function () { return A.scanners; });
-  A.lazy.radar = A.lazy.module('radar', function () { return A.radar; });
-  A.lazy.dragy = A.lazy.module('dragy', function () { return A.dragy; });
-  // js/race.js's modeById() falls back to A.racetimer.modeById, which is only
-  // ever set by js/dragy.js publishing its MODES table onto the shared
-  // racetimer module (js/dragy.js:500). A race started by a rider who never
-  // opened the dragy chip would otherwise hit an empty mode table and silently
-  // never begin — so loading race pulls dragy in first. `then(load, load)`:
-  // even a failed dragy load still attempts the race load rather than
-  // blocking an inbound race:invite forever.
-  A.lazy.race = (function (load) {
-    return function () { return A.lazy.dragy().then(load, load); };
-  })(A.lazy.module('race', function () { return A.race; }));
-
-  // Cycle 13: the eight HUD instrument modules gated on a setting that ships
-  // OFF (js/state.js:41-49) — a rider who never enables them should never
-  // fetch them. js/app.js's LAZY_INSTRUMENTS table drives these.
-  A.lazy.tripmeter = A.lazy.module('tripmeter', function () { return A.tripmeter; });
-  A.lazy.gmeter = A.lazy.module('gmeter', function () { return A.gmeter; });
-  A.lazy.weathernow = A.lazy.module('weathernow', function () { return A.weathernow; });
-  A.lazy.battery = A.lazy.module('battery', function () { return A.battery; });
-  A.lazy.coords = A.lazy.module('coords', function () { return A.coords; });
-  A.lazy.destarrow = A.lazy.module('destarrow', function () { return A.destarrow; });
-  A.lazy.speedalert = A.lazy.module('speedalert', function () { return A.speedalert; });
-  A.lazy.dimmer = A.lazy.module('dimmer', function () { return A.dimmer; });
-
-  // Cycle 13 task 4: js/tripextras.js (ETA-card extras) isn't gated on a
-  // setting like the eight above — it activates on trip/route activity, so
-  // js/app.js wakes it on the first 'route'/'trip' bus event instead.
-  A.lazy.tripextras = A.lazy.module('tripextras', function () { return A.tripextras; });
-
   // Cycle 14: js/riderarrows.js (edge arrows to off-screen convoy riders) has
   // no convoy to point at until the rider is actually IN one — js/app.js wakes
   // it on the first 'party' event where S.party is truthy (a leave also emits

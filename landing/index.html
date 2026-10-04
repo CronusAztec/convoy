@@ -4,13 +4,13 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
 <title>Convoy. The passenger runs the map.</title>
-<meta name="description" content="Convoy is a passenger-side map for riders: live riders around you, convoys with chat and walkie-talkie, routes with an ETA, and a ghost-mode radar HUD. Android and web."/>
+<meta name="description" content="Convoy is a passenger-side map for riders: live riders around you and across the world, convoys with chat and walkie-talkie, voice with riders in range, and routes with an ETA. Android, iOS and web."/>
 <meta name="theme-color" content="#0c0d0f"/>
 <link rel="canonical" href="https://odoreeci.tech/landing"/>
 <meta property="og:type" content="website"/>
 <meta property="og:site_name" content="Convoy"/>
 <meta property="og:title" content="Convoy. The passenger runs the map."/>
-<meta property="og:description" content="Live riders around you, convoys with chat and walkie-talkie, routes with an ETA, and a radar HUD. The driver drives."/>
+<meta property="og:description" content="Live riders around you and across the world, convoys with chat and walkie-talkie, voice with riders in range, and routes with an ETA. The driver drives."/>
 <meta property="og:url" content="https://odoreeci.tech/landing"/>
 <meta property="og:image" content="https://odoreeci.tech/landing/img/og.png"/>
 <meta property="og:image:width" content="1200"/>
@@ -282,7 +282,6 @@ footer .attr { margin-left: auto; text-align: right; font-size: 13px; }
     <nav class="nav" aria-label="Sections">
       <a href="#live">Live map</a>
       <a href="#convoy">Convoys</a>
-      <a href="#radar">Radar</a>
       <a href="#more">More</a>
       <a href="#safety">Safety</a>
     </nav>
@@ -296,7 +295,7 @@ footer .attr { margin-left: auto; text-align: right; font-size: 13px; }
   <div class="wrap">
     <div>
       <h1>The passenger runs the map.</h1>
-      <p class="lede">Live riders around you, convoys with chat and walkie-talkie, routes with an ETA, and a radar HUD. The driver drives.</p>
+      <p class="lede">Live riders around you and across the world, convoys with chat and walkie-talkie, voice with riders in range, and routes with an ETA. The driver drives.</p>
       <div class="actions">
         <a class="btn btn-primary" href="/convoy.apk">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 19h16"/></svg>
@@ -348,30 +347,16 @@ footer .attr { margin-left: auto; text-align: right; font-size: 13px; }
   </div>
 </section>
 
-<section id="radar" class="band">
-  <div class="wrap">
-    <div class="copy rv">
-      <p class="eyebrow">Ghost mode</p>
-      <h2>Go invisible. Turn on the radar.</h2>
-      <p class="lede">Ghost mode hides you from riders outside your convoy and opens a HUD: live aircraft overhead, police stations and speed cameras from OpenStreetMap, a sonar that pings as targets close in, and a risk score for the road ahead. On Android it pairs with a Bluetooth radar detector.</p>
-      <div class="note"><b>Some of this is restricted where you live.</b> Radar and enforcement layers, detector pairing, scanner audio and the drag timer each explain what is limited where before they switch on. Cancel, and they stay off.</div>
-    </div>
-    <div class="rv">
-      <div class="hud"><img src="/landing/img/radar-detail.webp" width="780" height="558" alt="Ghost mode HUD: scan timer, risk score 0 of 25, status card, and the bottom bar with speed limit 65, mute, mic and alert controls" loading="lazy"/></div>
-    </div>
-  </div>
-</section>
-
 <section id="more">
   <div class="wrap">
     <div class="copy rv">
-      <h2>Routes, a garage, scanners, and a drag timer.</h2>
+      <h2>Routes, a garage, and a voice for the road.</h2>
       <p class="lede">The rest of the dashboard, all inside the same map.</p>
     </div>
     <div class="bento">
       <article class="cell c-routes rv">
         <h3>Routes with a real ETA</h3>
-        <p>Search any place or tap the map. Traffic-aware routing with distance, time and arrival, spoken turn-by-turn, and a chase camera that plays the trip at 1x, 5x or 20x. Reroutes around speed cameras when you ask it to.</p>
+        <p>Search any place or tap the map. Traffic-aware routing with distance, time and arrival, spoken turn-by-turn, and a chase camera that plays the trip at 1x, 5x or 20x. Tap a rider&rsquo;s pin to route to where they are.</p>
         <div class="art"><div class="phone"><img src="/landing/img/route.webp" width="780" height="1688" alt="A route drawn across downtown with a destination pin and an ETA card showing distance, minutes and arrival time" loading="lazy"/></div></div>
       </article>
       <article class="cell c-garage rv">
@@ -379,29 +364,20 @@ footer .attr { margin-left: auto; text-align: right; font-size: 13px; }
         <p>Year, make, model, paint, finish, body, engine, drive, horsepower, mods. Fourteen paint presets or any color. On everyone else's map you are your car, in your color.</p>
         <div class="art"><img src="/landing/img/garage-card.webp" width="700" height="310" alt="Garage card: 2022 Alfa Romeo Giulietta Super, Velocity Blue, Gloss, with Coupe, 3.0L, RWD 382hp and Stock chips" loading="lazy"/></div>
       </article>
-      <article class="cell c-scan rv">
-        <h3>Police scanners</h3>
-        <p>Live law-enforcement scanner feeds near you, in the browser. US coverage via OpenMHz.</p>
-      </article>
-      <article class="cell c-drag rv">
-        <h3>Drag timer</h3>
-        <p>GPS-timed runs from a standing start, with personal bests on your profile.</p>
-        <div class="runs"><span>0-60 mph</span><span>0-100 km/h</span><span>1/8 mile</span><span>1/4 mile</span><span>60-130 mph</span></div>
-      </article>
       <article class="cell c-more rv">
         <h3>Also on the map</h3>
         <ul>
-          <li>Precipitation radar overlay</li>
-          <li>Live traffic-flow heatmap</li>
-          <li>Hazard pins reported by riders</li>
-          <li>Cruise-loop planner from where you are</li>
-          <li>Parking pin dropped when a trip ends</li>
-          <li>Speedometer and trip meter cards</li>
+          <li>Proximity voice: auto-link with riders in range, on your road, or in sight</li>
+          <li>Invisible mode when you want to ride unseen by anyone outside your convoy</li>
+          <li>Edge arrows that point at convoy riders off screen</li>
+          <li>A rally point and an SOS button for your convoy</li>
+          <li>Friends, waves and rider profiles</li>
+          <li>Block and report, right from any rider card</li>
         </ul>
       </article>
       <article class="cell c-theme rv">
         <h3>Make it yours</h3>
-        <p>Eleven themes or build your own, six accent colors or any hex, five map styles, miles or kilometers, and every HUD card can be switched off.</p>
+        <p>Eleven themes or build your own, six accent colors or any hex, five map styles, miles or kilometers, and the glass blur and animations switch off for older phones.</p>
         <div class="swatches" role="img" aria-label="Six accent color swatches: slate, blue, green, amber, red, purple"><i style="background:#9aa3b0"></i><i style="background:#2f6df6"></i><i style="background:#00ff9c"></i><i style="background:#ffb000"></i><i style="background:#ff2b5e"></i><i style="background:#a44cf2"></i></div>
       </article>
     </div>

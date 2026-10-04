@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Universal Links: the mailed links Convoy sends (password reset, email
+	     confirmation, passwordless sign-in, email change) point at
+	     https://odoreeci.tech/l/<kind>?token=… — with this entitlement and the
+	     apple-app-site-association file the server publishes (APPLE_APP_IDS),
+	     iOS opens them straight into the app. Without the file they open in
+	     Safari, which still works. -->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:odoreeci.tech</string>
+		<string>applinks:www.odoreeci.tech</string>
+	</array>
+</dict>
+</plist>

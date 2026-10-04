@@ -19,10 +19,10 @@
 
    WHY IT IS STATEFUL. A stateless pass over the same handlers found nothing,
    because nearly all of them bail on a guard before touching anything: 'chat'
-   returns without a party, 'race:fix' without a running race, 'party:kick'
+   returns without a party, 'party:kick'
    without being host. The interesting code sits past those guards. So this
    drives two real accounts INTO the states first — friends, a shared convoy, a
-   running race — and fuzzes from there, rebuilding the state between rounds
+   — and fuzzes from there, rebuilding the state between rounds
    because the fuzzing tears it down. It also fuzzes the REST surface.
 
    Two bugs it found on its first run, both invisible from the client side:
@@ -47,7 +47,7 @@ const NASTY = [
 const FIELDS = ['pos', 'heading', 'mode', 'profile', 'on', 'name', 'emoji', 'to',
   'id', 'pid', 'code', 'text', 'username', 'userId', 'payload', 'chunk', 'rate',
   'modeId', 'time', 'trap', 'lng', 'lat', 'kind', 'label', 'clear', 'speed',
-  'acc', 'ts', 'raceId', 'from', 'sys'];
+  'acc', 'ts', 'from', 'sys'];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const rnd = (a) => a[Math.floor(Math.random() * a.length)];
@@ -143,11 +143,9 @@ function fuzzFrame(t) {
   const PARTY_H = ['party:rally', 'party:invite', 'party:accept', 'party:decline',
     'party:kick', 'party:mode', 'party:join', 'party:sys', 'chat', 'wave',
     'voice:signal', 'voice:relay', 'voice:mic', 'voice:prox'];
-  const RACE_H = ['race:join', 'race:ready', 'race:start', 'race:fix',
-    'race:finish', 'race:leave', 'race:invite', 'race:end'];
   const OTHER_H = ['pos', 'profile', 'ghost', 'block:add', 'block:remove',
     'friend:add', 'friend:accept', 'friend:decline', 'friend:remove',
-    'dragy:pb', 'crowd:report', 'party:create', 'race:create'];
+    'party:create'];
 
   // ---- round 1: inside a convoy ----
   for (let round = 0; round < 6; round++) {
@@ -165,28 +163,7 @@ function fuzzFrame(t) {
     await sleep(200);
   }
 
-  // ---- round 2: inside a running race ----
-  for (let round = 0; round < 4; round++) {
-    A.send({ t: 'race:create', modeId: '0-60' });
-    await sleep(250);
-    const rs = A.frames.filter((m) => m.t === 'race:state' && m.race).pop();
-    if (rs) {
-      B.send({ t: 'race:join', id: rs.race.id });
-      await sleep(300);
-      A.send({ t: 'race:ready', on: true }); B.send({ t: 'race:ready', on: true });
-      await sleep(250);
-      A.send({ t: 'race:start' });
-      await sleep(3400);   // through the countdown into 'running'
-      for (const t of RACE_H) {
-        for (let i = 0; i < 25; i++) { A.send(fuzzFrame(t)); B.send(fuzzFrame(t)); }
-      }
-      await sleep(200);
-    }
-    A.send({ t: 'race:leave' }); B.send({ t: 'race:leave' });
-    await sleep(250);
-  }
-
-  // ---- round 3: everything else, plus interleaved valid state churn ----
+  // ---- round 2: everything else, plus interleaved valid state churn ----
   for (let round = 0; round < 8; round++) {
     for (const t of OTHER_H) {
       for (let i = 0; i < 15; i++) { A.send(fuzzFrame(t)); B.send(fuzzFrame(t)); }
@@ -197,14 +174,13 @@ function fuzzFrame(t) {
   }
 
   await sleep(1500);
-  console.log('sent ' + sent + ' frames from inside real convoy/race/friend state');
+  console.log('sent ' + sent + ' frames from inside real convoy/friend state');
 
   // ---- REST surface, same values ----
   let restCalls = 0;
   const REST = [
     ['/api/report', 'POST'], ['/api/account/delete', 'POST'], ['/api/profile', 'POST'],
-    ['/api/dragy/pb', 'POST'], ['/api/route', 'POST'], ['/api/overpass', 'POST'],
-    ['/api/hotspots', 'POST'], ['/api/incidents', 'POST'], ['/api/waze', 'POST']
+    ['/api/route', 'POST']
   ];
   for (const [path, method] of REST) {
     for (let i = 0; i < 12; i++) {

@@ -286,33 +286,21 @@
   }
 
   // Ask the server once whether it has a TomTom key configured. The result gates
-  // traffic-aware routing (routing.js) and the traffic heatmap (overlays.js):
-  // no key server-side → both stay gracefully off and we fall back to OSRM / a
-  // hidden layer, exactly as before. Cheap GET, run once per live session and
-  // cached on A.config.routeCaps.
+  // traffic-aware routing (routing.js): no key server-side → OSRM stays the
+  // keyless fallback, exactly as before. Cheap GET, run once per live session
+  // and cached on A.config.routeCaps.
   function probeRoutingCaps() {
     if (A.config.routeCaps !== undefined) return;
     U.fetchT(A.config.base + '/api/route/caps')
-      .then(function (r) { return r.ok ? r.json() : { routing: false, waze: false, hotspots: false }; })
-      // Carry ALL caps through: ghost.js gates the live Waze police layer on
-      // routeCaps.waze and the probability-hotspots layer on routeCaps.hotspots.
-      // Dropping a cap here silently disables that feature even when the server
-      // advertises it, so every cap the server returns must be forwarded.
-      .then(function (j) {
-        A.config.routeCaps = {
-          routing: !!j.routing, waze: !!j.waze, hotspots: !!j.hotspots,
-          // Older servers don't send `incidents` — fall back to the routing cap,
-          // which is what the incidents layer used to gate on.
-          incidents: j.incidents != null ? !!j.incidents : !!j.routing
-        };
-      })
-      .catch(function () { A.config.routeCaps = { routing: false, waze: false, hotspots: false, incidents: false }; })
+      .then(function (r) { return r.ok ? r.json() : { routing: false }; })
+      .then(function (j) { A.config.routeCaps = { routing: !!j.routing }; })
+      .catch(function () { A.config.routeCaps = { routing: false }; })
       .then(function () { ST.emit('routecaps', A.config.routeCaps); });
   }
 
   // The player's position, or null until a real GPS fix / explicit relocate has
   // replaced the demo spawn. A.sim.hasRealPos() already existed for exactly this
-  // distinction (race.js and routing.js both use it) — net.js just never asked.
+  // distinction (routing.js uses it) — net.js just never asked.
   function realPos() {
     return (A.sim.hasRealPos && A.sim.hasRealPos()) ? A.sim.playerPos() : null;
   }
@@ -415,21 +403,8 @@
       A.store.setAuth({ emailVerified: true });
       if (A.ui.refreshVerifyBanner) A.ui.refreshVerifyBanner();
       if (A.ui.renderAccount) A.ui.renderAccount();
-      A.ui.toast('Email confirmed. Names and stats are back', 'success');
+      A.ui.toast('Email confirmed. Rider names are back', 'success');
     },
-
-    // A rider set a new dragy PB → update their NPC stats so any open profile
-    // view (Nearby, popup, overlay) reflects it live.
-    'dragy:pb': function (m) { if (A.sim && A.sim.remoteStats) A.sim.remoteStats(m.id, m.stats); },
-
-    /* ----- drag races -----
-       js/race.js is lazy (A.lazy.race). These are inbound messages, not a rider
-       gesture — dropping one silently loses a challenge or a running race's
-       state, so each pulls the module in (guardrail 6) instead of no-opping
-       when A.race isn't loaded yet. */
-    'race:state': function (m) { A.lazy.race().then(function (r) { r.onState(m); }).catch(function () {}); },
-    'race:invite': function (m) { A.lazy.race().then(function (r) { r.onInvite(m); }).catch(function () {}); },
-    'race:fix': function (m) { A.lazy.race().then(function (r) { r.onFix(m); }).catch(function () {}); },
 
     tick: function (m) { A.sim.remoteTick(m.r || []); },
 
@@ -477,21 +452,6 @@
     'voice:mic': function (m) { if (A.voice) A.voice.onPeerMic(m); },
 
     global: function (m) { A.mapview.setGlobalData(m.fc); },
-
-    // A nearby rider reported a crowd hazard (e.g. live police sighting). Render
-    // it on the existing hazard layer via addReportedHazard. `from` lets us drop
-    // our own echo (we already drew it locally at report time) so it isn't doubled.
-    'crowd:report': function (m) {
-      if (!A.overlays || !A.overlays.addReportedHazard) return;
-      if (m.from && m.from.id === myId) return; // own report — already drawn locally
-      if (typeof m.lat !== 'number' || typeof m.lng !== 'number') return;
-      A.overlays.addReportedHazard({
-        lat: m.lat, lng: m.lng,
-        kind: m.kind || 'hazard',
-        label: m.label || undefined,
-        crowd: true
-      });
-    },
 
     'auth:invalid': (function () {
       var handling = false; // multiple invalid sessions could arrive; act once
@@ -637,19 +597,6 @@
     sendVoiceMic: function (on) { send({ t: 'voice:mic', on: !!on }); },
     // Proximity-voice opt-in (auto voice chat with riders around you).
     sendVoiceProx: function (mode) { send({ t: 'voice:prox', mode: mode }); },
-    sendGhost: function (on) { send({ t: 'ghost', on: !!on }); },
-    // Crowd hazard report (e.g. a live police sighting). The server sanitizes the
-    // label, rate-limits per IP, and broadcasts only to riders within NEARBY_KM.
-    sendCrowdReport: function (lat, lng, kind, label) {
-      send({ t: 'crowd:report', lat: lat, lng: lng, kind: kind, label: label });
-    },
-    // Drag races (open ad-hoc lobby, any nearby rider). race.js owns the client.
-    sendRace: function (msg) {
-      if (!msg || typeof msg.t !== 'string') return;
-      // race:fix is high-frequency during a run → queue-skipped (it's only useful
-      // live; a buffered sample from a mid-reconnect outage is stale and misleading).
-      if (msg.t === 'race:fix') send(msg);
-      else sendQueued(msg);
-    }
+    sendGhost: function (on) { send({ t: 'ghost', on: !!on }); }
   };
 })();

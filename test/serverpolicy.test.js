@@ -7,11 +7,10 @@
    past its documented contract, this fails with the reason.
 
    Added with the 2026-08 hardening pass:
-     M1  race:fix budget vs the client's 10Hz cadence (js/race.js)
      M3  HTTP slowloris timeouts
      M4  OAuth login-CSRF cookie binding
      S1  voice:signal throttle · S2 /api/logout throttle
-     S3  traffic tile bounds · S4 global-feed privacy delay
+     S4  global-feed privacy delay
 
    Added with the 2026-08 security-review follow-up:
      R1  refresh-token reuse detection (revoke the family)
@@ -46,7 +45,7 @@
          reaches the branch that serves index.html, and STATIC_IMMUTABLE is
          the documented kill switch
      D1  every deferred body goes through defer() (a try/catch around the
-         five setTimeout bodies that used to land on uncaughtException,
+         setTimeout bodies that used to land on uncaughtException,
          server-002) and leadership goes to a socket that is still OPEN
          (server-020)
 
@@ -83,19 +82,6 @@ function numDefault(name) {
   return m ? parseInt(m[1], 10) : null;
 }
 
-group('M1 — race:fix budget sustains the client cadence');
-ok('RACE_FIX_BUDGET default ≥ 600 (10Hz × 60s for one racer)',
-  (numDefault('RACE_FIX_BUDGET') || 0) >= 600,
-  'got ' + numDefault('RACE_FIX_BUDGET') + ' — races starve mid-run again');
-ok('RACE_FIX_IP_BUDGET default ≥ 3600 (6 NAT\'d racers at 10Hz)',
-  (numDefault('RACE_FIX_IP_BUDGET') || 0) >= 3600,
-  'got ' + numDefault('RACE_FIX_IP_BUDGET'));
-ok("rate limit keyed per CONNECTION ('racefix:' + c.id)",
-  /rateOk\('racefix:' \+ c\.id/.test(SRC),
-  'per-IP keying returned — two racers behind one NAT throttle each other');
-ok("rate limit also has the per-IP ceiling ('racefixip:' + c.ip)",
-  /rateOk\('racefixip:' \+ c\.ip/.test(SRC));
-
 group('M3 — slowloris bounds');
 ok('requestTimeout set', /httpServer\.requestTimeout\s*=/.test(SRC),
   'no requestTimeout — Node default is 300s of withheld-body socket pinning');
@@ -108,10 +94,6 @@ ok('/api/oauth/callback rejects a mismatched cvst cookie', /cvst=([^;\]]+)[\s\S]
 group('S1/S2 — throttles');
 ok("voice:signal throttled ('sig:' + c.id)", /rateOk\('sig:' \+ c\.id/.test(SRC));
 ok("/api/logout throttled ('logout:' + ip)", /rateOk\('logout:' \+ ip/.test(SRC));
-
-group('S3 — traffic tile bounds');
-ok('tile z/x/y validated before upstream', /tz > 22 \|\| tx >= \(1 << tz\) \|\| ty >= \(1 << tz\)/.test(SRC),
-  'garbage tiles burn TomTom quota again');
 
 group('S4 — global-feed privacy delay');
 ok('no post-boot fresh-snapshot fallback', !/snap = snapshots\[0\]/.test(SRC),
@@ -221,19 +203,20 @@ if (n1Lit) {
 group('W1 — the socket dispatcher survives an impolite or absent client');
 // server-024: every handler above throttles ONE message type; this is the
 // ceiling over all of them. The sizing invariant is computed from the source,
-// never hard-coded: a legitimate racer's documented peak is race:fix at 10Hz
-// (RACE_FIX_BUDGET/min) + pos at 1Hz (60/min, js/net.js sendPos) + voice:signal
-// at its own 40-per-5s ceiling (480/min). A retune below that starves a real
-// racer, and this check says so with the arithmetic in the message.
+// never hard-coded: a legitimate client's documented peak is pos at 1Hz
+// (60/min, js/net.js sendPos) + voice:signal at its own 40-per-5s ceiling
+// (480/min) + voice:relay at its own VOICE_RELAY_BUDGET. A retune below that
+// starves a real walkie-talkie call, and this check says so with the
+// arithmetic in the message.
 const wsBudget = numDefault('WS_MSG_BUDGET');
-const raceFixBudget = numDefault('RACE_FIX_BUDGET');
-const legitPeak = (raceFixBudget || 0) + 60 + 480;
+const relayBudget = numDefault('VOICE_RELAY_BUDGET');
+const legitPeak = 60 + 480 + (relayBudget || 0);
 ok('WS_MSG_BUDGET exists as an env-tunable parseInt default (per connection, per minute)',
   wsBudget !== null,
   'no WS_MSG_BUDGET constant — the dispatcher has no global budget and {"t":"wave"} at line rate is a scoped broadcast per message again');
-ok('WS_MSG_BUDGET (' + wsBudget + ') ≥ RACE_FIX_BUDGET + 60 + 480 = ' + legitPeak + " (a racer's legitimate peak)",
-  wsBudget !== null && raceFixBudget !== null && wsBudget >= legitPeak,
-  'retuned below the documented peak — a real racer at 10Hz is throttled by the flood gate');
+ok('WS_MSG_BUDGET (' + wsBudget + ') ≥ 60 + 480 + VOICE_RELAY_BUDGET = ' + legitPeak + " (a voice caller's legitimate peak)",
+  wsBudget !== null && relayBudget !== null && wsBudget >= legitPeak,
+  'retuned below the documented peak — a real relay-fallback voice call is throttled by the flood gate');
 // Anchored on the code shape, not the phrase, so a comment that mentions the
 // handler elsewhere in the file cannot move the region.
 const msgAt = SRC.indexOf("ws.on('message', (buf) =>");
@@ -372,22 +355,20 @@ ok('the immutable-path helper is wired: server.js calls httpcache.isImmutablePat
   /httpcache\.isStamped\([\s\S]*?\)\s*\|\|\s*httpcache\.isImmutablePath\(file\)/.test(SRC));
 
 group('D1 — deferred work is guarded, and leadership goes to a live socket');
-// server-002: five deferred bodies (race teardown, bot invite reply, bot chat
-// reply, bot wave reply, race green light) ran outside every try/catch. The
-// count of bare `setTimeout(() => {` blocks was 5 before the fix; now the only
-// one is inside defer() itself. The shutdown safety net at the bottom of the
+// server-002: the deferred bodies (bot invite reply, bot chat reply, bot wave
+// reply — and, before racing was removed, race teardown and the green light)
+// ran outside every try/catch. The count of bare `setTimeout(() => {` blocks
+// was 5 before the fix; now the only one is inside defer() itself. The shutdown safety net at the bottom of the
 // file is `setTimeout(() => process.exit(0), …)` — no brace, cannot throw,
 // needs its .unref() — and is deliberately not counted.
 const bareBlocks = (SRC.match(/setTimeout\(\(\) => \{/g) || []).length;
 ok('every deferred body in server.js is guarded (only the defer() helper itself uses a bare setTimeout block; found ' + bareBlocks + ')',
   bareBlocks === 1, 'a new setTimeout(() => { … }) body escaped defer() — a throw in it lands on uncaughtException');
-ok('defer() wraps the body in try/catch and returns the timer handle (two call sites chain .unref())',
+ok('defer() wraps the body in try/catch and returns the timer handle',
   /function defer\(fn, ms\) \{\s*return setTimeout\(\(\) => \{\s*try \{ fn\(\); \} catch \(e\) \{ console\.error\(/.test(SRC));
 const deferUses = (SRC.match(/\bdefer\(/g) || []).length;
-ok('defer() is actually used at the five deferred call sites (' + deferUses + ' occurrences incl. the helper)',
-  deferUses >= 6, 'expected the helper + 5 call sites');
-ok('the two teardown timers (race end grace, race green light) still .unref() so a draining process is not held open',
-  (SRC.match(/\}, 8000\)\.unref\(\);/g) || []).length === 1 && (SRC.match(/\}, 3000\)\.unref\(\);/g) || []).length === 1);
+ok('defer() is actually used at the three deferred call sites (' + deferUses + ' occurrences incl. the helper)',
+  deferUses >= 4, 'expected the helper + 3 call sites');
 // server-020: leaveParty() runs from ws.on('close') BEFORE clients.delete(), so
 // with two riders dropping together the first close handler still finds the
 // second in `clients` with a socket that has already left OPEN.

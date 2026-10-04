@@ -434,7 +434,7 @@ function isRoot(user) { return user === 'root'; }
 /* ----------------------------- OTA channel ----------------------------- */
 
 // Where the convoy service's DATA_DIR lives on the box (Environment=DATA_DIR
-// in deploy/convoy.service). The OTA files land beside the telemetry/hotspots
+// in deploy/convoy.service). The OTA files land beside the telemetry
 // stores; server/ota.js picks the manifest up per-request on mtime change, so
 // an OTA push never needs the systemd restart that a site deploy does.
 const OTA_DIR_REMOTE = process.env.OTA_DIR_REMOTE || '/opt/convoy/server/data/ota';

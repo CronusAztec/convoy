@@ -46,7 +46,7 @@ const { group, ok, report, ROOT } = require('./harness');
 // Language globals (ECMA-262). Every engine, every tree.
 const ES = ['Array', 'ArrayBuffer', 'Boolean', 'DataView', 'Date', 'Error', 'Float32Array', 'Function',
   'Infinity', 'Intl', 'JSON', 'Map', 'Math', 'NaN', 'Number', 'Object', 'Promise', 'ReferenceError', 'RegExp', 'Set',
-  'String', 'TypeError', 'Uint8Array', 'decodeURIComponent', 'encodeURIComponent', 'isFinite', 'isNaN',
+  'String', 'Uint8Array', 'decodeURIComponent', 'encodeURIComponent', 'isFinite', 'isNaN',
   'parseFloat', 'parseInt'];
 // Host globals that Node (>= 18) and every browser both define. Every tree.
 const HOST = ['AbortController', 'AbortSignal', 'PerformanceObserver', 'URL', 'URLSearchParams', 'clearInterval',
@@ -59,22 +59,24 @@ const CJS = ['__dirname', 'module', 'require'];
 const WEB = ['Audio', 'Blob', 'Event', 'Image', 'MouseEvent', 'WebSocket', 'XMLHttpRequest', 'atob', 'btoa',
   'cancelAnimationFrame', 'confirm', 'document', 'getComputedStyle', 'history', 'localStorage', 'location',
   'navigator', 'performance', 'requestAnimationFrame', 'window'];
-// … except these, which jsdom does not implement (canvas paths, WebRTC, speech
+// … except these, which jsdom does not implement (WebRTC, speech
 // synthesis, CSS media queries). Real in every WebView the app ships in; kept
 // apart so the gap is visible and checked — they must stay absent from jsdom.
-const WEB_NOT_IN_JSDOM = ['Path2D', 'RTCIceCandidate', 'RTCPeerConnection', 'RTCRtpSender',
+const WEB_NOT_IN_JSDOM = ['RTCIceCandidate', 'RTCPeerConnection', 'RTCRtpSender',
   'RTCSessionDescription', 'SpeechSynthesisUtterance', 'matchMedia'];
 // Ambient library globals index.html loads from a pinned <script src>. Capacitor,
 // tf and nsfwjs are always reached through window.* and so are never free names.
 const APP_WEB = ['maplibregl'];
 const APP_WEB_SCRIPT = { maplibregl: 'maplibre-gl' };
 // Test only: Node's `global`, the lift-and-execute suites' `eval`, the fetch
-// fakes' `Response` / `DOMException` (Node globals since 18 / 17), and
+// fakes' `DOMException` (a Node global since 17), and
 // `WebSocket` (Node global since 22, used by test/perf-bench.js's raw CDP client) …
-const TEST_EXTRA = ['global', 'eval', 'Response', 'DOMException', 'WebSocket'];
-// … and `document`: test/browser.test.js stringifies its probe functions and
-// runs them inside headless Chromium, where the DOM is real.
-const TEST_DOM = ['document'];
+const TEST_EXTRA = ['global', 'eval', 'DOMException', 'WebSocket'];
+// … and nothing DOM-shaped: the probe functions test/browser.test.js
+// stringifies into headless Chromium reach the DOM through `window.document`,
+// so no bare DOM global is free in test/ today. Kept as an (empty) list so a
+// future probe that needs one adds it here, with the honesty check vouching.
+const TEST_DOM = [];
 
 const NODE_SIDE = [ES, HOST, NODE, CJS];
 const TREES = [
@@ -125,8 +127,8 @@ for (const t of TREES) {
 }
 ok('summary: ' + filesScanned + ' files scanned, 0 identifiers that nothing defines',
   violations.length === 0, violations.join('; '));
-ok('the scan is real: >= 100 files, >= 800 free-name sightings, `process` seen in server/ and `window` in js/',
-  filesScanned >= 100 && namesSeen >= 800 && used.server.has('process') && used.js.has('window'),
+ok('the scan is real: >= 80 files, >= 800 free-name sightings, `process` seen in server/ and `window` in js/',
+  filesScanned >= 80 && namesSeen >= 800 && used.server.has('process') && used.js.has('window'),
   'files=' + filesScanned + ' sightings=' + namesSeen);
 
 /* ---- 2. the allowlists are honest ---- */

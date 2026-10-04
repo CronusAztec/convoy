@@ -37,7 +37,7 @@
                            registered but offline
      GET  /accounts?q=     search accounts
      GET  /account/:id     one account: every parameter + every action form
-     POST /account/:id/(profile|rename|email|password|recovery|stats|pb|
+     POST /account/:id/(profile|rename|email|password|recovery|
                         friend-remove|unblock|ban|delete)
      GET  /reports?status= moderation queue;  POST /report/:id/status
      GET  /flags           kill-switch board; POST /flags/set
@@ -85,9 +85,6 @@ let ADMIN_TOKEN = '';
 let ADMIN_UIDS = [];
 let SECURE = false;
 const SESSION_MS = 8 * 3600 * 1000;
-
-// Same dragy mode list the API route validates against (server.js /api/dragy/pb).
-const PB_MODES = ['0-60', '0-100k', '0-30', '0-100', '60-130', '100-200k', 'eighth', 'quarter'];
 
 // One-shot result messages: actions redirect with ?f=<nonce>, the next page
 // render consumes the entry. Keeps results out of URLs (a recovery code or a
@@ -317,8 +314,6 @@ const ROUTES = [
   ['POST', /^\/admin\/account\/([0-9a-f-]{36})\/email$/, emailAction],
   ['POST', /^\/admin\/account\/([0-9a-f-]{36})\/password$/, passwordAction],
   ['POST', /^\/admin\/account\/([0-9a-f-]{36})\/recovery$/, recoveryAction],
-  ['POST', /^\/admin\/account\/([0-9a-f-]{36})\/stats$/, statsAction],
-  ['POST', /^\/admin\/account\/([0-9a-f-]{36})\/pb$/, pbAction],
   ['POST', /^\/admin\/account\/([0-9a-f-]{36})\/friend-remove$/, friendRemoveAction],
   ['POST', /^\/admin\/account\/([0-9a-f-]{36})\/unblock$/, unblockAction],
   ['POST', /^\/admin\/account\/([0-9a-f-]{36})\/ban$/, banAction],
@@ -412,8 +407,7 @@ function loginPage(req, res, m, actor) {
 function envDefaults() {
   return {
     app: true,
-    routing: CTX.tomtomKeyed(), waze: CTX.wazeKeyed(), hotspots: true,
-    incidents: CTX.tomtomKeyed() || CTX.agentKeyed(),
+    routing: CTX.tomtomKeyed(),
     telemetry: CTX.telemetryOn(), registration: true, login: true, ota: true
   };
 }
@@ -429,7 +423,6 @@ async function homePage(req, res, m, actor) {
     '<div class="grid">' +
     card('Live riders', String(snap.clients)) +
     card('Parties', String(snap.parties)) +
-    card('Races', String(snap.races)) +
     card('Accounts', String(store.count())) +
     card('Crash-free (24h)', stats.crashFreePct == null ? '—' : stats.crashFreePct + '%') +
     card('Auth deletions pending', String(store.pendingAuthDeletions())) +
@@ -437,7 +430,7 @@ async function homePage(req, res, m, actor) {
     '<p class="muted">See where everyone is on the <a href="/admin/map">live map</a>.</p>' +
     '<h2>Kill switches</h2>' +
     // Maintenance gets its own line above the feature list. When the master
-    // switch is off, "waze is OFF" is noise — the whole server is refusing.
+    // switch is off, "routing is OFF" is noise — the whole server is refusing.
     (flags.pick('app', true)
       ? (bad.length
         ? '<p class="flash err">' + bad.map((f) => esc(f.name) + ' is OFF').join(', ') +
@@ -497,7 +490,6 @@ async function accountPage(req, res, m, actor) {
   const car = p.car || {};
   const bans = readBans();
   const banned = !!bans[u.id];
-  const stats = store.getStats(u.id);
   const f = (label, name, val, ph) =>
     '<label>' + esc(label) + '</label><input name="' + name + '" value="' + esc(val) + '"' + (ph ? ' placeholder="' + esc(ph) + '"' : '') + '>';
 
@@ -509,17 +501,6 @@ async function accountPage(req, res, m, actor) {
   const blocks = store.blockList(u.id).map((o) =>
     '<li>' + esc(o.username || o.id) + ' <form class="g" method="post" action="/admin/account/' + u.id + '/unblock">' +
     '<input type="hidden" name="other" value="' + esc(o.id) + '"><button class="warn">unblock</button></form></li>').join('') || '<li class="muted">none</li>';
-
-  let pbRows = '';
-  for (const mode of PB_MODES) {
-    const pb = stats.pb && stats.pb[mode];
-    pbRows += '<tr><td class="mono">' + esc(mode) + '</td>' +
-      '<td>' + (pb ? esc(pb.time) + ' s' : '—') + '</td><td>' + (pb && pb.trap != null ? esc(pb.trap) : '—') + '</td>' +
-      '<td><form class="g" method="post" action="/admin/account/' + u.id + '/pb">' +
-      '<input type="hidden" name="mode" value="' + esc(mode) + '">' +
-      '<input name="time" placeholder="s" style="max-width:70px"> <input name="trap" placeholder="trap" style="max-width:70px"> ' +
-      '<button>set</button> <button class="warn" name="clear" value="1">clear</button></form></td></tr>';
-  }
 
   send(res, 200, renderPage(req, actor, u.username,
     '<h1>' + esc(u.username) +
@@ -554,12 +535,6 @@ async function accountPage(req, res, m, actor) {
     f('Trans (AT/MT/DCT)', 'c_trans', car.trans || '') + f('Drive (FWD/RWD/AWD)', 'c_drive', car.drive || '') +
     f('HP', 'c_hp', car.hp || '') + f('Mods', 'c_mods', car.mods || '') + f('Exhaust', 'c_exhaust', car.exhaust || '') +
     '<p><button>Save profile</button></p></form></div>' +
-
-    '<h2>Stats &amp; PBs</h2><div class="card"><form class="g" method="post" action="/admin/account/' + u.id + '/stats">' +
-    '<label>Runs</label><input name="runs" value="' + esc((stats.runs || 0)) + '" style="max-width:90px">' +
-    '<label>Wins</label><input name="wins" value="' + esc((stats.wins || 0)) + '" style="max-width:90px"> ' +
-    '<button>Set counters</button></form></div>' +
-    '<table><tr><th>Mode</th><th>Time</th><th>Trap</th><th>Admin</th></tr>' + pbRows + '</table>' +
 
     '<h2>Social</h2><div class="card"><b>Friends</b><ul>' + friends + '</ul>' +
     '<b>Blocking</b><ul>' + blocks + '</ul></div>' +
@@ -1405,47 +1380,6 @@ function recoveryAction(req, res, m, actor, ip) {
   })();
 }
 
-function statsAction(req, res, m, actor, ip) {
-  return (async () => {
-    const u = store.getById(m[1]);
-    if (!u) return redirect(res, '/admin/accounts?f=' + flash('err', 'no such account'));
-    const form = await readForm(req);
-    const r = await store.setStats(u.id, { runs: form.runs, wins: form.wins });
-    if (r.error) return redirect(res, '/admin/account/' + u.id + '?f=' + flash('err', r.error));
-    audit.log(actor, ip, 'stats-set', u.username, 'runs=' + r.stats.runs + ' wins=' + r.stats.wins);
-    redirect(res, '/admin/account/' + u.id + '?f=' + flash('ok', 'counters set'));
-  })();
-}
-
-function pbAction(req, res, m, actor, ip) {
-  return (async () => {
-    const u = store.getById(m[1]);
-    if (!u) return redirect(res, '/admin/accounts?f=' + flash('err', 'no such account'));
-    const form = await readForm(req);
-    const mode = String(form.mode || '');
-    if (!PB_MODES.includes(mode)) {
-      return redirect(res, '/admin/account/' + u.id + '?f=' + flash('err', 'unknown PB mode'));
-    }
-    let r;
-    if (form.clear === '1') {
-      r = await store.setPB(u.id, mode, null);
-      audit.log(actor, ip, 'pb-clear', u.username, mode);
-    } else {
-      const time = Number(form.time);
-      const trap = form.trap === '' || form.trap == null ? null : Number(form.trap);
-      if (!Number.isFinite(time) || time <= 0 || time > 600 ||
-          (trap != null && (!Number.isFinite(trap) || trap < 0))) {
-        return redirect(res, '/admin/account/' + u.id + '?f=' +
-          flash('err', 'time must be 0–600 s, trap a speed'));
-      }
-      r = await store.setPB(u.id, mode, { time: time, trap: trap });
-      audit.log(actor, ip, 'pb-set', u.username, mode + ' ' + time + 's');
-    }
-    if (r.error) return redirect(res, '/admin/account/' + u.id + '?f=' + flash('err', r.error));
-    redirect(res, '/admin/account/' + u.id + '?f=' + flash('ok', 'PB ' + mode + ' updated'));
-  })();
-}
-
 function friendRemoveAction(req, res, m, actor, ip) {
   return (async () => {
     const u = store.getById(m[1]);
@@ -1525,7 +1459,7 @@ function rateLimit(ip) {
      kick(id)            close a rider's live sockets
      sanitizeProfile(p)  server.js's profile sanitizer (same rules as the app)
      validUsername/validPassword/validEmail — server.js's validators
-     tomtomKeyed()/wazeKeyed()/agentKeyed()/telemetryOn() — env defaults
+     tomtomKeyed()/telemetryOn() — env defaults
      secure              set Secure on cookies (https site)                     */
 function init(ctx) {
   CTX = ctx;

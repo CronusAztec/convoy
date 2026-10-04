@@ -6,21 +6,14 @@
 
   var OSRM = 'https://router.project-osrm.org/route/v1/driving/';
   var NOMINATIM = 'https://nominatim.openstreetmap.org';
-  // OpenStreetMap lookups go through our own server, NOT to overpass-api.de
-  // directly: that endpoint sends no Access-Control-Allow-Origin header, so a
-  // browser request to it is blocked before the response is ever readable. The
-  // proxy also caches, so riders in the same area share one upstream query.
-  // Callers name a KIND ('police' | 'enforcement' | 'road'); see server/overpass.js.
-  var OVERPASS_PROXY = (A.config ? A.config.base : '') + '/api/overpass';
   var FETCH_TIMEOUT_MS = 9000; // a hung OSRM/Nominatim used to leave the UI stuck forever
-  var POLICE_AVOID_M = 160;    // a route coord within this of a police/camera POI counts as a "pass"
 
   // TomTom Routing: traffic-aware durations + real alternatives (the public OSRM
   // has neither). The TomTom key is a server secret now — routing.js POSTs to our
   // own /api/route proxy and the server forwards to TomTom with the key injected.
   // We only opt in when the server reports it has a key (probed in net.js on
   // connect and cached on A.config.routeCaps.routing); otherwise OSRM stays the
-  // keyless fallback. Overlays/heatmap uses the same gate (overlays.js).
+  // keyless fallback.
   function useTomTom() { return !!(A.config && A.config.routeCaps && A.config.routeCaps.routing); }
   var ROUTE_PROXY = (A.config ? A.config.base : '') + '/api/route';
 
@@ -184,10 +177,9 @@
   /* ---------------- OSRM ---------------- */
   var lastRoute = null; // AbortController for the most recent route request
   // steps=true so we get turn-by-turn maneuver data for voice navigation.
-  // alternatives=3 so the police-avoidance pass has detours to choose from.
   function osrmRoutes(from, to, signal) {
     var url = OSRM + from[0] + ',' + from[1] + ';' + to[0] + ',' + to[1] +
-      '?overview=full&geometries=geojson&steps=true&alternatives=3';
+      '?overview=full&geometries=geojson&steps=true';
     return fetchJSON(url, { signal: signal }).then(function (j) {
       if (!j.routes || !j.routes.length) throw new Error('no route');
       return j.routes.map(function (r) {
@@ -221,89 +213,6 @@
     return osrmRoutes(from, to, ctrl.signal);
   }
 
-  /* ---------------- police / speed-camera avoidance ----------------
-     Keyless: pull police stations + speed cameras (OpenStreetMap via Overpass)
-     across the routes' bounding box, then count how many sit within
-     POLICE_AVOID_M of each candidate route. We render the fastest route first
-     (snappy), then quietly switch to the cleanest alternative if one is better. */
-  var lastPolice = null; // AbortController for the most recent Overpass query
-  function fetchPoliceForRoutes(routes) {
-    var minLat = 90, minLng = 180, maxLat = -90, maxLng = -180;
-    routes.forEach(function (r) {
-      r.coords.forEach(function (c) {
-        if (c[0] < minLng) minLng = c[0]; if (c[0] > maxLng) maxLng = c[0];
-        if (c[1] < minLat) minLat = c[1]; if (c[1] > maxLat) maxLat = c[1];
-      });
-    });
-    var pad = 0.01;
-    minLat -= pad; minLng -= pad; maxLat += pad; maxLng += pad;
-    // Cross-country routes would make a huge Overpass query — skip avoidance there.
-    if ((maxLat - minLat) > 3 || (maxLng - minLng) > 3) return Promise.resolve(null);
-    if (lastPolice) { try { lastPolice.abort(); } catch (e) {} }
-    var ctrl = new AbortController(); lastPolice = ctrl; // a newer route supersedes this lookup; fetchT adds the deadline on top
-    return U.fetchT(OVERPASS_PROXY, {
-      method: 'POST', signal: ctrl.signal,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        kind: 'police',
-        bbox: { minLat: minLat, minLng: minLng, maxLat: maxLat, maxLng: maxLng }
-      })
-    }, U.FETCH_TIMEOUT.overpass).then(function (r) { if (!r.ok) throw new Error('overpass ' + r.status); return r.json(); })
-      .then(function (j) {
-        var pts = [], els = (j && j.elements) || [];
-        for (var i = 0; i < els.length; i++) {
-          var e = els[i];
-          var lat = e.lat != null ? e.lat : (e.center && e.center.lat);
-          var lon = e.lon != null ? e.lon : (e.center && e.center.lon);
-          if (lat != null && lon != null) pts.push([lon, lat]);
-        }
-        return pts;
-      }).catch(function () { return null; }); // null = couldn't fetch (keep fastest route)
-  }
-
-  // How many police/camera POIs the route passes within POLICE_AVOID_M.
-  //
-  // This used to be a straight nested loop: up to 400 Overpass POIs against every
-  // other route vertex, repeated for each of three candidate routes — on the order
-  // of a million haversine calls on the main thread, right at the moment the user
-  // is waiting for a route to draw. Instead, hash the route's vertices into a
-  // coarse lat/lng grid whose cell is ~POLICE_AVOID_M across, then test each POI
-  // only against the vertices in its own cell and the eight around it. Same
-  // answer, near-linear.
-  function policeHits(coords, police) {
-    if (!police || !police.length || !coords || !coords.length) return 0;
-    // Cell size in degrees: latitude is ~111.32 km/deg; longitude shrinks with
-    // cos(lat), so size the lng step at the route's mid-latitude.
-    var midLat = coords[(coords.length / 2) | 0][1];
-    var dLat = POLICE_AVOID_M / 111320;
-    var dLng = POLICE_AVOID_M / (111320 * Math.max(0.05, Math.cos(midLat * Math.PI / 180)));
-    var grid = Object.create(null);
-    for (var c = 0; c < coords.length; c += 2) { // sample every other vertex (geometry is dense)
-      var v = coords[c];
-      var key = Math.floor(v[0] / dLng) + ',' + Math.floor(v[1] / dLat);
-      (grid[key] || (grid[key] = [])).push(v);
-    }
-    var hits = 0;
-    for (var p = 0; p < police.length; p++) {
-      var pt = police[p];
-      var gx = Math.floor(pt[0] / dLng), gy = Math.floor(pt[1] / dLat);
-      var near = false;
-      for (var ox = -1; ox <= 1 && !near; ox++) {
-        for (var oy = -1; oy <= 1 && !near; oy++) {
-          var bucket = grid[(gx + ox) + ',' + (gy + oy)];
-          if (!bucket) continue;
-          for (var i = 0; i < bucket.length; i++) {
-            if (U.haversine(pt, bucket[i]) <= POLICE_AVOID_M) { near = true; break; }
-          }
-        }
-      }
-      if (near) hits++;
-    }
-    return hits;
-  }
-
-  // Flatten OSRM legs→steps into one ordered cue list keyed by distance-along-route.
-  // Each cue: { at: metersFromStart, type: maneuverType, mod: modifier, name: roadName, exit: roundaboutExit }
   function parseSteps(route) {
     var cues = [];
     var dist = 0;
@@ -650,8 +559,7 @@
   }
 
   /* ---------------- destination / route ---------------- */
-  // Commit a chosen route to state + map. opts.noFit keeps the current camera
-  // (used when a background police-avoid swap replaces the already-framed route).
+  // Commit a chosen route to state + map. opts.noFit keeps the current camera.
   function applyRoute(r, label, lngLat, opts) {
     S.route = {
       label: label || 'Destination',
@@ -680,300 +588,10 @@
 
     var from = A.sim.playerPos();
     fetchRoutes(from, lngLat).then(function (routes) {
-      var fastest = routes[0];
-      applyRoute(fastest, label, lngLat);                 // show the fastest route right away
-      if (S.settings.avoidPolice) refinePoliceAvoid(from, lngLat, label, routes, fastest);
+      applyRoute(routes[0], label, lngLat);               // the fastest route
     }).catch(function () {
       A.ui.toast('Could not reach the routing service. Check your connection', 'warn');
     });
-  }
-
-  // Single route through a via point — forces a detour around police.
-  function routeVia(from, via, to) {
-    if (useTomTom()) {
-      // Proxy skips maxAlternatives when a via is present (a forced detour).
-      // Fall back to OSRM if the proxy/TomTom fails, just like fetchRoutes.
-      return fetchJSON(ROUTE_PROXY, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: from, via: via, to: to })
-      }).then(function (j) {
-        if (!j.routes || !j.routes.length) throw new Error('no route');
-        return ttNormalize(j.routes[0]);
-      }).catch(function () { return osrmVia(from, via, to); });
-    }
-    return osrmVia(from, via, to);
-  }
-
-  function osrmVia(from, via, to) {
-    var url = OSRM + from[0] + ',' + from[1] + ';' + via[0] + ',' + via[1] + ';' + to[0] + ',' + to[1] +
-      '?overview=full&geometries=geojson&steps=true&alternatives=false';
-    return fetchJSON(url).then(function (j) {
-      if (!j.routes || !j.routes.length) throw new Error('no route');
-      var r = j.routes[0];
-      return { distance: r.distance, duration: r.duration, coords: r.geometry.coordinates, steps: parseSteps(r) };
-    });
-  }
-
-  // Via points offset perpendicular to the route, AWAY from the police POI that
-  // sits most squarely on it — re-routing through one bends the path around it.
-  // Returns several candidate offsets (a 700m nudge often snaps back to the same
-  // road in a dense grid, so we also try wider detours).
-  function detourWaypoints(coords, police) {
-    var bestP = null, bestD = Infinity, bestI = 0;
-    for (var p = 0; p < police.length; p++) {
-      for (var c = 0; c < coords.length; c += 2) {
-        var d = U.haversine(police[p], coords[c]);
-        if (d < bestD) { bestD = d; bestP = police[p]; bestI = c; }
-      }
-    }
-    if (!bestP || bestD > POLICE_AVOID_M) return [];
-    var i = bestI, j = i + 2 < coords.length ? i + 2 : Math.max(0, i - 2);
-    var heading = U.bearing(coords[i], coords[j]);
-    var rel = U.relBearing(coords[i], heading, bestP);     // + police on the right, − on the left
-    // Steer to the opposite side. Normalize into 0..360 — `heading - 90` went
-    // negative for any heading under 90°, which is legal input to destPoint but
-    // made the value meaningless to read or log.
-    var side = ((rel >= 0 ? heading - 90 : heading + 90) % 360 + 360) % 360;
-    return [700, 1400, 2200].map(function (off) { return U.destPoint(coords[i], side, off); });
-  }
-
-  function superseded(lngLat) {
-    return !S.route || S.route.dest[0] !== lngLat[0] || S.route.dest[1] !== lngLat[1];
-  }
-
-  // Background pass: pull police/cameras near the route, then adopt the cleanest
-  // option — the best OSRM alternative, or a waypoint detour we build ourselves.
-  function refinePoliceAvoid(from, lngLat, label, routes, fastest) {
-    fetchPoliceForRoutes(routes).then(function (police) {
-      if (!police || !police.length || superseded(lngLat)) return;
-      var fastestHits = policeHits(fastest.coords, police);
-
-      var commit = function (chosen, chosenHits) {
-        if (superseded(lngLat)) return;
-        if (chosen !== fastest && chosenHits < fastestHits) {
-          var extraMin = Math.round((chosen.duration - fastest.duration) / 60);
-          applyRoute(chosen, label, lngLat, { noFit: true });
-          A.ui.toast('Routed around ' + (fastestHits - chosenHits) + ' police/camera' +
-            ((fastestHits - chosenHits) > 1 ? 's' : '') + (extraMin > 0 ? ' · +' + extraMin + ' min' : ''), 'success');
-        } else if (chosenHits > 0) {
-          A.ui.toast(chosenHits + ' police/camera' + (chosenHits > 1 ? 's' : '') +
-            ' near this route · best available', 'info');
-        }
-      };
-
-      // 1) cleanest of whatever alternatives OSRM returned
-      var best = routes.map(function (r) { return { r: r, hits: policeHits(r.coords, police) }; })
-        .sort(function (a, b) { return a.hits - b.hits || a.r.duration - b.r.duration; })[0];
-      // Clean already, or so saturated a single detour won't help → stop here.
-      if (best.hits === 0 || best.hits > 4) { commit(best.r, best.hits); return; }
-
-      // 2) build detours around the worst on-route POI; keep the cleanest that
-      //    isn't an absurd detour. Try progressively wider offsets in sequence,
-      //    stopping early once we reach zero police.
-      var wps = detourWaypoints(best.r.coords, police);
-      if (!wps.length) { commit(best.r, best.hits); return; }
-      var winner = best;
-      (function tryNext(k) {
-        if (k >= wps.length || superseded(lngLat)) { commit(winner.r, winner.hits); return; }
-        routeVia(from, wps[k], lngLat).then(function (cand) {
-          var ch = policeHits(cand.coords, police);
-          if (ch < winner.hits && cand.duration < fastest.duration * 2) winner = { r: cand, hits: ch };
-          if (winner.hits === 0) commit(winner.r, winner.hits);
-          else tryNext(k + 1);
-        }).catch(function () { tryNext(k + 1); });
-      })(0);
-    });
-  }
-
-  /* ---------------- cruise loop ----------------
-     One tap → a route that leaves from where the rider is and loops back to the
-     same spot. Candidate loops are built through waypoints on a rough circle in
-     four directions, then scored keyless via Overpass:
-       · police stations + speed cameras  — heavily penalized (avoid cops)
-       · stop signs + traffic signals     — penalized (a good cruise avoids
-                                            stop-and-go side streets)
-       · distance from the requested size — mild penalty
-     If Overpass is down, the loop with the highest average speed wins — fewer
-     lights/stops per meter IS a faster route per meter. */
-  var LOOP_CELL_STOP = 0.0005;    // ~50 m grid for stop signs / signals (they sit ON the road)
-  var LOOP_CELL_POLICE = 0.0015;  // ~150 m grid for police / cameras (near the road counts)
-  var loopBusy = false;
-
-  // OSRM route through an ordered coord list (loop = start … waypoints … start).
-  // continue_straight=true stops OSRM from U-turning back down the same road at
-  // a via point, which would fold the loop onto itself.
-  function osrmMulti(coordsList, signal) {
-    var path = coordsList.map(function (c) { return c[0] + ',' + c[1]; }).join(';');
-    var url = OSRM + path + '?overview=full&geometries=geojson&steps=true&alternatives=false&continue_straight=true';
-    return fetchJSON(url, { signal: signal }).then(function (j) {
-      if (!j.routes || !j.routes.length) throw new Error('no route');
-      var r = j.routes[0];
-      return { distance: r.distance, duration: r.duration, coords: r.geometry.coordinates, steps: parseSteps(r) };
-    });
-  }
-
-  // Four candidate loops: circle-ish waypoint fans to the right of travel, the
-  // left, ahead, and behind. Radius is sized so the road distance of the loop
-  // lands near the target (straight-line perimeter ≈ 4R, roads add ~30%).
-  function loopCandidates(from, heading, targetM) {
-    var R = Math.max(500, targetM / 5.2);
-    return [heading + 90, heading - 90, heading, heading + 180].map(function (d) {
-      var wps = [-60, 0, 60].map(function (off) {
-        return U.destPoint(from, ((d + off) % 360 + 360) % 360, R);
-      });
-      return [from, wps[0], wps[1], wps[2], from];
-    });
-  }
-
-  // Stop signs, traffic signals, police + cameras across the candidates' bbox.
-  // null = Overpass unavailable (callers fall back to average-speed scoring).
-  function fetchLoopPois(routes) {
-    var minLat = 90, minLng = 180, maxLat = -90, maxLng = -180;
-    routes.forEach(function (r) {
-      r.coords.forEach(function (c) {
-        if (c[0] < minLng) minLng = c[0]; if (c[0] > maxLng) maxLng = c[0];
-        if (c[1] < minLat) minLat = c[1]; if (c[1] > maxLat) maxLat = c[1];
-      });
-    });
-    var pad = 0.005;
-    minLat -= pad; minLng -= pad; maxLat += pad; maxLng += pad;
-    if ((maxLat - minLat) > 2 || (maxLng - minLng) > 2) return Promise.resolve(null);
-    return U.fetchT(OVERPASS_PROXY, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        kind: 'road',
-        bbox: { minLat: minLat, minLng: minLng, maxLat: maxLat, maxLng: maxLng }
-      })
-    }, U.FETCH_TIMEOUT.overpass).then(function (r) { if (!r.ok) throw new Error('overpass ' + r.status); return r.json(); })
-      .then(function (j) {
-        var out = { police: [], stops: [], signals: [] };
-        ((j && j.elements) || []).forEach(function (e) {
-          var lat = e.lat != null ? e.lat : (e.center && e.center.lat);
-          var lon = e.lon != null ? e.lon : (e.center && e.center.lon);
-          if (lat == null || lon == null) return;
-          var t = e.tags || {};
-          if (t.amenity === 'police' || t.highway === 'speed_camera') out.police.push([lon, lat]);
-          else if (t.highway === 'stop') out.stops.push([lon, lat]);
-          else if (t.highway === 'traffic_signals') out.signals.push([lon, lat]);
-        });
-        return out;
-      }).catch(function () { return null; });
-  }
-
-  // Approximate proximity counting on a rounded lat/lng grid — exact distances
-  // would be POIs × vertices haversines (millions for a city-sized loop). A POI
-  // counts as "on the route" when its cell or any neighbor holds a route vertex.
-  function gridIndex(coords, cell) {
-    var idx = {};
-    for (var i = 0; i < coords.length; i++) {
-      idx[Math.round(coords[i][0] / cell) + ':' + Math.round(coords[i][1] / cell)] = 1;
-    }
-    return idx;
-  }
-  function gridHits(idx, pts, cell) {
-    if (!pts || !pts.length) return 0;
-    var hits = 0;
-    for (var p = 0; p < pts.length; p++) {
-      var gx = Math.round(pts[p][0] / cell), gy = Math.round(pts[p][1] / cell);
-      var near = false;
-      for (var dx = -1; dx <= 1 && !near; dx++) {
-        for (var dy = -1; dy <= 1; dy++) {
-          if (idx[(gx + dx) + ':' + (gy + dy)]) { near = true; break; }
-        }
-      }
-      if (near) hits++;
-    }
-    return hits;
-  }
-
-  // Lower = better ride. One police pass ≈ five traffic lights.
-  function scoreLoop(r, pois, targetM) {
-    var out = { police: 0, stops: 0, signals: 0, total: 0 };
-    var sizePenalty = Math.abs(r.distance - targetM) / targetM * 10;
-    if (pois) {
-      out.police = gridHits(gridIndex(r.coords, LOOP_CELL_POLICE), pois.police, LOOP_CELL_POLICE);
-      out.stops = gridHits(gridIndex(r.coords, LOOP_CELL_STOP), pois.stops, LOOP_CELL_STOP);
-      out.signals = gridHits(gridIndex(r.coords, LOOP_CELL_STOP), pois.signals, LOOP_CELL_STOP);
-      out.total = out.police * 15 + out.signals * 3 + out.stops * 2 + sizePenalty;
-    } else {
-      // No POI data — higher average speed = fewer stops per meter.
-      out.total = -(r.distance / Math.max(r.duration, 1)) + sizePenalty;
-    }
-    return out;
-  }
-
-  function planLoop(targetM) {
-    if (loopBusy) return;
-    var from = A.sim.playerPos();
-    if (!from) { A.ui.toast('No position yet. Tap the locate button first', 'warn'); return; }
-    loopBusy = true;
-    if (S.trip && S.trip.active) endTrip(false);
-    A.ui.toast('Planning a cruise loop…', 'info');
-    var heading = A.sim.playerHeading() || 0;
-    var cands = loopCandidates(from, heading, targetM);
-    Promise.all(cands.map(function (c) { return osrmMulti(c).catch(function () { return null; }); }))
-      .then(function (routes) {
-        routes = routes.filter(function (r) { return r && r.distance > targetM * 0.3; });
-        if (!routes.length) throw new Error('no loops');
-        return fetchLoopPois(routes).then(function (pois) {
-          var best = null, bestScore = null;
-          routes.forEach(function (r) {
-            var sc = scoreLoop(r, pois, targetM);
-            if (!best || sc.total < bestScore.total) { best = r; bestScore = sc; }
-          });
-          applyRoute(best, 'Cruise loop', from.slice());
-          var extra;
-          if (pois) {
-            var quiet = [];
-            quiet.push(bestScore.police ? bestScore.police + ' police/cam on route' : 'no police on route');
-            var sl = bestScore.signals + bestScore.stops;
-            quiet.push(sl ? sl + ' lights/stops' : 'no lights or stop signs');
-            extra = quiet.join(' · ');
-          } else {
-            extra = 'smoothest of ' + routes.length + ' loops';
-          }
-          A.ui.toast('Cruise loop ready · ' + U.fmtDist(best.distance, S.settings.units) +
-            ' · ' + U.fmtDur(best.duration) + ' · ' + extra, 'success');
-        });
-      })
-      .catch(function () {
-        A.ui.toast('Could not plan a loop from here. Try again in a moment', 'warn');
-      })
-      .finally(function () { loopBusy = false; });
-  }
-
-  // Loop-size chooser, anchored at the rider's position on the map.
-  function promptLoop() {
-    var from = A.sim.playerPos();
-    if (!from) { A.ui.toast('No position yet. Tap the locate button first', 'warn'); return; }
-    var km = S.settings.units === 'km';
-    // [meters, label] — sized for a quick spin / a proper cruise / a long ride
-    var opts = km ? [[8000, '8 km'], [16000, '16 km'], [32000, '32 km']]
-      : [[8000, '5 mi'], [16000, '10 mi'], [32000, '20 mi']];
-    var card = U.el('div', 'pop-card pop-prompt');
-    card.innerHTML =
-      '<div class="prompt-label"><span class="prompt-pin">' +
-      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
-      '<path d="M19.5 12a7.5 7.5 0 1 1-2.6-5.7"/><path d="M17.5 2.8v3.7h3.7"/></svg></span>' +
-      '<span class="prompt-name">Cruise loop · back to here</span></div>' +
-      '<div class="pop-sub">Loops you back around while avoiding police, stop signs &amp; traffic lights.</div>' +
-      '<div class="pop-actions" id="loop-sizes"></div>' +
-      '<div class="pop-actions"></div>';
-    var sizes = card.querySelector('#loop-sizes');
-    opts.forEach(function (o) {
-      var b = U.el('button', 'btn btn-primary btn-small', '~' + o[1]);
-      b.addEventListener('click', function () {
-        A.mapview.closePopup();
-        planLoop(o[0]);
-      });
-      sizes.appendChild(b);
-    });
-    var no = U.el('button', 'btn btn-ghost btn-small', 'Cancel');
-    no.addEventListener('click', function () { A.mapview.closePopup(); });
-    card.querySelectorAll('.pop-actions')[1].appendChild(no);
-    A.mapview.openPopup(from, card);
   }
 
   function clearRoute() {
@@ -1195,8 +813,6 @@
   A.routing = {
     geocode: geocode,
     promptRoute: promptRoute,
-    promptLoop: promptLoop,   // cruise-loop size chooser (ctl-loop button)
-    planLoop: planLoop,       // loop route from here back to here, avoiding cops/stops/lights
     setDestination: setDestination,
     clearRoute: clearRoute,
     startTrip: startTrip,
@@ -1214,8 +830,8 @@
     listVoices: listVoices,
     isNavSupported: isNavSupported,
     stopSpeaking: stopSpeaking,
-    // Speak OUTSIDE navigation (radar callouts, alerts): same voice pipeline but
-    // bypasses the voiceNav toggle — callers gate on their own setting.
+    // Speak OUTSIDE navigation: same voice pipeline but bypasses the voiceNav
+    // toggle — callers gate on their own setting.
     say: function (text) {
       if (!text) return;
       if (ttsServer === true) serverSpeak(text);

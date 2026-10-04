@@ -252,15 +252,6 @@
     btn.setAttribute('aria-checked', on ? 'true' : 'false');
   }
 
-  /* Live subscriptions owned by the detector settings section. That section is
-     destroyed and rebuilt on every Profile-panel open, so its listeners have to
-     be detachable — ST.on returns an unsubscribe function for exactly this. */
-  var detectorSubs = [];
-  function detachDetectorSubs() {
-    detectorSubs.forEach(function (off) { try { off(); } catch (e) { /* already gone */ } });
-    detectorSubs = [];
-  }
-
   function mkSwatches(paints, value, onChange) {
     var w = U.el('div', 'swatches');
     var custom;
@@ -537,33 +528,16 @@
     });
   }
 
-  // Apply Ghost Mode: persist + notify the server. All map/ghost/radar reactions
-  // are owned by the single 'ghost' listener wired in init(), so toggling does
-  // each piece of work exactly once (it used to run twice — here and in the listener).
-  // `onCancel` matters for callers that own their own visual state. The chip and
-  // the map control redraw from S.settings.ghost on the 'ghost' event, so a
-  // declined gate leaves them correct by doing nothing. A settings toggle does
-  // NOT — mkToggle flips its own class on click and only then calls back, so
-  // without a revert it would sit in the ON position over a ghost mode that
-  // never turned on.
-  function applyGhost(on, onCancel) {
-    // Turning radar ON is the moment the enforcement layers appear, so the
-    // legality notice belongs here rather than deeper in radar.js — this is the
-    // one funnel every entry point (map control, radar dock, persisted state)
-    // passes through. Turning it OFF is never gated.
-    if (on) { legalGate('radar', function () { doApplyGhost(true); }, onCancel); return; }
-    doApplyGhost(false);
-  }
-
-  function doApplyGhost(on) {
-    ST.setGhost(on);              // persists + emits 'ghost' → the listener reacts
-    if (A.net && A.net.sendGhost) A.net.sendGhost(on);
-    A.ui.toast(on ? 'Ghost mode on · radar active. You are hidden from other riders.' : 'Ghost mode off', 'info');
+  // Invisible mode: persist + notify the server. The map reaction (dimming the
+  // player marker) and voice's proximity cut-off hang off the single 'ghost'
+  // event the setter emits, so toggling does each piece of work exactly once.
+  function applyGhost(on) {
+    ST.setGhost(!!on);            // persists + emits 'ghost' → the listeners react
+    if (A.net && A.net.sendGhost) A.net.sendGhost(!!on);
+    A.ui.toast(on ? 'Invisible · only your convoy can see you' : 'Visible to riders again', 'info');
   }
 
   function updateGhostChip() {
-    var btn = document.getElementById('ctl-ghost');
-    if (btn) btn.classList.toggle('active', !!S.settings.ghost);
     var chip = document.getElementById('chip-ghost');
     if (!chip) return;
     chip.hidden = !S.settings.ghost;
@@ -575,8 +549,8 @@
     var chip = U.el('button', 'chip chip-ghost');
     chip.id = 'chip-ghost';
     chip.type = 'button';
-    chip.title = 'Ghost mode · invisible to other riders';
-    chip.innerHTML = '<span class="dot" style="background:#9b4dff;box-shadow:0 0 6px #9b4dff"></span><span>GHOST</span>';
+    chip.title = 'Invisible · only your convoy can see you. Tap to become visible';
+    chip.innerHTML = '<span class="dot" style="background:#9b4dff;box-shadow:0 0 6px #9b4dff"></span><span>INVISIBLE</span>';
     chip.addEventListener('click', function () {
       applyGhost(!S.settings.ghost);
     });
@@ -710,14 +684,12 @@
     });
     body.appendChild(fitBtn);
 
-    // SOS beacon: one tap drops a "needs help" pin for riders nearby AND tells
-    // the convoy chat — for breakdowns, flats, or losing the group.
+    // SOS beacon: one tap tells the convoy chat you are stopped — for
+    // breakdowns, flats, or losing the group. Your live pin shows them where.
     var sosBtn = U.el('button', 'btn btn-block btn-danger-text sos-btn', 'SOS · I\'m stopped and need help');
     sosBtn.addEventListener('click', function () {
-      var who = (S.profile && S.profile.name) || 'A rider';
-      if (A.overlays && A.overlays.reportHazard) A.overlays.reportHazard('stopped', who + ' needs help');
       A.party.sendChat('🆘 I\'m stopped and need help. Check my pin on the map');
-      sosBtn.textContent = 'SOS sent. Convoy + nearby riders alerted';
+      sosBtn.textContent = 'SOS sent to your convoy';
       sosBtn.disabled = true;
       setTimeout(function () {
         sosBtn.textContent = 'SOS · I\'m stopped and need help';
@@ -1054,23 +1026,18 @@
     toast('Profile photo removed', 'info');
   }
 
-  // Own-profile stats: dragy runs/wins from the server when synced, topped up
-  // with the local run log so guests see their numbers too.
+  // Own-profile counters for the profile header. Friends is the only tally the
+  // app keeps for a rider; convoy membership is live state, read off S.party.
   function selfStats() {
-    var stats = (A.sim && A.sim.getStats) ? (A.sim.getStats('self') || {}) : {};
-    var hist = [];
-    try { hist = JSON.parse(localStorage.getItem('convoy.dragy.v1') || '[]'); } catch (e) { }
     return {
-      raw: stats,
-      runs: Math.max(stats.runs || 0, hist.length),
-      wins: stats.wins || 0,
-      friends: (S.friends || []).length
+      friends: (S.friends || []).length,
+      convoy: (S.party && S.party.members) ? S.party.members.length : 0
     };
   }
 
-  // Instagram-style profile header: photo + runs/wins/friends counters beside
+  // Instagram-style profile header: photo + friends / convoy counters beside
   // it, then name / handle / car "bio" line. Re-rendered on photo change, save,
-  // stats and friends updates.
+  // party and friends updates.
   function renderProfileCard() {
     var card = document.getElementById('pf-card');
     if (!card) return;
@@ -1087,9 +1054,8 @@
       '    </button>' +
       '  </div>' +
       '  <div class="pf-ig-stats">' +
-      '    <span class="pf-stat"><b>' + st.runs + '</b>runs</span>' +
-      '    <span class="pf-stat"><b>' + st.wins + '</b>wins</span>' +
       '    <span class="pf-stat"><b>' + st.friends + '</b>friends</span>' +
+      '    <span class="pf-stat"><b>' + st.convoy + '</b>in convoy</span>' +
       '  </div>' +
       '</div>' +
       '<div class="pf-name">' + U.esc(S.profile.name) + '</div>' +
@@ -1107,17 +1073,9 @@
   }
 
   /* ---------------- awards (client-derived achievement badges) ----------------
-     Computed from what the app already tracks: dragy runs + personal bests,
-     race wins, friends, account state. Locked badges render dimmed so the page
-     doubles as a goal list. */
+     Computed from what the app already tracks: friends, profile photo, account
+     state. Locked badges render dimmed so the page doubles as a goal list. */
   var AWARD_ICONS = {
-    flag:   '<path d="M6 21V4"/><path d="M6 4h11l-2 3.5L17 11H6"/>',
-    gauge:  '<circle cx="12" cy="13" r="8"/><path d="M12 13l4.2-4.2"/>',
-    trophy: '<path d="M8 4h8v5a4 4 0 0 1-8 0Z"/><path d="M8 5H5a3 3 0 0 0 3 4M16 5h3a3 3 0 0 1-3 4M12 13v4M8.5 20h7M10 17h4"/>',
-    crown:  '<path d="M4 17 3 7l5 4 4-6 4 6 5-4-1 10Z"/>',
-    bolt:   '<path d="M13 3 5 13h5l-1 8 9-11h-6l1-7Z"/>',
-    timer:  '<circle cx="12" cy="13" r="7.5"/><path d="M12 13V8.5M10 2.5h4"/>',
-    wind:   '<path d="M3 8h11a2.5 2.5 0 1 0-2.5-2.6M3 16h15a2.5 2.5 0 1 1-2.5 2.6M3 12h9"/>',
     users:  '<circle cx="9" cy="8.5" r="3.2"/><path d="M3.4 19.2c.6-3.1 2.9-4.7 5.6-4.7s5 1.6 5.6 4.7"/><circle cx="17" cy="9.6" r="2.6"/><path d="M16.2 14.6c2.3.2 4 1.7 4.4 4.4"/>',
     camera: '<path d="M4 8h3l2-2.5h6L17 8h3v11H4Z"/><circle cx="12" cy="13" r="3.2"/>',
     shield: '<path d="M12 3 5 6v5c0 4 3 7 7 8 4-1 7-4 7-8V6Z"/>'
@@ -1125,19 +1083,7 @@
 
   function computeAwards() {
     var st = selfStats();
-    var rows = bestsFromStats(st.raw, true);
-    var pb = {};
-    var bestTrap = 0;
-    rows.forEach(function (r) { pb[r.modeId] = r; if (r.trap > bestTrap) bestTrap = r.trap; });
-    var MPH120 = 120 / 2.23694; // traps are stored in m/s
     return [
-      { name: 'First Launch',   desc: 'Complete a timed run',  icon: 'flag',   got: st.runs >= 1 },
-      { name: 'Track Rat',      desc: '25 timed runs',         icon: 'gauge',  got: st.runs >= 25 },
-      { name: 'Race Winner',    desc: 'Win a race',            icon: 'trophy', got: st.wins >= 1 },
-      { name: 'Podium Regular', desc: 'Win 5 races',           icon: 'crown',  got: st.wins >= 5 },
-      { name: 'Launch Master',  desc: '0–60 mph under 5s', icon: 'bolt',  got: !!(pb['0-60'] && pb['0-60'].time < 5) },
-      { name: '12-Second Car',  desc: '¼ mile under 12s', icon: 'timer',  got: !!(pb.quarter && pb.quarter.time < 12) },
-      { name: 'Speed Demon',    desc: 'Trap 120+ mph',         icon: 'wind',   got: bestTrap >= MPH120 },
       { name: 'Crew',           desc: 'Make 5 friends',        icon: 'users',  got: st.friends >= 5 },
       { name: 'Photogenic',     desc: 'Set a profile photo',   icon: 'camera', got: !!S.profile.avatar },
       { name: 'On the Grid',    desc: 'Create an account',     icon: 'shield', got: !!(A.auth && A.auth.isLoggedIn && A.auth.isLoggedIn()) }
@@ -1160,18 +1106,11 @@
     }).join('');
   }
 
-  function renderTimes() {
-    var el = document.getElementById('pf-times');
-    if (!el) return;
-    var st = selfStats();
-    el.innerHTML = pbRowsHtml(bestsFromStats(st.raw, true));
-  }
-
   /* ============================== public profile overlay ==============================
      Instagram-style, view-only page for any rider (yourself included). Reached by
      tapping a rider's popup header, a Nearby row, a convoy chip, or the "View
-     public profile" button in the Garage. Renders identity + stats + best dragy
-     times + car + context actions. Reuses the existing modal host (#onboarding via
+     public profile" button in the Garage. Renders identity + car + context
+     actions. Reuses the existing modal host (#onboarding via
      openOverlay/closeOverlay) and the avaInner/carDot helpers. */
   // Build a "subject" (a normalized rider record) from an NPC id or 'self'.
   function profileSubject(from) {
@@ -1188,7 +1127,6 @@
         vibe: S.profile.vibe,
         car: c,
         account: loggedIn ? A.auth.username() : null,
-        stats: A.sim.getStats('self'),
         online: true
       };
     }
@@ -1204,57 +1142,8 @@
       vibe: npc.vibe,
       car: npc.car,
       account: npc.account || null,
-      stats: npc.stats || null,
       online: true
     };
-  }
-
-  // Dragy personal-bests section. stats = { pb: { modeId: {time, trap, when} }, runs, wins }.
-  // Falls back to the local localStorage history for the player's own profile so a
-  // guest (no server stats) still sees their times.
-  function bestsFromStats(stats, isSelf) {
-    var pb = (stats && stats.pb) || {};
-    var rows = [];
-    for (var modeId in pb) {
-      if (!pb.hasOwnProperty(modeId)) continue;
-      var r = pb[modeId];
-      if (!r || typeof r.time !== 'number') continue;
-      rows.push({ modeId: modeId, time: r.time, trap: r.trap, when: r.when });
-    }
-    if (isSelf && A.dragy) {
-      // Merge localStorage history (the full local log) so guests + unsynced runs show.
-      var seen = {};
-      rows.forEach(function (x) { seen[x.modeId] = 1; });
-      var hist = (function () { try { return JSON.parse(localStorage.getItem('convoy.dragy.v1') || '[]'); } catch (e) { return []; } })();
-      var best = {};
-      hist.forEach(function (h) { if (!best[h.modeId] || h.time < best[h.modeId].time) best[h.modeId] = h; });
-      for (var mid in best) {
-        if (!best.hasOwnProperty(mid) || seen[mid]) continue;
-        rows.push({ modeId: mid, time: best[mid].time, trap: best[mid].trap, when: best[mid].when, local: true });
-      }
-    }
-    // Display order matches the dragy preset order; unknown ids sort last.
-    var order = A.dragy ? A.dragy.modes().map(function (m) { return m.id; }) : [];
-    rows.sort(function (a, b) {
-      var ai = order.indexOf(a.modeId), bi = order.indexOf(b.modeId);
-      if (ai < 0) ai = 99; if (bi < 0) bi = 99;
-      return ai - bi;
-    });
-    return rows;
-  }
-
-  function pbRowsHtml(rows) {
-    if (!rows.length) return '<div class="pf-empty">No timed runs yet</div>';
-    var km = S.settings.units === 'km';
-    return '<div class="pf-pb-table">' + rows.map(function (r) {
-      var label = A.dragy ? A.dragy.modeLabel(r.modeId) : r.modeId;
-      var trapLine = (r.trap != null)
-        ? '<i>trap ' + Math.round(r.trap * (km ? 3.6 : 2.23694)) + ' ' + (km ? 'km/h' : 'mph') + '</i>' : '';
-      return '<div class="pf-pb-row">' +
-        '<span class="pf-pb-mode">' + U.esc(label) + '</span>' +
-        '<b class="pf-pb-time">' + r.time.toFixed(2) + 's</b>' + trapLine +
-        '</div>';
-    }).join('') + '</div>';
   }
 
   function buildProfileOverlay(subject) {
@@ -1268,9 +1157,6 @@
       catch (e) { dist = ''; }
     }
     var friends = subject.self ? ((S.friends || []).length) : null;
-    var rows = bestsFromStats(subject.stats, subject.self);
-    var wins = (subject.stats && subject.stats.wins) || 0;
-    var runs = (subject.stats && subject.stats.runs) || 0;
 
     card.appendChild(authCloseHead(subject.self ? 'Your profile' : 'Rider profile', closeOverlay));
 
@@ -1297,18 +1183,12 @@
       '</div>';
     card.appendChild(head);
 
-    // Stats strip — Instagram-style counts.
-    var strip = U.el('div', 'pf-po-strip');
-    var cells = '<span class="pf-po-stat"><b>' + rows.length + '</b>bests</span>' +
-      '<span class="pf-po-stat"><b>' + runs + '</b>races</span>' +
-      '<span class="pf-po-stat"><b>' + wins + '</b>wins</span>';
-    if (subject.self) cells += '<span class="pf-po-stat"><b>' + friends + '</b>friends</span>';
-    strip.innerHTML = cells;
-    card.appendChild(strip);
-
-    // Personal bests section.
-    card.appendChild(U.el('div', 'section-label', 'Best dragy times'));
-    card.appendChild(U.el('div', 'pf-po-bests', pbRowsHtml(rows)));
+    // Counters strip — only the rider's own page has a tally to show.
+    if (subject.self) {
+      var strip = U.el('div', 'pf-po-strip');
+      strip.innerHTML = '<span class="pf-po-stat"><b>' + friends + '</b>friends</span>';
+      card.appendChild(strip);
+    }
 
     // Car card.
     card.appendChild(U.el('div', 'section-label', 'Car'));
@@ -1351,19 +1231,6 @@
       }
       act.appendChild(inviteBtn);
 
-      // Challenge to a race. js/race.js is lazy (A.lazy.race) — render the
-      // button unconditionally (it used to be gated on A.race already being
-      // loaded, which would have hidden it from every profile overlay) and
-      // load the module on the click itself.
-      var raceBtn = U.el('button', 'btn btn-small', 'Challenge to race');
-      raceBtn.addEventListener('click', function () {
-        A.lazy.race().then(function (r) {
-          if (r.challenge(subject.id)) closeOverlay();
-          else A.ui.toast('Too far to race. Move closer', 'warn');
-        }).catch(function () { A.ui.toast('Race unavailable — try again', 'warn'); });
-      });
-      act.appendChild(raceBtn);
-
       var waveBtn = U.el('button', 'btn btn-ghost btn-small', 'Wave');
       waveBtn.addEventListener('click', function () {
         waveBtn.disabled = true;
@@ -1400,7 +1267,7 @@
 
   /* ---------------- block & report ----------------
      Google Play's UGC policy wants both, in-app, on the content and on the
-     person. Convoy carries chat, voice, profiles and hazard pins, so this row is
+     person. Convoy carries chat, voice and profiles, so this row is
      reachable from any rider card and from any chat message.
 
      Block and report are separate on purpose. Blocking is the immediate,
@@ -1541,7 +1408,6 @@
     ['dangerous', 'Dangerous driving or street racing'],
     ['impersonation', 'Impersonating someone'],
     ['spam', 'Spam or a scam'],
-    ['false-reports', 'Deliberately false hazard reports'],
     ['other', 'Something else']
   ];
 
@@ -1622,51 +1488,15 @@
     openOverlay(card);
   }
 
-  // Open the profile overlay for 'self' or an NPC id. Re-renders on 'stats' events
-  // so a PB landing while the overlay is open refreshes live.
-  var profileOverlayId = null;
+  // Open the profile overlay for 'self' or an NPC id.
   function openProfileOverlay(from) {
     var subject = profileSubject(from);
     if (!subject) return;
-    profileOverlayId = subject.id;
-    var refresh = function () {
-      if (profileOverlayId !== subject.id) return; // a different overlay took over
-      var fresh = profileSubject(from);
-      if (!fresh) { closeOverlay(); return; }
-      var card = buildProfileOverlay(fresh);
-      if (card) openOverlay(card);
-    };
     openOverlay(buildProfileOverlay(subject));
-    // js/dragy.js is lazy — render immediately (bestsFromStats()/pbRowsHtml()
-    // degrade to raw mode ids with no sort order until it lands) and re-render
-    // in place once it resolves. Reuses the same profileOverlayId guard the
-    // 'stats' listener below already relies on, so it survives a second
-    // overlapping open the same way a live stats update does.
-    if (!A.dragy) A.lazy.dragy().then(function () { refresh(); }).catch(function () {});
-    // One-shot stats listener: refreshes the overlay when this rider's stats land.
-    // ST.on now returns an unsubscribe (it returned undefined before, so the
-    // off() call below threw and every opened profile leaked a live listener).
-    var off = ST.on('stats', function (e) {
-      if (!e || e.id !== subject.id) return;
-      refresh();
-    });
-    // Detach the listener when the overlay closes (closeOverlay clears #onboarding).
-    var root = document.getElementById('onboarding');
-    var pollClose = setInterval(function () {
-      if (profileOverlayId !== subject.id) {
-        clearInterval(pollClose);
-        if (typeof off === 'function') off();
-        return;
-      }
-      if (!root.hidden) return;
-      clearInterval(pollClose);
-      if (typeof off === 'function') off();
-      profileOverlayId = null;
-    }, 250);
   }
 
   /* The Profile panel has two pages: 'main' — the Instagram-style profile
-     (photo, stats, awards, fastest times) — and 'garage' — the car editor
+     (photo, counters, awards) — and 'garage' — the car editor
      sub-page. Reopening the panel always lands on main. Identity fields
      (name/handle/insignia/style) are set at signup and no longer editable. */
   var profileView = 'main';
@@ -1686,13 +1516,11 @@
     var body = document.getElementById('profile-body');
     if (!body) return; // absent panel must not desync openName from the DOM
     body.innerHTML = '';
-    // T1.5a: js/data.js is lazy (garage view needs D.MAKE_LIST/D.PAINTS/etc.).
-    // Cycle 5: js/dragy.js is lazy too (renderTimes()'s "Fastest times" section
-    // on the MAIN page reads A.dragy for human labels + sort order) — fold its
-    // loader into the same gen-guarded await shape rather than a second,
-    // separately-guarded path. Each branch only awaits what it actually reads.
+    // T1.5a: js/data.js is lazy (garage view needs D.MAKE_LIST/D.PAINTS/etc.);
+    // the main page reads nothing lazy, so its await list is empty and it
+    // renders on the next microtask through the same gen-guarded path.
     var gen = ++profileGen;
-    var deps = profileView === 'garage' ? [A.data.ensure()] : [A.lazy.dragy()];
+    var deps = profileView === 'garage' ? [A.data.ensure()] : [];
     Promise.all(deps).then(function () {
       if (gen !== profileGen || document.getElementById('profile-body') !== body) return;
       if (profileView === 'garage') buildGaragePage(body);
@@ -1707,9 +1535,6 @@
         toast('Could not load the garage — try again', 'warn');
         showProfileView('main');
       } else {
-        // Main page degrades gracefully without dragy (bestsFromStats()/
-        // pbRowsHtml() both guard on A.dragy) — show it rather than strand the
-        // rider on a blank panel over one failed fetch.
         buildProfileMain(body);
       }
     });
@@ -1747,62 +1572,7 @@
     body.appendChild(awards);
     renderAwards();
 
-    body.appendChild(U.el('div', 'section-label', 'Fastest times'));
-    var times = U.el('div', 'pf-times');
-    times.id = 'pf-times';
-    body.appendChild(times);
-    renderTimes();
-
-    body.appendChild(U.el('div', 'section-label', 'Drive log'));
-    var dlog = U.el('div', 'drive-log');
-    dlog.id = 'drive-log';
-    body.appendChild(dlog);
-    renderDriveLog();
-
     appendGearbox(body);
-  }
-
-  /* Profile → Drive log: lifetime odometer + the recorded trips (js/triplog.js).
-     Each row can replay its breadcrumb as a dotted trail on the map. */
-  function renderDriveLog() {
-    var el = document.getElementById('drive-log');
-    if (!el || !A.triplog) return;
-    var st = A.triplog.stats();
-    var trips = A.triplog.list().slice(0, 6);
-    var units = S.settings.units;
-    var vMult = units === 'km' ? 3.6 : 2.23694;
-    var vUnit = units === 'km' ? ' km/h' : ' mph';
-    el.innerHTML = '<div class="dl-odo"><b>' + U.fmtDist(st.odoM, units) + '</b> lifetime · ' +
-      st.count + ' trip' + (st.count === 1 ? '' : 's') + '</div>';
-    if (!trips.length) {
-      el.appendChild(U.el('div', 'dl-empty', 'Start a ride and your trips log themselves here.'));
-      return;
-    }
-    var shown = A.triplog.shownIdx();
-    trips.forEach(function (t, i) {
-      var d = new Date(t.t0);
-      var row = U.el('div', 'dl-row');
-      row.innerHTML =
-        '<div class="dl-main"><b>' + U.esc(t.label) + '</b>' +
-        '<i>' + d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + U.fmtClock(d) +
-        ' · ' + U.fmtDist(t.dist, units) + ' · ' + U.fmtDur(t.dur) +
-        // Entries logged before top-speed tracking (or one that never saw a
-        // usable fix) have no maxMs — that rendered as "top NaN mph".
-        (t.maxMs > 0 ? ' · top ' + Math.round(t.maxMs * vMult) + vUnit : '') + '</i></div>';
-      var btn = U.el('button', 'btn btn-ghost btn-small', shown === i ? 'Hide' : 'Map');
-      btn.type = 'button';
-      btn.addEventListener('click', function () {
-        if (A.triplog.shownIdx() === i) A.triplog.hideTrail();
-        else if (!A.triplog.showTrail(i)) toast('No path recorded for this trip', 'info');
-        renderDriveLog();
-      });
-      row.appendChild(btn);
-      el.appendChild(row);
-    });
-    var clr = U.el('button', 'btn btn-ghost btn-small dl-clear', 'Clear log');
-    clr.type = 'button';
-    clr.addEventListener('click', function () { A.triplog.clear(); });
-    el.appendChild(clr);
   }
 
   /* ---- page 2: the garage (car editor) ---- */
@@ -2189,10 +1959,8 @@
     });
     body.appendChild(resetBtn);
 
-    /* "Map & live" used to be one bin holding the camera, the globe scenery, the
-       speedometer, the screen-wake lock and the parking pin — five unrelated
-       things under a heading that described none of them. Split by what a rider
-       is actually looking for. */
+    /* Grouped by what a rider is actually looking for: the camera, who is on
+       the map, the drive itself, privacy, voice. */
     body.appendChild(U.el('div', 'section-label', 'Camera'));
     body.appendChild(mkRow('Follow camera', 'Keep the map centred on you as you drive',
       mkToggle(S.settings.followCam, function (v) { ST.setFollowCam(v); })));
@@ -2218,54 +1986,11 @@
     body.appendChild(U.el('div', 'section-label', 'Driving'));
     body.appendChild(mkRow('Keep screen awake', 'Stops the display sleeping while riding',
       mkToggle(S.settings.keepAwake, function (v) { ST.setSetting('keepAwake', v); })));
-    body.appendChild(mkRow('Auto parking pin', 'Drops a pin where a trip ends',
-      mkToggle(S.settings.autoParkPin, function (v) { ST.setSetting('autoParkPin', v); })));
     body.appendChild(mkRow('Space scenery', 'Stars, planets & day/night on the globe',
       mkToggle(S.settings.showSpace !== false, function (v) {
         ST.setSetting('showSpace', v);
         if (A.space && A.space.setEnabled) A.space.setEnabled(v);
       })));
-
-    /* ---- Instruments (HUD rail cards + driving alerts) ---- */
-    body.appendChild(U.el('div', 'section-label', 'Instruments'));
-    // The speedometer is an instrument. It lived under "Map & live" purely
-    // because that is where it was written, not because anyone would look there.
-    body.appendChild(mkRow('Speedometer', 'Live speed with session top & average',
-      mkToggle(S.settings.showSpeedo, function (v) { ST.setSetting('showSpeedo', v); })));
-    body.appendChild(mkRow('Compass', 'Heading rose with cardinal direction',
-      mkToggle(S.settings.showCompass !== false, function (v) { ST.setSetting('showCompass', v); })));
-    body.appendChild(mkRow('Clock & sun', 'Local time and the next sunrise / sunset',
-      mkToggle(S.settings.showClock !== false, function (v) { ST.setSetting('showClock', v); })));
-    body.appendChild(mkRow('Tripmeter', 'Session distance & moving time (tap the card to reset)',
-      mkToggle(S.settings.showTripmeter, function (v) { ST.setSetting('showTripmeter', v); })));
-    body.appendChild(mkRow('G-force meter', 'Cornering & braking g, derived from GPS',
-      mkToggle(S.settings.showGforce, function (v) { ST.setSetting('showGforce', v); })));
-    body.appendChild(mkRow('Weather now', 'Live temperature & conditions at your location',
-      mkToggle(S.settings.showWeatherNow, function (v) { ST.setSetting('showWeatherNow', v); })));
-    body.appendChild(mkRow('Battery', 'Device battery level while you drive',
-      mkToggle(S.settings.showBattery, function (v) { ST.setSetting('showBattery', v); })));
-    body.appendChild(mkRow('Coordinates', 'Live lat/lng · tap the card to copy',
-      mkToggle(S.settings.showCoords, function (v) { ST.setSetting('showCoords', v); })));
-    body.appendChild(mkRow('Destination arrow', 'Arrow pointing to your active route destination',
-      mkToggle(S.settings.showDestArrow, function (v) { ST.setSetting('showDestArrow', v); })));
-    body.appendChild(mkRow('Top speed quest', 'All-time top speed & fastest 60–100 records',
-      mkToggle(S.settings.showQuest !== false, function (v) { ST.setSetting('showQuest', v); })));
-
-    var dimSlider = U.el('input', 'input');
-    dimSlider.type = 'range'; dimSlider.min = '0'; dimSlider.max = '0.7'; dimSlider.step = '0.05';
-    dimSlider.value = S.settings.nightDim != null ? S.settings.nightDim : 0;
-    dimSlider.style.width = '100%';
-    dimSlider.addEventListener('input', function () { ST.setSetting('nightDim', parseFloat(dimSlider.value)); });
-    body.appendChild(mkField('Night dimmer', dimSlider));
-
-    var spdUnit = S.settings.units === 'km' ? 'km/h' : 'mph';
-    body.appendChild(mkField('Overspeed alert (' + spdUnit + ')', mkSegmented([
-      { label: 'Off', value: '0' },
-      { label: '30', value: '30' },
-      { label: '45', value: '45' },
-      { label: '65', value: '65' },
-      { label: '80', value: '80' }
-    ], String(Number(S.settings.speedAlert) || 0), function (v) { ST.setSetting('speedAlert', Number(v)); })));
 
     var navSupported = A.routing && A.routing.isNavSupported && A.routing.isNavSupported();
     body.appendChild(mkRow('Voice navigation',
@@ -2296,12 +2021,14 @@
       });
       body.appendChild(mkField('Navigator voice', voiceSel));
     }
-    var ghostToggle = mkToggle(S.settings.ghost, function (v) {
-      // Revert the switch if the legality notice is declined — see applyGhost.
-      applyGhost(v, function () { setToggle(ghostToggle, S.settings.ghost); });
-    });
-    body.appendChild(mkRow('Ghost mode',
-      'Go invisible and reveal nearby aircraft and police', ghostToggle));
+    /* ---- Privacy ---- */
+    body.appendChild(U.el('div', 'section-label', 'Privacy'));
+    body.appendChild(mkRow('Invisible mode',
+      'Hide from every rider outside your convoy. Proximity voice pauses while you are hidden',
+      mkToggle(S.settings.ghost, function (v) { applyGhost(v); })));
+    body.appendChild(U.el('div', 'hint-card',
+      'Your live position is only ever shared while the app is open and you are visible. ' +
+      'We keep no location history.'));
 
     /* ---- Voice chat ---- */
     var voiceHost = U.el('div', 'voice-settings-host');
@@ -2309,73 +2036,8 @@
     body.appendChild(voiceHost);
     buildVoiceSettings(voiceHost);
 
-    /* ---- Routing ---- */
-    body.appendChild(U.el('div', 'section-label', 'Routing'));
-    body.appendChild(mkRow('Avoid police & cameras',
-      'Pick a detour around police stations and speed cameras when one exists',
-      mkToggle(S.settings.avoidPolice, function (v) { ST.setSetting('avoidPolice', v); })));
-
-    /* ---- Radar audio (Ghost Mode sonar) ---- */
-    body.appendChild(U.el('div', 'section-label', 'Radar audio'));
-    // Master sonar volume slider. 0..1 → 0..100%.
-    var volSlider = U.el('input', 'input');
-    volSlider.type = 'range'; volSlider.min = '0'; volSlider.max = '1'; volSlider.step = '0.05';
-    volSlider.value = S.settings.sonarVol != null ? S.settings.sonarVol : 0.8;
-    volSlider.style.width = '100%';
-    volSlider.addEventListener('input', function () { ST.setSetting('sonarVol', parseFloat(volSlider.value)); });
-    body.appendChild(mkField('Sonar volume', volSlider));
-    body.appendChild(mkRow('Heartbeat', 'Risk-driven pulse when threats are near',
-      mkToggle(S.settings.sonarHeart, function (v) { ST.setSetting('sonarHeart', v); })));
-    body.appendChild(mkField('Heartbeat sensitivity', mkSegmented([
-      { label: 'Off', value: 'off' },
-      { label: 'Low', value: 'low' },
-      { label: 'Normal', value: 'normal' },
-      { label: 'Aggressive', value: 'aggressive' }
-    ], S.settings.heartSense, function (v) { ST.setSetting('heartSense', v); })));
-    body.appendChild(mkRow('Proximity pings', 'Spatial ticks while the board is quiet',
-      mkToggle(S.settings.sonarPings, function (v) { ST.setSetting('sonarPings', v); })));
-    body.appendChild(mkField('Ping rate', mkSegmented([
-      { label: 'Slow', value: 'slow' },
-      { label: 'Normal', value: 'normal' },
-      { label: 'Fast', value: 'fast' }
-    ], S.settings.pingRate, function (v) { ST.setSetting('pingRate', v); })));
-    body.appendChild(mkRow('Contact stings', 'Alert when a new threat becomes closest',
-      mkToggle(S.settings.sonarStings, function (v) { ST.setSetting('sonarStings', v); })));
-    body.appendChild(mkRow('Spoken alerts', 'Voice callout: "Police ahead, 1.2 miles"',
-      mkToggle(S.settings.sonarSpoken !== false, function (v) { ST.setSetting('sonarSpoken', v); })));
-
-    /* ---- Ground targets ---- */
-    body.appendChild(U.el('div', 'section-label', 'Police & cameras'));
-    body.appendChild(mkRow('Police on map', 'Stations, cameras and live Waze sightings, everywhere you drive',
-      mkToggle(S.settings.ghostPolice, function (v) { ST.setSetting('ghostPolice', v, 'ghostpolice'); })));
-    body.appendChild(mkRow('Speed cameras', 'Fixed enforcement cameras as their own pins',
-      mkToggle(S.settings.ghostCamera, function (v) { ST.setSetting('ghostCamera', v); })));
-    body.appendChild(mkRow('Police hotspots', 'Heatmap of where police are usually seen at this hour',
-      mkToggle(S.settings.ghostHotspots !== false, function (v) { ST.setSetting('ghostHotspots', v, 'ghosthotspots'); })));
-
-    /* ---- Aircraft ---- */
-    buildAircraftSettings(body);
-
-    /* ---- Hardware radar detector (BLE) ---- */
-    buildDetectorSettings(body);
-
-    /* ---- Data overlays ---- */
-    body.appendChild(U.el('div', 'section-label', 'Map overlays'));
-    body.appendChild(mkRow('Weather', 'Live precipitation radar (RainViewer, no key)',
-      mkToggle(S.settings.showWeather, function (v) { ST.setSetting('showWeather', v, 'weather'); })));
-    body.appendChild(mkField('Radar color', mkSegmented([
-      { label: 'Radar', value: 'rain' },
-      { label: 'Blue', value: 'temp' },
-      { label: 'Vivid', value: 'wind' }
-    ], S.settings.weatherLayer, function (v) { ST.setSetting('weatherLayer', v, 'weatherlayer'); })));
-    body.appendChild(mkRow('Traffic', 'Live flow heatmap' + (A.config && A.config.routeCaps && A.config.routeCaps.routing ? '' : ' (needs server key)'),
-      mkToggle(S.settings.showTraffic, function (v) { ST.setSetting('showTraffic', v, 'traffic'); })));
-    body.appendChild(mkRow('Hazards', 'Weather + reported road hazards as pins',
-      mkToggle(S.settings.showHazards, function (v) { ST.setSetting('showHazards', v, 'hazards'); })));
-
-    // Units was a bare field floating between the overlay toggles and the legal
-    // block, belonging to neither. It governs every distance and speed in the
-    // app, so it gets its own heading instead of hiding under someone else's.
+    // Units governs every distance and speed in the app, so it gets its own
+    // heading.
     body.appendChild(U.el('div', 'section-label', 'Units'));
     body.appendChild(mkField('Distance & speed', mkSegmented([
       { label: 'Miles', value: 'mi' },
@@ -2472,7 +2134,7 @@
       'Maps © <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a> & ' +
       '<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OSM</a> ' +
       '(<a href="https://opendatacommons.org/licenses/odbl/" target="_blank" rel="noopener">ODbL</a>) · ' +
-      'Routing by OSRM & TomTom · Radar by RainViewer · Aircraft by OpenSky.<br>' +
+      'Routing by OSRM & TomTom.<br>' +
       '<a href="' + legalUrl('/notices') + '" target="_blank" rel="noopener">Full attribution &amp; licences</a>');
     body.appendChild(about);
   }
@@ -2534,74 +2196,6 @@
     }
     r.appendChild(control);
     return r;
-  }
-
-  /* ============================== aircraft settings ==============================
-     One section, five categories, and each switch governs BOTH the map dot and
-     the radar board.
-
-     It used to be two sections that looked like one. "Ghost targets" carried
-     Airplanes/Helicopters (a shape filter for the board), and "Aircraft classes"
-     carried Military/Police/EMS/Civilian (an ownership filter, also board-only,
-     with the map drawing everything regardless). So a rider who turned Civilian
-     off watched a screenful of airliners stay exactly where they were. Same
-     switch, one meaning now. */
-  function buildAircraftSettings(body) {
-    var MV = A.mapview || {};
-    var owners = MV.AIRCRAFT_OWNERS || ['military', 'police', 'ems', 'unknown', 'civilian'];
-    var colors = MV.AIRCRAFT_COLORS || {};
-    var labels = MV.AIRCRAFT_LABELS || {};
-    var KEYS = {
-      military: 'ghostAirMil',
-      police: 'ghostAirPolice',
-      ems: 'ghostAirEms',
-      unknown: 'ghostAirUnknown',
-      civilian: 'ghostAirCiv'
-    };
-    var SUBS = {
-      military: 'Transports, tankers, tactical callsigns',
-      police: 'Law-enforcement aircraft and rotor units',
-      ems: 'Air ambulances and rescue helicopters',
-      unknown: 'No callsign, or one we will not guess at',
-      civilian: 'Airliners and private aircraft'
-    };
-
-    body.appendChild(U.el('div', 'section-label', 'Aircraft'));
-
-    owners.forEach(function (o) {
-      // A coloured dot in the row title is the legend — the same colour the map
-      // draws — so there is no separate key to cross-reference while driving.
-      var title = U.el('span', 'air-cat');
-      var dot = U.el('span', 'air-dot');
-      dot.style.color = colors[o] || '#e8edf6';
-      title.appendChild(dot);
-      title.appendChild(document.createTextNode(labels[o] || o));
-
-      var row = mkRow(labels[o] || o, SUBS[o], mkToggle(
-        S.settings[KEYS[o]] !== false,
-        function (v) {
-          ST.setSetting(KEYS[o], v);
-          if (MV.setAircraftFilter) MV.setAircraftFilter();
-        }));
-      // Swap the plain bold title for the dotted one.
-      var b = row.querySelector('b');
-      if (b) { b.textContent = ''; b.appendChild(title); }
-      body.appendChild(row);
-    });
-
-    body.appendChild(U.el('div', 'hint-card',
-      '<b>Unidentified</b> is a real answer, not a bug. Live ADS-B carries no ownership ' +
-      'field, so a contact is placed by its callsign — and one that is neither an ' +
-      'airline flight number nor a registration is left unidentified rather than ' +
-      'quietly filed as civilian. Aircraft show only while <b>Ghost mode</b> is on.'));
-
-    /* Shape filter — genuinely separate from ownership, and only the board uses
-       it, so it says so rather than sitting next to the category switches as if
-       it did the same job. */
-    body.appendChild(mkRow('Rank airplanes on the radar', 'Fixed-wing contacts on the threat board',
-      mkToggle(S.settings.ghostAir, function (v) { ST.setSetting('ghostAir', v); })));
-    body.appendChild(mkRow('Rank helicopters on the radar', 'Rotor contacts on the threat board',
-      mkToggle(S.settings.ghostHeli, function (v) { ST.setSetting('ghostHeli', v); })));
   }
 
   /* ============================== voice chat settings ==============================
@@ -2760,130 +2354,6 @@
     return s;
   }
 
-  /* ============================== radar detector settings ============================== */
-  // Scan for nearby BLE detectors, pick one to connect, and toggle auto-connect
-  // + crowd-upload. On the web (no native plugin) this shows the compatibility
-  // list only — the scan button explains it needs the Android app.
-  function buildDetectorSettings(body) {
-    body.appendChild(U.el('div', 'section-label', 'Radar detector'));
-    var isNative = A.native && A.native.isNative && A.native.isNative();
-
-    // Connection status line.
-    var status = U.el('div', 'det-status');
-    status.id = 'det-status';
-    function renderStatus(st) {
-      var connected = st && st.connected;
-      var name = S.settings.detectorName || '';
-      status.className = 'det-status' + (connected ? ' on' : '');
-      status.innerHTML = '<span class="det-dot"></span>' +
-        (connected ? ('Connected' + (st.family ? ' · ' + U.esc(st.family) : '') + (name ? ' · ' + U.esc(name) : ''))
-          : (name ? ('Saved: ' + U.esc(name) + ' · not connected') : 'No detector connected'));
-    }
-    renderStatus(A.native && A.native.state ? A.native.state().det : null);
-    // Detach the previous render's subscriptions first. buildSettings() clears
-    // and rebuilds this whole section every time the Profile panel is opened
-    // (openPanel → buildSettings → here), so subscribing without unsubscribing
-    // grew the 'detector:state' and 'detector:device' listener lists by two on
-    // every open — permanently, each old closure still doing DOM work against a
-    // detached node on every BLE state change.
-    detachDetectorSubs();
-    detectorSubs.push(ST.on('detector:state', renderStatus));
-    body.appendChild(status);
-
-    // Scan + device picker.
-    var scanBtn = U.el('button', 'btn btn-ghost btn-block', 'Scan for detectors');
-    var picker = U.el('div', 'det-picker');
-    picker.hidden = true;
-    var seen = {};
-    function addDevice(d) {
-      if (!d || !d.id || seen[d.id]) return;
-      seen[d.id] = 1;
-      var row = U.el('button', 'det-dev' + (d.compatible ? ' ok' : ''));
-      row.type = 'button';
-      row.innerHTML =
-        '<span class="det-dev-main"><b>' + U.esc(d.name || '(unnamed)') + '</b>' +
-        '<i>' + (d.compatible ? (U.esc(d.brand || 'Compatible') + (d.stream ? '' : ' · limited')) : 'Not a known detector') + '</i></span>' +
-        '<span class="det-dev-rssi">' + (d.rssi != null ? d.rssi + ' dBm' : '') + '</span>';
-      row.disabled = !d.compatible;
-      row.addEventListener('click', function () { chooseDevice(d); });
-      picker.appendChild(row);
-    }
-    function chooseDevice(d) {
-      ST.setSetting('detectorId', d.id);
-      ST.setSetting('detectorName', d.name || d.brand || 'Detector');
-      renderStatus(A.native && A.native.state ? A.native.state().det : null);
-      if (A.native && A.native.connectDetector) A.native.connectDetector(d.id, d.family);
-      toast('Connecting to ' + (d.name || 'detector') + '…', 'info');
-      picker.hidden = true;
-    }
-    // Live-stream devices as the native scan discovers them. Tracked with the
-    // status subscription above so both come off on the next rebuild.
-    detectorSubs.push(ST.on('detector:device', addDevice));
-
-    scanBtn.addEventListener('click', function () {
-      if (!isNative || !A.native.listDetectors) {
-        toast('Detector scanning needs the Convoy Android app', 'warn');
-        return;
-      }
-      // Gated before the scan, not after: in a state or country where a detector
-      // is unlawful, the useful moment to say so is before someone goes looking
-      // for one to pair.
-      legalGate('detector', runScan);
-    });
-
-    function runScan() {
-      seen = {}; picker.innerHTML = ''; picker.hidden = false;
-      picker.appendChild(U.el('div', 'det-scanning', 'Scanning for Bluetooth detectors…'));
-      scanBtn.disabled = true; scanBtn.textContent = 'Scanning…';
-      A.native.listDetectors().then(function (list) {
-        picker.innerHTML = '';
-        var compat = (list || []).filter(function (d) { return d.compatible; });
-        var rest = (list || []).filter(function (d) { return !d.compatible; });
-        if (!compat.length && !rest.length) {
-          picker.appendChild(U.el('div', 'det-scanning', 'No Bluetooth devices found. Turn the detector on and make sure it is pairing.'));
-        }
-        compat.concat(rest).forEach(addDevice);
-        scanBtn.disabled = false; scanBtn.textContent = 'Scan again';
-      }).catch(function () {
-        scanBtn.disabled = false; scanBtn.textContent = 'Scan for detectors';
-      });
-    }
-    body.appendChild(scanBtn);
-    body.appendChild(picker);
-
-    if (S.settings.detectorId) {
-      var forget = U.el('button', 'btn btn-ghost btn-small', 'Forget detector');
-      forget.addEventListener('click', function () {
-        ST.setSetting('detectorId', '');
-        ST.setSetting('detectorName', '');
-        if (A.native && A.native.stopDetector) A.native.stopDetector();
-        renderStatus(null);
-        toast('Detector forgotten', 'info');
-      });
-      body.appendChild(forget);
-    }
-
-    body.appendChild(mkRow('Auto-connect', 'Connect the saved detector when Ghost Mode turns on',
-      mkToggle(S.settings.detectorAuto !== false, function (v) { ST.setSetting('detectorAuto', v); })));
-    body.appendChild(mkRow('Share detections', 'Upload likely-police radar to the map for nearby riders',
-      mkToggle(S.settings.detectorUpload !== false, function (v) { ST.setSetting('detectorUpload', v); })));
-
-    // Compatibility reference — every supported model, grouped by brand.
-    var compatWrap = U.el('details', 'det-compat');
-    var sum = U.el('summary', null, 'Compatible detectors');
-    compatWrap.appendChild(sum);
-    var byBrand = A.detectors ? A.detectors.supportedByBrand() : {};
-    Object.keys(byBrand).forEach(function (brand) {
-      var models = byBrand[brand].filter(function (m) { return m.bt; });
-      if (!models.length) return;
-      var grp = U.el('div', 'det-compat-grp');
-      grp.innerHTML = '<b>' + U.esc(brand) + '</b> <span>' +
-        models.map(function (m) { return U.esc(m.name); }).join(' · ') + '</span>';
-      compatWrap.appendChild(grp);
-    });
-    body.appendChild(compatWrap);
-  }
-
   /* ============================== search ============================== */
   function wireSearch() {
     var input = document.getElementById('search-input');
@@ -2915,7 +2385,6 @@
       item.addEventListener('mousedown', function (e) { e.preventDefault(); choose(r); });
       results.appendChild(item);
     }
-    var STAR_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="m12 3.6 2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.2-4.1 5.8-.8Z"/></svg>';
     // Show/hide the results list with the combobox semantics kept in step — a
     // bare `results.hidden = x` left aria-expanded stuck and screen readers
     // announcing the list as permanently closed.
@@ -2924,19 +2393,12 @@
       input.setAttribute('aria-expanded', String(!!v));
     }
     function showRecents() {
-      var savedP = (A.places && A.places.list()) || []; // starred places first
       var rec = loadRecents();
-      if (!savedP.length && !rec.length) { items = []; showResults(false); return; } // clear so Enter can't pick an invisible stale result
-      items = savedP.concat(rec);
+      if (!rec.length) { items = []; showResults(false); return; } // clear so Enter can't pick an invisible stale result
+      items = rec;
       results.innerHTML = '';
-      if (savedP.length) {
-        results.appendChild(U.el('div', 'sr-head', 'Saved'));
-        savedP.forEach(function (r) { addRow(r, STAR_SVG); });
-      }
-      if (rec.length) {
-        results.appendChild(U.el('div', 'sr-head', 'Recent'));
-        rec.forEach(function (r) { addRow(r, CLOCK_SVG); });
-      }
+      results.appendChild(U.el('div', 'sr-head', 'Recent'));
+      rec.forEach(function (r) { addRow(r, CLOCK_SVG); });
       showResults(true);
     }
 
@@ -3281,6 +2743,21 @@
     return list.length;
   }
 
+  /* App Store guideline 4.8: an app that offers a third-party sign-in (Google,
+     GitHub, …) on iOS must offer Sign in with Apple beside it. The username +
+     password and email paths are the app's own and are exempt — so on iOS the
+     social buttons are drawn only when Apple is among the enabled providers;
+     a deployment that enables Google alone falls back to the first-party
+     paths rather than shipping a build the review would reject. Android and
+     the web are untouched (the list is drawn as the server sent it). */
+  function applyAppleSignInRule(cfg) {
+    if (!cfg || !A.config || A.config.platform !== 'ios') return cfg;
+    var list = cfg.providers || [];
+    var hasApple = list.some(function (p) { return p && p.id === 'apple'; });
+    if (hasApple || !list.length) return cfg;
+    return Object.assign({}, cfg, { providers: [] });
+  }
+
   // Cached across renders — renderAuth redraws on every step and this must not
   // refetch each time. A.auth.config() caches too; this keeps it synchronous so
   // the card can be built in one pass without a loading flash.
@@ -3293,7 +2770,7 @@
   function withCatalog(fn) { A.data.ensure().catch(function () { return null; }).then(fn); }
 
   function withAuthConfig(fn) {
-    A.auth.config().then(function (cfg) { authCfg = cfg; authCfgLoaded = true; fn(cfg); });
+    A.auth.config().then(function (cfg) { authCfg = applyAppleSignInRule(cfg); authCfgLoaded = true; fn(authCfg); });
   }
 
   var errSeq = 0;
@@ -3727,107 +3204,6 @@
       });
     });
     card.appendChild(btn);
-    openOverlay(card);
-  }
-
-  /* ---------------- feature legality notices ----------------
-     Some of what Convoy can do is lawful in one place and an offence a border
-     away — enforcement markers, a paired radar detector, scanner audio in a
-     moving car, a timed run. Burying that in §5 of the Terms and calling it told
-     is not good enough for a feature someone taps on impulse, so each of these
-     says it once, at the moment it is first switched on, in plain words.
-
-     Once per feature per terms version (ST.ackFeature), not every time: a notice
-     that fires on every tap gets dismissed without reading, which is worse than
-     no notice at all. */
-  var FEATURE_NOTICES = {
-    radar: {
-      title: 'Before you turn on radar',
-      lede: 'Ghost Mode shows police stations, speed and ALPR cameras, and enforcement ' +
-        'hotspots from public data.',
-      points: [
-        'Warning a <b>driver</b> about speed cameras or police is restricted or illegal in ' +
-          'several countries, including Germany, France, Switzerland and Austria. Know the ' +
-          'rule where you are.',
-        'A marker doesn\'t mean anyone is there, and an empty map doesn\'t mean nobody is. ' +
-          'This data is incomplete and often out of date.',
-        'Never use it to evade or interfere with law enforcement.'
-      ]
-    },
-    detector: {
-      title: 'Before you pair a detector',
-      lede: 'Convoy can pair with a hardware radar detector over Bluetooth.',
-      points: [
-        '<b>Radar detectors are illegal in Virginia and Washington DC</b>, in every US ' +
-          'commercial vehicle over 10,000 lbs (49 CFR 392.71), in most Canadian provinces, ' +
-          'and across much of Europe. In some places possession alone is an offence.',
-        'Pairing one where it is unlawful is your act, not ours, and breaches the Terms.'
-      ]
-    },
-    scanner: {
-      title: 'Before you listen in',
-      lede: 'These are public safety radio feeds, streamed from OpenMHz. Convoy never ' +
-        'transmits and never decodes encrypted traffic.',
-      points: [
-        '<b>Listening to a scanner in a moving vehicle is restricted or illegal in several ' +
-          'US states</b> — Florida, Indiana, Kentucky, Minnesota, New York and New Jersey ' +
-          'among them — and some countries require a licence to receive at all.',
-        'Using what you hear to commit or escape an offence is a separate and far more ' +
-          'serious one, almost everywhere.'
-      ]
-    },
-    perf: {
-      title: 'Track and private land only',
-      lede: 'The performance meter and race timer measure acceleration from GPS.',
-      points: [
-        '<b>These are for a closed course, private land, or a licensed track</b> — with the ' +
-          'operator\'s or landowner\'s permission.',
-        'Using them on a public road is street racing. It is illegal everywhere, it is the ' +
-          'fastest way to lose a licence and a car, and it is a breach of the Terms.',
-        'Timing runs is a passenger\'s job. The driver drives.'
-      ]
-    }
-  };
-
-  // Runs `onProceed` once the rider has acknowledged, immediately if they
-  // already have. `onCancel` is optional — callers that toggled something on
-  // before asking use it to put the control back.
-  function legalGate(key, onProceed, onCancel) {
-    var spec = FEATURE_NOTICES[key];
-    if (!spec || (ST.featureAcked && ST.featureAcked(key))) { onProceed(); return; }
-
-    var card = U.el('div', 'modal-card');
-    card.appendChild(U.el('div', 'auth-title', spec.title));
-    card.appendChild(U.el('div', 'ob-note', spec.lede));
-
-    var warn = U.el('div', 'consent-warn');
-    warn.innerHTML = '<b>Where you are decides whether this is legal.</b>' +
-      '<span>Convoy makes it available. Knowing the rule is on you.</span>';
-    card.appendChild(warn);
-
-    var list = U.el('ul', 'legal-list');
-    list.innerHTML = spec.points.map(function (p) { return '<li>' + p + '</li>'; }).join('');
-    card.appendChild(list);
-
-    card.appendChild(U.el('div', 'ob-note',
-      'Full detail in <a href="' + legalUrl('/terms#features') + '" target="_blank" rel="noopener">Terms &sect;5</a>.'));
-
-    var ok = U.el('button', 'btn btn-primary btn-block btn-lg',
-      'I understand — it\'s legal where I am');
-    ok.addEventListener('click', function () {
-      ST.ackFeature(key);
-      closeOverlay();
-      onProceed();
-    });
-    card.appendChild(ok);
-
-    var no = U.el('button', 'btn btn-ghost btn-block', 'Not now');
-    no.addEventListener('click', function () {
-      closeOverlay();
-      if (onCancel) onCancel();
-    });
-    card.appendChild(no);
-
     openOverlay(card);
   }
 
@@ -4503,6 +3879,7 @@
       updateDockBadge();
       if (openName === 'convoy') renderConvoy();
       if (openName === 'nearby') updateNearbyLive();
+      renderProfileCard(); // "in convoy" counter on the profile header
     });
     ST.on('chat', function () {
       var log = document.getElementById('chat-log');
@@ -4520,7 +3897,6 @@
     ST.on('theme', function () { A.mapview.applyStyle(); });
     ST.on('mapstyle', function () { A.mapview.applyStyle(); });
     ST.on('accent', function () { A.mapview.applyAccent(); });
-    ST.on('triplog', function () { renderDriveLog(); }); // drive-log list stays live while open
 
     // Voice navigation: keep routing's nav flag + chosen voice in sync with settings.
     if (A.routing && A.routing.setNavEnabled) A.routing.setNavEnabled(S.settings.voiceNav);
@@ -4532,81 +3908,16 @@
       try { window.speechSynthesis.getVoices(); } catch (e) { }
     }
 
-    // Cruise loop — one tap plans a route that loops back to where you are.
-    var loopBtn = document.getElementById('ctl-loop');
-    if (loopBtn) loopBtn.addEventListener('click', function () {
-      if (A.routing && A.routing.promptLoop) A.routing.promptLoop();
-    });
-
-    // Ghost Mode: apply persisted state on boot, react to changes, and build
-    // the status chip. The fetcher starts only after the map is ready.
+    // Invisible mode: the chip shows while hidden, the player marker dims, and
+    // voice drops its proximity peers (js/voice.js listens to 'ghost' itself).
     buildGhostChip();
-    var ghostBtn = document.getElementById('ctl-ghost');
-    if (ghostBtn) ghostBtn.addEventListener('click', function () { applyGhost(!S.settings.ghost); });
     ST.on('ghost', function (v) {
       if (A.mapview && A.mapview.setPlayerGhost) A.mapview.setPlayerGhost(v);
-      if (A.mapview && A.mapview.setGhostLayersVisible) A.mapview.setGhostLayersVisible(v);
-      if (A.ghost) { if (v) A.ghost.start(); else A.ghost.stop(); }
-      // js/radar.js is lazy (A.lazy.radar, js/config.js) — a toggle pulls it in.
-      A.lazy.radar().then(function (r) { r.setActive(v); }).catch(function () {});
       updateGhostChip();
     });
-    // if ghost was already on (persisted), apply it now that the map is live.
-    // Load immediately (not at idle) — this is the returning ghost-mode rider,
-    // one same-origin fetch behind instead of a whole idle tick.
-    if (S.settings.ghost) {
-      if (A.mapview && A.mapview.setPlayerGhost) A.mapview.setPlayerGhost(true);
-      if (A.mapview && A.mapview.setGhostLayersVisible) A.mapview.setGhostLayersVisible(true);
-      if (A.ghost) A.ghost.start();
-      A.lazy.radar().then(function (r) { r.setActive(true); }).catch(function () {});
-    }
+    // Persisted from a previous session: dim the marker now that the map is live.
+    if (S.settings.ghost && A.mapview && A.mapview.setPlayerGhost) A.mapview.setPlayerGhost(true);
 
-    // js/scanners.js is lazy (5.7 KB gzip, A.lazy.scanners) — shim the chip so
-    // a first tap loads it, runs the same legal gate the module used to run on
-    // itself, then hands off. Remove this shim's own listener as soon as the
-    // module resolves: js/scanners.js re-wires #chip-scan itself once loaded,
-    // and leaving both listeners in place would open the directory twice on
-    // the second tap.
-    var scanChip = document.getElementById('chip-scan');
-    if (scanChip) {
-      // Removed synchronously, before the async chain starts — a rapid
-      // double-tap (ordinary on a moving vehicle) used to attach two .then()s
-      // that both fired the legal gate, racing two geolocation + OpenMHz
-      // lookups against each other (reviewer MEDIUM, cycle 4). The shim only
-      // ever needs to fire once PER load attempt; js/scanners.js re-wires the
-      // chip itself once it lands (js/scanners.js:344), so a successful load
-      // has no reason to survive the await boundary. A FAILED load re-attaches
-      // it, or the chip would go permanently dead the moment one fetch drops.
-      var scanShim = function () {
-        scanChip.removeEventListener('click', scanShim);
-        A.lazy.scanners().then(function (s) {
-          if (A.ui && A.ui.legalGate) A.ui.legalGate('scanner', s.open);
-          else s.open();
-        }).catch(function () {
-          scanChip.addEventListener('click', scanShim);
-          toast('Scanners unavailable — try again', 'warn');
-        });
-      };
-      scanChip.addEventListener('click', scanShim);
-    }
-
-    // js/dragy.js is lazy (8.5 KB gzip, A.lazy.dragy) — same shim shape as
-    // #chip-scan above, written with the sync-removal fix from the start.
-    // js/dragy.js:481-486 re-wires #chip-dragy itself once it lands.
-    var dragyChip = document.getElementById('chip-dragy');
-    if (dragyChip) {
-      var dragyShim = function () {
-        dragyChip.removeEventListener('click', dragyShim);
-        A.lazy.dragy().then(function (d) {
-          if (A.ui && A.ui.legalGate) A.ui.legalGate('perf', d.open);
-          else d.open();
-        }).catch(function () {
-          dragyChip.addEventListener('click', dragyShim);
-          toast('Performance meter unavailable — try again', 'warn');
-        });
-      };
-      dragyChip.addEventListener('click', dragyShim);
-    }
     ST.on('auth', function () { renderAccount(); });
     ST.on('profile', function () { if (openName === 'profile') renderAccount(); });
     ST.on('friends', function () {
@@ -4615,13 +3926,6 @@
       if (A.mapview && A.mapview.reclassifyMarkers) A.mapview.reclassifyMarkers();
       renderProfileCard(); // friends counter on the profile header
       renderAwards();      // "Crew" badge
-    });
-    // Own dragy stats landed (runs/wins/PBs) — refresh the profile page numbers.
-    ST.on('stats', function (e) {
-      if (e && e.id && e.id !== 'self') return;
-      renderProfileCard();
-      renderAwards();
-      renderTimes();
     });
     // auth.boot() decides whether to show the auth screen or enter the app
   }
@@ -4664,16 +3968,15 @@
     showReportDialog: showReportDialog,
     showBlockDialog: showBlockDialog,
     showDeleteAccount: showDeleteAccount,
-    legalGate: legalGate,
     renderAccount: renderAccount,
     welcomeBack: welcomeBack,
     openPanel: openPanel,
     closePanels: closePanels,
     refreshAvatarBtn: refreshAvatarBtn,
     setProfilePhoto: handlePhotoFile, // photo → NSFW screen → compress → save (native bridge + tests)
-    applyGhost: applyGhost, // radar dock's exit button toggles ghost off through here
+    applyGhost: applyGhost, // invisible-mode toggle (settings row + status chip)
     openProfileOverlay: openProfileOverlay, // Instagram-style profile view
-    // Raw overlay access — reused by the race lobby/results (race.js).
+    // Raw overlay access for modules that build their own modal card.
     openOverlayRaw: openOverlay,
     closeOverlay: closeOverlay,
     nearbyFilter: function () { return nearbyFilter; }, // mapview reads this to color dots by active filter

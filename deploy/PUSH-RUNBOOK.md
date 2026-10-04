@@ -79,9 +79,6 @@ deploy/live-deploy.sh livetest 2>&1 | tail -8                 # two real WS clie
 # line said so); any `Failed with result` is a failed (re)start. Quote every hit VERBATIM in the
 # report as a finding for the next cycle — the deploy still counts as successful if the service is up.
 deploy/live-deploy.sh diag 2>&1 | tee /tmp/diag-post.txt | grep -nE "\[handler |Failed with result|uncaughtException|crossed WS_MSG_BUDGET" | head
-# Overpass mirror health, from the SAME read (cycle 56, server-034 — no second SSH call): a `served by X after Y …`
-# warn means Y failed and X covered, and Y is now demoted for 2 min; quote any `all mirrors failed` line verbatim.
-grep -n '\[overpass\]' /tmp/diag-post.txt | tail -5
 ```
 What `--ota` does (release.js `pushOta`): packs `www/` → `ota-out/bundle-1.0.NNN.zip` + manifest,
 uploads the site tarball and restarts the `convoy` systemd unit (~5 s, riders reconnect), then
@@ -122,7 +119,6 @@ keystore would not install over existing riders' installs (signature mismatch). 
 3. What did NOT move and why (held-back gate, HIGH finding, no keystore).
 4. Human-only items carried forward (see STATE.md "Human-only actions").
 5. The production-signal read: every `[handler …]` / `Failed with result` line verbatim, or "none".
-6. The `[overpass]` lines from that same read: any `all mirrors failed` verbatim; `served by … after …` lines counted (cycle 56).
 
 ## Never
 

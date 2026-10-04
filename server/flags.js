@@ -29,8 +29,8 @@
      app                                     — THE MASTER SWITCH. false = the
                                                whole API answers 503 and live
                                                sockets are refused. See below.
-     routing | waze | hotspots | incidents   — the four /api/route/caps
-                                               features riders see
+     routing                                 — the /api/route/caps feature
+                                               riders see (TomTom routing)
      telemetry                               — accept POST /api/telemetry
      registration | login                    — sign-up / sign-in gates
      ota                                     — the OTA channel (false = halt)
@@ -62,8 +62,7 @@ const store = require('./store');
 const DATA_DIR = store.DATA_DIR;
 const FLAGS_FILE = path.join(DATA_DIR, 'flags.json');
 
-const KNOWN = ['app', 'routing', 'waze', 'hotspots', 'incidents',
-  'telemetry', 'registration', 'login', 'ota'];
+const KNOWN = ['app', 'routing', 'telemetry', 'registration', 'login', 'ota'];
 
 // The master switch is first in KNOWN so the panel's board renders it at the
 // top, and named here so nothing has to hardcode the string 'app'.

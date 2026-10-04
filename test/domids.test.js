@@ -15,7 +15,7 @@
 
    Four groups:
      D1  resolution — every document.getElementById('<literal>') in js/*.js,
-         plus the literal calls through js/radar.js's byId() wrapper, names an
+         names an
          id that is (a) static in index.html, (b) assigned somewhere in js/
          (el.id = '…', setAttribute('id', '…'), or id="…" inside a JS string /
          template literal) or (c) in ALLOW below. Zero unresolved.
@@ -49,9 +49,11 @@ const ALLOW = {
   'theme-css-custom': "computed: js/themes.js ensureCss() builds the <style> tag id as 'theme-css-' + def.id, so the custom theme's tag is never written as a literal; setCustom() looks it up to drop the stale block before re-injecting"
 };
 // Wrappers around document.getElementById that take the id as their only
-// argument — literal calls through them are the same class of lookup.
-const WRAPPERS = { 'js/radar.js': 'byId' };
-const WRAPPER_SRC = 'function byId(id) { return document.getElementById(id); }';
+// argument — literal calls through them are the same class of lookup. None
+// ship today (js/radar.js's byId() left with the radar HUD); a new one is
+// added here with its exact source so D1 can prove it is still a bare wrapper.
+const WRAPPERS = {};
+const WRAPPER_SRC = '';
 
 /* ---------------- (a) static ids in index.html ---------------- */
 const staticIds = new Set();
@@ -109,8 +111,8 @@ console.log('    literal lookups: ' + lookups.length + ' (' + direct.length + ' 
 
 /* ================= D1 — resolution ================= */
 group('D1 — every id the client looks up by literal resolves: static in index.html, assigned in js/, or allowlisted with a reason');
-ok('every js/*.js parses (' + jsFiles.length + ' files) and the scan is real: >= 90 literal lookups (' + lookups.length + ') over >= 60 static ids (' + staticIds.size + ')',
-  parseErrors.length === 0 && lookups.length >= 90 && staticIds.size >= 60, parseErrors.join('; '));
+ok('every js/*.js parses (' + jsFiles.length + ' files) and the scan is real: >= 60 literal lookups (' + lookups.length + ') over >= 35 static ids (' + staticIds.size + ')',
+  parseErrors.length === 0 && lookups.length >= 60 && staticIds.size >= 35, parseErrors.join('; '));
 ok('0 unresolved lookups (' + unresolved.length + ' found) — a getElementById that returns null on the shipped page is a feature that silently does nothing',
   unresolved.length === 0, 'fix the id in index.html or the JS that builds the element: ' + unresolved.map(site).join('  '));
 for (const file of Object.keys(WRAPPERS)) {
@@ -142,13 +144,13 @@ ok("the reason still holds: js/themes.js builds the tag id as 'theme-css-' + def
 // static id is added or removed on purpose, update the number here so the
 // change is visible in the diff instead of silent.
 group('D3 — informational pins (update the number when the tree changes on purpose; never a ratchet)');
-ok('102 direct document.getElementById(\'<literal>\') sites (measured ' + direct.length + ')', direct.length === 102);
-ok('7 literal lookups through the js/radar.js byId() wrapper (measured ' + viaWrapper.length + ')', viaWrapper.length === 7);
-ok('71 static id="…" in index.html (measured ' + staticIds.size + ')', staticIds.size === 71);
-ok('22 referenced ids that are not static: 21 assigned in js/ + 1 allowlisted (measured ' + notStatic.length + ' = ' + jsAssignedRefs.length + ' + ' + notStatic.filter((id) => ALLOW[id]).length + ')',
-  notStatic.length === 22 && jsAssignedRefs.length === 21);
-ok('3 non-literal getElementById calls, all known: the js/radar.js wrapper itself and the two computed theme tags in js/themes.js (measured ' + dynamicLookups.length + ': ' + dynamicLookups.join(', ') + ')',
-  dynamicLookups.length === 3 && dynamicLookups.every((d) => /^js\/(radar|themes)\.js:/.test(d)));
+ok('78 direct document.getElementById(\'<literal>\') sites (measured ' + direct.length + ')', direct.length === 78);
+ok('0 literal lookups through a wrapper — no wrapper ships today (measured ' + viaWrapper.length + ')', viaWrapper.length === 0);
+ok('44 static id="…" in index.html (measured ' + staticIds.size + ')', staticIds.size === 44);
+ok('18 referenced ids that are not static: 17 assigned in js/ + 1 allowlisted (measured ' + notStatic.length + ' = ' + jsAssignedRefs.length + ' + ' + notStatic.filter((id) => ALLOW[id]).length + ')',
+  notStatic.length === 18 && jsAssignedRefs.length === 17);
+ok('2 non-literal getElementById calls, both known: the two computed theme tags in js/themes.js (measured ' + dynamicLookups.length + ': ' + dynamicLookups.join(', ') + ')',
+  dynamicLookups.length === 2 && dynamicLookups.every((d) => /^js\/themes\.js:/.test(d)));
 
 /* ================= D4 — the ledger, executed ================= */
 group('D4 — BUGS.md frontend-001 / 008 / 009 / 010: every id those functions dereference is looked up where the entry says and is static in index.html');

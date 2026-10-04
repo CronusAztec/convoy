@@ -19,7 +19,7 @@ Last reviewed: 2026-08-25.
 | Component | Version | Licence | Notes |
 |---|---|---|---|
 | [MapLibre GL JS](https://maplibre.org/) | 5.24.0 | BSD-3-Clause | Loaded from jsDelivr. Map renderer. |
-| [Capacitor](https://capacitorjs.com/) (`@capacitor/core`, `/android`, `/geolocation`, CLI) | 8.x | MIT | Android shell + geolocation bridge. |
+| [Capacitor](https://capacitorjs.com/) (`@capacitor/core`, `/android`, `/ios`, `/geolocation`, `/app`, `/browser`, CLI) | 8.x | MIT | Android + iOS shells; geolocation, app-lifecycle (deep links) and system-browser (sign-in) bridges. |
 | [TensorFlow.js](https://www.tensorflow.org/js) | 4.22.0 | Apache-2.0 | Loaded from jsDelivr **only when a rider picks a profile photo**. Runs on-device. |
 | [NSFWJS](https://github.com/infinitered/nsfwjs) + MobileNet v2 model | 4.2.1 | Apache-2.0 (model: Apache-2.0) | Same. Screens the photo locally; nothing is uploaded to screen it. |
 | **Google Play Services** — `play-services-location` (+ `-base`, `-basement`, `-tasks`, `auth-api-signin`) | — | [Google APIs Terms of Service](https://developers.google.com/terms) — **not open source** | Linked into the APK transitively by `@capacitor/geolocation`. The fused location provider behind every GPS fix. |
@@ -44,34 +44,17 @@ Full text: <https://github.com/maplibre/maplibre-gl-js/blob/main/LICENSE.txt>
 
 | Source | Used for | Licence / terms | Attribution shown |
 |---|---|---|---|
-| [OpenStreetMap](https://www.openstreetmap.org/copyright) | Basemap geometry, POIs via Overpass, geocoding via Nominatim | **ODbL 1.0** — © OpenStreetMap contributors | Map attribution control + Settings → About |
+| [OpenStreetMap](https://www.openstreetmap.org/copyright) | Basemap geometry, geocoding via Nominatim | **ODbL 1.0** — © OpenStreetMap contributors | Map attribution control + Settings → About |
 | [CARTO basemaps](https://carto.com/attributions) | Dark / light / voyager tile styles | CARTO attribution required | Map attribution control + Settings → About |
 | [OpenFreeMap](https://openfreemap.org/) | Alternate tile host | ODbL (OSM data), free public tiles | Map attribution control |
 | [Nominatim](https://operations.osmfoundation.org/policies/nominatim/) | Destination search | OSMF usage policy — **max 1 req/s, no heavy use, User-Agent required** | Map attribution control |
 | [OSRM demo server](https://routing.openstreetmap.de/) | Keyless routing fallback | Demo server, **no SLA, not for production volume** | Settings → About |
-| [Overpass API](https://overpass-api.de/) | Police stations, cameras, road furniture | OSMF/instance fair-use policy | Map attribution control |
-| [TomTom](https://developer.tomtom.com/) | Traffic-aware routing + traffic flow tiles (operator key) | TomTom Developer Terms — **attribution required**, no scraping, no permanent storage of results | Map attribution control when the layer is on |
+| [TomTom](https://developer.tomtom.com/) | Traffic-aware routing (operator key) | TomTom Developer Terms — **attribution required**, no scraping, no permanent storage of results | Settings → About |
 
 > **Operator obligation.** The Nominatim, OSRM, and Overpass public endpoints are
 > shared community infrastructure offered for development, not production
 > traffic. Running Convoy at scale against them breaches their usage policies.
 > Self-host or buy capacity before public launch.
-
----
-
-## Live data feeds
-
-| Source | Used for | Terms |
-|---|---|---|
-| [OpenSky Network](https://opensky-network.org/) | Live aircraft in Ghost Mode radar | Free for **non-commercial** use; commercial use requires a licence agreement |
-| [airplanes.live / ADS-B Exchange](https://airplanes.live/) | Aircraft fallback feed | Attribution required; non-commercial terms |
-| [RainViewer](https://www.rainviewer.com/api.html) | Precipitation radar overlay | Free tier requires attribution; commercial tiers separate |
-| [OpenMHz](https://openmhz.com/) | Public-safety scanner feed directory | Public feeds; **listening is subject to local law — see the Terms of Service** |
-| [Open-Meteo](https://open-meteo.com/) | Weather conditions | CC-BY 4.0, attribution required |
-| [NWS / weather.gov](https://www.weather.gov/) | US weather alerts | US Government work, public domain |
-| [PulsePoint](https://www.pulsepoint.org/) | Public incident feed (US) | Public agency feed |
-| [Waze](https://www.waze.com/), [Citizen](https://citizen.com/) | Public incident reports | **Publicly available data only.** Not an official partnership or endorsement. Convoy is not affiliated with Waze/Google or Citizen. |
-| City open-data portals (Austin, Calgary, Honolulu) | Enforcement / incident datasets | Each portal's open-data licence |
 
 ---
 
@@ -94,5 +77,4 @@ These are Convoy's sub-processors. See the [Privacy Policy](legal/privacy.html).
 Vehicle makes, models, and trims listed in the garage are trademarks of their
 respective owners and are used nominatively to let riders describe their own
 car. Convoy is not affiliated with, endorsed by, or sponsored by any vehicle
-manufacturer. The same applies to Escort, Bel, and SABRE (radar-detector
-interoperability), Waze, Citizen, Google, and Apple.
+manufacturer. The same applies to Google and Apple.

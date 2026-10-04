@@ -57,9 +57,9 @@ Each bug has:
 - **Impact:** One missing/mis-typed control ID hard-crashes the whole control bar at boot. Inconsistent vs the null-checked `ctl-global` at 1008.
 - **Fix:** Guard each like `ctl-global`: `var z = document.getElementById('ctl-zoom-in'); if (z) z.addEventListener('click', ...);` for all five.
 
-### BUG frontend-002 — FIXED (re-statused cycle 60 stage 59, 2026-09-03; fixed in an earlier cycle, never re-statused)
+### BUG frontend-002 — STALE (feature removed 2026-10-04; was FIXED (re-statused cycle 60 stage 59, 2026-09-03; fixed in an earlier cycle, never re-statused))
 - **Severity:** high
-- **Status:** FIXED (re-verified 2026-09-03) — phantom, fixed in an earlier cycle and never re-statused: `js/race.js:333` sets `finished: !!mem.finished` on the sort wrapper, the comment below it says so ("used to read a.finished off the wrapper, which never had the field") and both comparisons are the prescribed ones
+- **Status:** STALE (re-verified 2026-10-04) — the feature this entry belongs to was removed in the store-readiness cut (radar / scanners / racing / overlays / instrument HUD and their server feeds); `js/race.js` no longer exists
 - **File:** `js/race.js:308-314`
 - **Title:** `paintHud` sort comparator reads `a.finished`/`b.finished` which never exist (the flag lives on `mem`)
 - **Repro:** Multiplayer race, ≥2 opponents. Opponent A finishes 12.5 s, B finishes 14.0 s. The two finished rows are not reliably A-then-B (depends on engine sort stability).
@@ -86,25 +86,25 @@ Each bug has:
 
 ### BUG frontend-005 — STALE (re-statused cycle 60 stage 59, 2026-09-03; the premise cannot occur in the tree)
 - **Severity:** medium
-- **Status:** STALE (re-verified 2026-09-03) — the premise cannot occur: `js/dragy.js:238` only calls `uploadPB()` when `A.auth.isLoggedIn()` is true, and that is `hasSession()` at `js/auth.js:60`, `!!(S.auth && S.auth.token)` — a truthy answer guarantees the token the header at `js/dragy.js:248` reads in the same synchronous tick (`js/state.js:221` also refuses to restore a saved session without a token). Nit for C4b if bytes allow: route the call through the `api()` helper's conditional header at `js/auth.js:45` instead of building it by hand
+- **Status:** STALE (re-verified 2026-10-04) — the feature this entry belongs to was removed in the store-readiness cut (radar / scanners / racing / overlays / instrument HUD and their server feeds); `js/dragy.js` no longer exists
 - **File:** `js/dragy.js:183-201`
 - **Title:** `uploadPB` sends `Authorization: Bearer undefined` when token is missing but `isLoggedIn()` is truthy
 - **Repro:** Set `A.state.auth = { username:'x' }` (no `.token`), complete a PB run. Outgoing POST header is `Authorization: Bearer undefined`.
 - **Impact:** Silent PB sync failure with malformed auth header; confusing server logs.
 - **Fix:** Build the header conditionally: `var tok = A.state.auth && A.state.auth.token; if (!tok) return; headers.Authorization = 'Bearer ' + tok;`
 
-### BUG frontend-006 — FIXED (re-statused cycle 60 stage 59, 2026-09-03; fixed in an earlier cycle, never re-statused)
+### BUG frontend-006 — STALE (feature removed 2026-10-04; was FIXED (re-statused cycle 60 stage 59, 2026-09-03; fixed in an earlier cycle, never re-statused))
 - **Severity:** medium
-- **Status:** FIXED (re-verified 2026-09-03) — phantom, fixed in an earlier cycle and never re-statused: `js/overlays.js:283-285` re-reads `S.settings.showWeather` inside the `refreshRadar().then` before revealing the layer, with the comment "this reveal used to run anyway and resurrected the layer the rider just killed"
+- **Status:** STALE (re-verified 2026-10-04) — the feature this entry belongs to was removed in the store-readiness cut (radar / scanners / racing / overlays / instrument HUD and their server feeds); `js/overlays.js` no longer exists
 - **File:** `js/overlays.js:255-265`
 - **Title:** Toggling weather off races the in-flight `refreshRadar()` promise and re-shows the layer
 - **Repro:** Toggle weather on, then off within ~1 s (before RainViewer fetch resolves). Layer reappears when the promise resolves.
 - **Impact:** Weather layer "ghost-on" after explicit disable.
 - **Fix:** Capture desired state at call time and re-check inside `.then` (generation counter, or check `S.settings.showWeather`).
 
-### BUG frontend-007 — FIXED (re-statused cycle 60 stage 59, 2026-09-03; fixed in an earlier cycle, never re-statused)
+### BUG frontend-007 — STALE (feature removed 2026-10-04; was FIXED (re-statused cycle 60 stage 59, 2026-09-03; fixed in an earlier cycle, never re-statused))
 - **Severity:** medium
-- **Status:** FIXED (re-verified 2026-09-03) — phantom, fixed in an earlier cycle and never re-statused: the dead `var speed = … ? null : null;` line is gone from `js/race.js` (the only speed-named local left is `speedTxt`, which is read); `:165-178` is now the `fixListener` + relay-suppression block
+- **Status:** STALE (re-verified 2026-10-04) — the feature this entry belongs to was removed in the store-readiness cut (radar / scanners / racing / overlays / instrument HUD and their server feeds); `js/race.js` no longer exists
 - **File:** `js/race.js:172`
 - **Title:** Dead placeholder `var speed = (A.dragy && A.dragy._state) ? null : null;` — always null, never read
 - **Repro:** Static — `speed` declared, assigned null, never referenced.
@@ -120,9 +120,9 @@ Each bug has:
 - **Impact:** Uncaught error on every party membership change when the badge is absent.
 - **Fix:** `var badge = document.getElementById('dock-convoy-badge'); if (!badge) return;`
 
-### BUG frontend-009 — FIXED (re-statused cycle 60 stage 59, 2026-09-03; fixed in an earlier cycle, never re-statused)
+### BUG frontend-009 — STALE (feature removed 2026-10-04; was FIXED (re-statused cycle 60 stage 59, 2026-09-03; fixed in an earlier cycle, never re-statused))
 - **Severity:** high
-- **Status:** FIXED (re-verified 2026-09-03) — phantom, fixed in an earlier cycle and never re-statused: `js/routing.js:977-978` (`if (card) { … }`) and `:1123-1124` (`renderEtaCard()`: `if (!card) return;` — "a page variant without the card must not abort the route commit"); `#eta-card` resolves on the shipped page, executed by `test/domids.test.js` group D4 (cycle 60) — whose RED run also named two `eta-card` lookups this entry never listed, `js/tripextras.js:71` and `:136`
+- **Status:** STALE (re-verified 2026-10-04) — the feature this entry belongs to was removed in the store-readiness cut (radar / scanners / racing / overlays / instrument HUD and their server feeds); `js/tripextras.js` no longer exists
 - **File:** `js/routing.js:714-723, 859-862`
 - **Title:** `clearRoute()` and `renderEtaCard()` dereference `#eta-card` (`classList`/`hidden`/`innerHTML`) without null check
 - **Repro:** Load a page variant without `<div id="eta-card">`; pick a search result. `renderEtaCard` throws at 862 and the route commit aborts.
@@ -138,9 +138,9 @@ Each bug has:
 - **Impact:** Panel render crash + state/DOM desync when a panel body is missing.
 - **Fix:** Guard each: `var body = document.getElementById('nearby-body'); if (!body) return;`
 
-### BUG frontend-011 — FIXED (re-statused cycle 60 stage 59, 2026-09-03; fixed in an earlier cycle, never re-statused)
+### BUG frontend-011 — STALE (feature removed 2026-10-04; was FIXED (re-statused cycle 60 stage 59, 2026-09-03; fixed in an earlier cycle, never re-statused))
 - **Severity:** medium
-- **Status:** FIXED (re-verified 2026-09-03) — phantom, fixed in an earlier cycle and never re-statused: `js/ghost.js:286` `if (!running) return;` before the poll, `:290` `if (!running || list == null) return;` when it resolves, and `stop()` at `:624` clears `acLive` / `acMerged` / `trails` and both aircraft map layers — the full prescription; `test/visibility.test.js` V1 executes `pollAircraft` / `predictTick` against the real module
+- **Status:** STALE (re-verified 2026-10-04) — the feature this entry belongs to was removed in the store-readiness cut (radar / scanners / racing / overlays / instrument HUD and their server feeds); `js/ghost.js` no longer exists
 - **File:** `js/ghost.js:205-225, 592-624`
 - **Title:** In-flight aircraft poll resolves after `stop()` and runs `predictTick()` once, re-painting aircraft the user just turned off
 - **Repro:** Enable Ghost Mode, wait for aircraft, toggle off while a poll is mid-flight. Aircraft briefly reappear.
@@ -167,7 +167,7 @@ Each bug has:
 
 ### BUG frontend-014 — STALE (re-statused cycle 60 stage 59, 2026-09-03; the premise cannot occur in the tree)
 - **Severity:** medium
-- **Status:** STALE (re-verified 2026-09-03) — both claims miss the tree: `js/scanners.js:91-96` creates `P.audio` once (`if (!P.audio)`) and attaches `ended` / `error` exactly once for the page lifetime, so nothing accumulates; and a late `error` after `close()` reaches `playNext()` (`:160`) after `resetPlayback()` (`:190`) has set `P.sys = null`, whose first line `if (!P.sys || P.paused) return;` makes it a no-op. Nothing to fix
+- **Status:** STALE (re-verified 2026-10-04) — the feature this entry belongs to was removed in the store-readiness cut (radar / scanners / racing / overlays / instrument HUD and their server feeds); `js/scanners.js` no longer exists
 - **File:** `js/scanners.js:107-126, 196-200`
 - **Title:** Retained `P.audio` element's `error`/`ended` listeners are never removed; a late `error` after `close()` calls `playNext()` post-close
 - **Repro:** Open scanner, start a system, immediately close while buffering. On some platforms the abort fires as `error` → `playNext` runs after close.
@@ -192,9 +192,9 @@ Each bug has:
 - **Impact:** Sky layer fails on legacy WebViews; console spam. (Modern Capacitor WebView is fine.)
 - **Fix:** `if (ctx.ellipse) ctx.ellipse(...); else { /* arc/bezier fallback */ }`
 
-### BUG frontend-017 — FIXED (re-statused cycle 58 stage 50, 2026-09-03; fixed in an earlier cycle, never re-statused)
+### BUG frontend-017 — STALE (feature removed 2026-10-04; was FIXED (re-statused cycle 58 stage 50, 2026-09-03; fixed in an earlier cycle, never re-statused))
 - **Severity:** medium
-- **Status:** FIXED (re-verified 2026-09-03) — `js/race.js:174-190`: `fixSendTimer` relays only when the fix signature changed, with a 2 s maximum gap so a peer's `RaceTimer` cannot back-date a late launch ("Relay at ~10Hz ONLY while something is changing"). Caught as a phantom by the cycle-57 improve stage (mission stage doc 0048-c057-improve §2.1)
+- **Status:** STALE (re-verified 2026-10-04) — the feature this entry belongs to was removed in the store-readiness cut (radar / scanners / racing / overlays / instrument HUD and their server feeds); `js/race.js` no longer exists
 - **File:** `js/race.js:160-181`
 - **Title:** `fixSendTimer` relays `race:fix` at 10 Hz even when GPS is stationary/no-fix — 9 of 10 packets are stale duplicates
 - **Repro:** Start a multiplayer race and leave the device still. Capture WS outgoing frames: ~10 identical `race:fix` messages/sec for the whole race.
@@ -210,27 +210,27 @@ Each bug has:
 - **Impact:** Latent empty-name convoy creation.
 - **Fix:** Trim in the UI: `A.party.create((nameInput.value || nameInput.placeholder).trim(), chosen)`
 
-### BUG frontend-019 — FIXED (cycle 52 stage 26, 2026-09-03)
+### BUG frontend-019 — STALE (feature removed 2026-10-04; was FIXED (cycle 52 stage 26, 2026-09-03))
 - **Severity:** medium
-- **Status:** FIXED (re-verified 2026-09-03) — `js/ghost.js` `clampBBox()` (exported on `A.ghost`) returns `null` for a world-wrapped or degenerate view ("skip this tick", which all four callers handle); executed in `test/ghostbbox.test.js` (18 checks: the −180..180 view → `null`, the `-2 … 2` signature it kills, a 12° regional view still clamped to 4°)
+- **Status:** STALE (re-verified 2026-10-04) — the feature this entry belongs to was removed in the store-readiness cut (radar / scanners / racing / overlays / instrument HUD and their server feeds); `js/ghost.js` no longer exists
 - **File:** `js/ghost.js:97-110` (`viewBBox`, now the pure `clampBBox` beside it), with `:280` (`BACKOFF_MAX_MS`) and `:366` (`backoffFail('police', …)`)
 - **Title:** The intro globe's world-wrapped viewport is clamped to a fictional 4° box at longitude 0, firing 5–7 junk upstream queries per app open whose failures back the rider's real police layer off for up to 15 minutes
 - **Repro:** Open the app with animations on (the intro globe spins, then flies down to the rider). On the VPS, `journalctl -u convoy | grep overpass` shows `all mirrors failed for enforcement <lat>,-2,<lat+4>,2` — longitude exactly `-2 … 2`, the signature of `viewBBox()` clamping a −180..180 view to `centre ± 2` at centre 0. Five of the seven production failures logged on 2026-09-03 (03:42Z–06:55Z) carry that pair; none is a place a rider was looking at (cycle-51 truth pass, STATE.md "Aspect B").
 - **Impact:** 5–7 wasted Overpass queries per app open against a shared community resource (and our IP's budget), and `backoffFail('police', 90 s)` per failure, doubling to the 15-minute cap — the real police/camera layer can stay silent for the first quarter-hour of a ride. (Inferred from code + log timing, not a device trace.)
 - **Fix (applied):** the clamp is a pure `clampBBox(rawBounds, lim)` (exported on `A.ghost` for tests) that returns `null` — "skip this tick", which all four callers already handle — for a view wider than `WIDE_VIEW_FACTOR × lim` (4 × 4° = 16° for aircraft/police/Waze, 320° for hotspots) or for degenerate bounds. A regional 12° view still clamps to 4° and is queried exactly as before. `test/ghostbbox.test.js` (18 checks) pins the world-wrapped view → `null`, the `-2 … 2` signature it kills, and the no-regression band.
 
-### BUG frontend-020 — FIXED (cycle 57 stage 46, 2026-09-03)
+### BUG frontend-020 — STALE (feature removed 2026-10-04; was FIXED (cycle 57 stage 46, 2026-09-03))
 - **Severity:** medium
-- **Status:** FIXED (re-verified 2026-09-03) — `js/util.js` `fetchT(url, opts, ms)` + the `FETCH_TIMEOUT` table (overpass 75 s, aircraft 20 s, api 15 s), all 20 bare `fetch` sites converted; class gate `test/fetchtimeout.test.js` (39 checks: the real `fetchPolice()` with a stalling transport, the two-entry allowlist with anti-rot, the cross-file `overpass >= MIRRORS × TIMEOUT_MS` floor read from `server/overpass.js` each run)
+- **Status:** STALE (re-verified 2026-10-04) — the feature this entry belongs to was removed in the store-readiness cut (radar / scanners / racing / overlays / instrument HUD and their server feeds); `server/overpass.js` no longer exists
 - **File:** `js/ghost.js:336` (the enforcement-layer `fetch(OVERPASS_PROXY, …)`) and `:386` (the `lastPoliceBbox = null` + `backoffFail('police', …)` recovery, which only runs on rejection); also `js/routing.js:835` (the `road` lookup for stops/signals — same call, same missing `signal`); compare `js/routing.js:243-245` (the `police` lookup, which does carry an `AbortController` + `signal`)
 - **Title:** The enforcement-layer fetch (and routing.js's `road` lookup) has no `AbortSignal.timeout()` — a slow or hung proxy leaves the promise pending indefinitely, and the recovery path only runs on rejection
 - **Repro:** code-read, 2026-09-03 (cycle-55 improve stage): `js/ghost.js:336` passes no `signal`; `js/routing.js:245` does (`signal: ctrl.signal`). While the proxy's upstream call was paying a dead first mirror's full 30 s timeout (server-034, fixed server-side in cycle 56) the layer's request sat pending with nothing to cancel it; a proxy that never answers at all (a stalled TCP session) leaves it pending for good.
 - **Impact:** the police / camera layer can silently stop refreshing for the rest of a ride: `lastPoliceBbox` is set BEFORE the fetch, so no retry is scheduled for that view until the promise settles, and the `.catch` that clears it never fires for a promise that never settles.
 - **Fix (applied, cycle 57 — as a class, not two lines):** the cycle-56 improve stage's AST scan found the same defect at **22 of 23** `fetch` call sites in `js/` (only `js/routing.js:261` carried a signal) and five layers with the same set-before / clear-in-catch latch (police, Waze, hotspots, incidents, NWS). New `A.util.fetchT(url, opts, ms)` in `js/util.js` gives every client fetch a deadline — `AbortSignal.timeout`, an `AbortController` + `setTimeout` fallback for older WebViews, a caller-supplied signal honoured (combined through `AbortSignal.any` where present) — and a load-bearing `A.util.FETCH_TIMEOUT` table: `overpass` **75 s** (the proxy tries 2 mirrors × 30 s before it answers, so a shorter client deadline would abort working requests), `aircraft` 20 s, everything else 15 s. All 20 bare sites route through it; `js/telemetry.js:327` keeps an inline `signal:` because it loads before `js/util.js`. New suite **`test/fetchtimeout.test.js`** (39 checks): the real `fetchPolice()` executed with a stalling transport (1 fetch for the session before; `1,2,2,3,3` fetches over five 90 s ticks after — the doubling backoff owns ticks 3 and 5), an acorn class gate that fails `npm test` on the 23rd bare `fetch()` by name (two justified allowlist entries, anti-rot checked), and the cross-file floor `FETCH_TIMEOUT.overpass >= MIRRORS.length × server TIMEOUT_MS` read from `server/overpass.js` each run. RED first: 16 failed / 17 passed against the unfixed tree (`bare fetch sites: 22`, ticks `1,1,1,1,1`).
 
-### BUG frontend-021 — FIXED (cycle 59 stage 54, 2026-09-03)
+### BUG frontend-021 — STALE (feature removed 2026-10-04; was FIXED (cycle 59 stage 54, 2026-09-03))
 - **Severity:** medium
-- **Status:** FIXED (re-verified 2026-09-03) — `js/util.js` `poll(fn, ms)` / `unpoll(id)` + one `visibilitychange` listener (skip the tick while `document.hidden`, read at tick time; one due-only coalesced refresh per poller on the way back); the eight visual-only sites converted: `js/ghost.js` `pollAircraft` (8 s) + `predictTick` (200 ms), `js/overlays.js` `refreshRadar` (5 min), `refreshTraffic` (90 s), `pollHazards` (5 min), `fetchIncidents` (2 min), `fetchNwsAlerts` (5 min), `js/clock.js` `render` (20 s), and their `clearInterval` partners → `U.unpoll()`. Executed in `test/visibility.test.js` (30th suite, 52 checks; RED 24 failed / 23 passed against the unfixed tree): V1 each pause-set tick does its work visible, ZERO work hidden, works again visible; V2 police / Waze / hotspots still fetch while hidden; V3 a real `document.dispatchEvent({type:'visibilitychange'})` runs each due poller exactly once, a not-due one never, a second event nothing; V4 an acorn class gate — every `setInterval` in `js/` is the helper or one of the 14 allowlisted keep-set sites with its reason (anti-rot both ways)
+- **Status:** STALE (re-verified 2026-10-04) — the feature this entry belongs to was removed in the store-readiness cut (radar / scanners / racing / overlays / instrument HUD and their server feeds); `js/ghost.js` no longer exists
 - **File:** `js/ghost.js` (5 intervals: aircraft 8 s, Waze 60 s, police 90 s, hotspots 5 min, predict 200 ms), `js/overlays.js` (5: traffic 90 s, hazards 5 min, incidents 2 min, NWS 5 min, radar 5 min), `js/scanners.js` (OpenMHz calls, 6 s), `js/voice.js` (2), `js/radar.js`, `js/clock.js`, `js/state.js`, `js/ui.js`, `js/race.js` (1 each)
 - **Title:** Nine timer-owning modules never check `document.hidden` / `visibilitychange`, so a backgrounded app keeps polling the network at 6 s / 8 s cadence
 - **Repro:** measured by the cycle-56 improve stage (2026-09-03, `stages/0044-c056-improve.md` §2.5): 22 `setInterval` timers across 12 files; only `js/space.js`, `js/sim.js`, `js/telemetry.js`, `js/net.js` and `js/wake.js` gate on visibility. The nine that do not (hidden-refs = 0): `js/ghost.js` intervals=5 · `js/overlays.js` intervals=5 · `js/scanners.js` intervals=1 · `js/voice.js` 2 · `js/radar.js` 1 · `js/clock.js` 1 · `js/state.js` 1 · `js/ui.js` 1 · `js/race.js` 1. Background the app (or `document.hidden = true` in a harness) and count fetches: OpenMHz every 6 s and `/api/aircraft` every 8 s keep going. Pinned RED first in `test/visibility.test.js`: the recorded aircraft / radar / traffic / hazards / incidents / NWS / clock ticks all did their work with `document.hidden = true`, and a dispatched `visibilitychange` refreshed nothing
@@ -298,7 +298,7 @@ Each bug has:
 
 ### BUG server-005
 - **Severity:** medium
-- **Status:** STALE (re-verified 2026-09-03) — `server/store.js` has no `flushSync`, tmp file or `renameSync` left: accounts live in Postgres (`server/db.js`; header at `server/store.js:1-5`). The same shared-tmp-name pattern survives only for the non-account hotspot cache (`server/hotspots.js:114` async, `server/hotspots.js:132` sync), and `shutdown()` awaits that async flush before exiting (`server/server.js:4121`)
+- **Status:** STALE (re-verified 2026-10-04) — the feature this entry belongs to was removed in the store-readiness cut (radar / scanners / racing / overlays / instrument HUD and their server feeds); `server/hotspots.js` no longer exists
 - **File:** `server/store.js:22-41, 110-125`
 - **Title:** `flushSync` on `process 'exit'` shares the same tmp filename as async `flush`; sets `dirty=false` before write; single-shot `renameSync` fails on Windows EPERM
 - **Repro:** Force a sync exit during an in-flight async flush on Windows.
@@ -371,7 +371,7 @@ Each bug has:
 
 ### BUG server-013
 - **Severity:** medium
-- **Status:** FIXED (re-verified 2026-09-03) — server side `server/server.js:3137-3152`: proximity gate, `rateOk('report:' + c.ip, 20, 60 s)` and `str(m.label, 48)`; client side the label never meets `innerHTML` unescaped — `js/net.js:424` → `js/overlays.js:373` puts it in GeoJSON `properties`, and the popup at `js/mapview.js:1085` routes it through `U.esc` (`js/util.js:145`). The `police` model write is still not sign-in-gated — proximity + rate limit stand in for auth; see server-015
+- **Status:** STALE (re-verified 2026-10-04) — the feature this entry belongs to was removed in the store-readiness cut (radar / scanners / racing / overlays / instrument HUD and their server feeds); `js/overlays.js` no longer exists
 - **File:** `server/server.js:1391-1408`
 - **Title:** `crowd:report` relays `label` without HTML-escaping (XSS into peers via popup); `police` kind writes the hotspot model with no auth requirement
 - **Repro:** As a guest, `{"t":"crowd:report","lng":..,"lat":..,"kind":"police","label":"<img src=x onerror=alert(1)>"}`. Coordinate 2 clients on the same fake cell to meet `MIN_COUNT=2` → permanent fake hotspot.
@@ -489,7 +489,7 @@ Each bug has:
 
 ### BUG server-026
 - **Severity:** medium
-- **Status:** FIXED (re-verified 2026-09-03) — `server/waze.js:56` `MAX_BODY_CHARS` (checked against `content-length` at `server/waze.js:80` and the read text at `server/waze.js:82`); `server/tomtom.js:46` `MAX_BODY_BYTES` likewise
+- **Status:** STALE (re-verified 2026-10-04) — the feature this entry belongs to was removed in the store-readiness cut (radar / scanners / racing / overlays / instrument HUD and their server feeds); `server/waze.js` no longer exists
 - **File:** `server/waze.js:53-86` (and `server/tomtom.js`)
 - **Title:** Upstream response body fully buffered (`await r.text()`) with no size cap → OOM on upstream contract drift
 - **Repro:** Difficult without controlling upstream, but a multi-MB upstream response OOMs the server.
@@ -505,9 +505,9 @@ Each bug has:
 - **Impact:** Memory exhaustion via spoofed IPs.
 - **Fix:** Cap `authHits` size (LRU eviction); don't trust XFF unconditionally (server-008).
 
-### BUG server-031 — FIXED (cycle 52 stage 26, 2026-09-03)
+### BUG server-031 — STALE (feature removed 2026-10-04; was FIXED (cycle 52 stage 26, 2026-09-03))
 - **Severity:** medium
-- **Status:** FIXED (re-verified 2026-09-03) — cycle 52: `server/overpass.js:221` `failed()` records host, reason and elapsed ms per attempt; `stats()` exposes `ok`/`fail`/`cached`, `byMirror` and `byReason` (`server/overpass.js:53`); `test/overpass.test.js` "A failed mirror says which one and why" (29 checks)
+- **Status:** STALE (re-verified 2026-10-04) — the feature this entry belongs to was removed in the store-readiness cut (radar / scanners / racing / overlays / instrument HUD and their server feeds); `server/overpass.js` no longer exists
 - **File:** `server/overpass.js:203-212` before the fix (the mirror loop inside `query()`; now its `failed()` helper)
 - **Title:** Every per-mirror failure reason is discarded; the single `all mirrors failed` log line cannot distinguish a 429 from a timeout from a malformed body
 - **Repro:** `OVERPASS_URLS=https://127.0.0.1:9/a,https://127.0.0.1:9/b node server/server.js`, then `POST /api/overpass {"kind":"enforcement","bbox":{"minLat":34.03,"minLng":-118.3,"maxLat":34.09,"maxLng":-118.2}}` → the log said only `[overpass] all mirrors failed for enforcement 34.03,-118.3,34.09,-118.2`. The same line for a dead host, a 429, a 504, an HTML body, or JSON without `elements[]`; a first mirror failing while the second answered logged nothing at all.
@@ -532,9 +532,9 @@ Each bug has:
 - **Impact:** no rider impact (systemd recovers). The cost is the diagnostic: an operator reading the log is sent hunting for a config bug that does not exist, and `Failed with result 'exit-code'` shows up in exactly the post-deploy log read the runbook now asks for (cycle 55), so it would be a false finding every time a restart is fast.
 - **Fix (applied):** `if (shuttingDown) { console.log('[boot] aborted — shutting down before the database was ready'); return; }` as the first statement of the catch — `return`, not `exit(1)`; the existing message and `exit(1)` stay for the genuine case. The JWKS check gets the same guard. `shuttingDown` is the flag the shutdown section already declares (about 190 lines below `boot()` — safe because the catch runs after an await, commented in place; no second flag). `test/serverpolicy.test.js` X2: the catch body is lifted and executed with the flag set (returns, no exit, no blame) and clear (exits 1 naming the cause), plus static pins on the flag's first-statement assignment and the JWKS guard.
 
-### BUG server-034 — FIXED (cycle 56 stage 42, 2026-09-03)
+### BUG server-034 — STALE (feature removed 2026-10-04; was FIXED (cycle 56 stage 42, 2026-09-03))
 - **Severity:** medium
-- **Status:** FIXED (re-verified 2026-09-03) — `server/overpass.js`: `mirrorOrder(now)` sorts a mirror that just failed to the back of the try order for `COOL_MS` (default 120 s, `OVERPASS_COOL_MS`), set inside `failed()` for all five reasons, cleared on success, listed by `stats().cooling`; executed in `test/overpass.test.js` ("A mirror that just failed goes to the back of the try order")
+- **Status:** STALE (re-verified 2026-10-04) — the feature this entry belongs to was removed in the store-readiness cut (radar / scanners / racing / overlays / instrument HUD and their server feeds); `server/overpass.js` no longer exists
 - **File:** `server/overpass.js:226` before the fix — `for (let i = 0; i < MIRRORS.length; i++)`, strict declaration order with no memory of the previous outcome — and `TIMEOUT_MS` 30 s at `:58`
 - **Title:** A failed Overpass mirror is still tried first on the very next query — with `TIMEOUT_MS` 30 s, a dead first mirror costs every uncached rider lookup the full timeout, indefinitely
 - **Repro:** cycle-55 improve stage, 2026-09-03, `global.fetch` scripted (the `test/overpass.test.js` harness) so mirror 0 always times out and mirror 1 always serves — three consecutive queries: `overpass-api.de -> overpass.kumi.systems` ×3; `stats().byMirror = {"overpass-api.de":{"ok":0,"fail":3},"overpass.kumi.systems":{"ok":3,"fail":0}}`. A mirror with a 0 % success rate got first refusal three times out of three. Now pinned: after one timeout the next query asks the other mirror first (RED 18/72 before the fix, GREEN after; the original 66 checks unchanged).
@@ -1244,7 +1244,7 @@ this table ever drifts from what's actually here.
 | Perf | 0 | 0 | 1 | 0 | 1 | |
 | **Total** | **9** | **33** | **54** | **13** | **109** |
 
-### Open-status roll-up (Server + Runtime + Frontend + UI/UX — re-verified 2026-09-03)
+### Open-status roll-up (Server + Runtime + Frontend + UI/UX — re-verified 2026-09-03; 16 entries re-statused STALE on 2026-10-04 when their feature left the tree)
 
 Computed from the per-entry `- **Status:**` lines added by the cycle-53 B3 truth pass (Server + Runtime), the cycle-60 C4a pass (Frontend) and the cycle-61 C4b pass (UI/UX). `test/bugstats.test.js`
 recomputes these numbers from the entries and checks every FIXED/STALE evidence path against the tree, so a
@@ -1253,11 +1253,11 @@ OPEN entries marked *latent* describe a real risk whose premise production has n
 
 | Area | OPEN | FIXED | STALE | total |
 |---|---:|---:|---:|---:|
-| Frontend | 0 | 21 | 2 | 23 |
-| Server | 5 | 24 | 3 | 32 |
+| Frontend | 0 | 12 | 11 | 23 |
+| Server | 5 | 20 | 7 | 32 |
 | Runtime | 0 | 5 | 1 | 6 |
 | UI/UX | 5 | 17 | 1 | 23 |
-| **Total** | **10** | **67** | **7** | **84** |
+| **Total** | **10** | **54** | **20** | **84** |
 
 Open after the pass (updated cycle 56 — `server-017` high FIXED as milestone B5 and `server-034` medium filed and fixed as milestone B4, both with executed tests; cycle 55 fixed `server-032` and `server-033`; cycle 54 fixed `server-002` and `server-020`): `server-009`, `server-011` (latent, **deferred with a trigger**), `server-014` (latent), `server-015`, `server-016`. No open HIGH or CRITICAL remains in the Server/Runtime ledger other than the deferred `server-011`.
 

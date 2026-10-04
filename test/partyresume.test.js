@@ -137,7 +137,7 @@ function world(opts) {
     o = o || {};
     const c = {
       id, ws: { readyState: 1, closed: false, close() { this.closed = true; this.readyState = 2; } }, ip: '10.0.0.1',
-      userId: null, username: null, profile: null, pos: null, heading: 0, mode: 'cruise', party: null, raceId: null,
+      userId: null, username: null, profile: null, pos: null, heading: 0, mode: 'cruise', party: null,
       known: new Set(), lastPosAt: 0, micActive: false, ghost: false, isAlive: true, resume: o.resume || ('tok-' + id)
     };
     ipCount.set(c.ip, (ipCount.get(c.ip) || 0) + 1);
@@ -358,8 +358,6 @@ ok("close: seatOwner.delete( → rememberSeat( → leaveParty( in that order", d
   'delete@' + delAt + ' remember@' + remAt + ' leave@' + leaveAt);
 ok('close: the leave is silent exactly when the seat was held — `const held = rememberSeat(c, Date.now()); if (c.party) leaveParty(c, held);`',
   /const held = rememberSeat\(c, Date\.now\(\)\);\s*\n\s*if \(c\.party\) leaveParty\(c, held\);/.test(cb));
-ok('close: races are NOT held — `if (c.raceId) leaveRace(c, false);` is unchanged (a race is 10-20 s long; endRace/abandonRace have ledger side effects — its own stage)',
-  /if \(c\.raceId\) leaveRace\(c, false\);/.test(cb));
 ok('joinParty(rider, party, quiet) has the third parameter and only announces when not quiet',
   /^function joinParty\(rider, party, quiet\) \{/m.test(SRC) && /if \(!quiet\) partySys\(party, riderName\(rider\) \+ ' joined the convoy'\);/.test(JOIN));
 {

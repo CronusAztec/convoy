@@ -117,15 +117,15 @@ ok('panic() is idempotent — a second press changes nothing',
 
 /* ---- board ---- */
 {
-  flags.setOverride('waze', false);
-  const board = flags.board({ app: true, routing: true, waze: true });
-  const waze = board.find((f) => f.name === 'waze');
+  flags.setOverride('routing', false);
+  const board = flags.board({ app: true, routing: true, telemetry: true });
   const routing = board.find((f) => f.name === 'routing');
+  const telemetry = board.find((f) => f.name === 'telemetry');
   ok('board separates "off because an operator did it" from the env default',
-    waze.env === true && waze.forced === false && waze.effective === false,
-    JSON.stringify(waze));
+    routing.env === true && routing.forced === false && routing.effective === false,
+    JSON.stringify(routing));
   ok('board leaves an un-overridden flag at its env default',
-    routing.forced === null && routing.effective === true, JSON.stringify(routing));
+    telemetry.forced === null && telemetry.effective === true, JSON.stringify(telemetry));
   ok('board covers every known flag', board.length === flags.KNOWN.length);
   flags.restore();
 }
@@ -419,15 +419,12 @@ group('map — status: ghost, offline and everything between');
 
   ok('a moving rider is cruising', st(base).key === 'cruise');
   ok('a parked rider is parked', st(with_({ mode: 'parked' })).key === 'parked');
-  ok('a racing rider outranks parked', st(with_({ mode: 'parked', racing: true })).key === 'racing');
   ok('a connected rider with no fix is "no GPS fix", not offline',
     st(with_({ pos: null })).key === 'nofix',
     'connected-without-a-fix and not-connected are different problems');
   ok('a fix older than the stale window reads stale',
     st(with_({ ageMs: 61 * 1000 })).key === 'stale');
   ok('a fresh fix does not read stale', st(with_({ ageMs: 59 * 1000 })).key === 'cruise');
-  ok('stale outranks racing — a stale position is not evidence of a race',
-    st(with_({ ageMs: 120000, racing: true })).key === 'stale');
 
   /* Ghost is a MODIFIER, not a status: a ghosted rider is still cruising or
      parked, and collapsing that into one "ghost" state would hide what they
@@ -437,11 +434,11 @@ group('map — status: ghost, offline and everything between');
     st(with_({ ghost: true, mode: 'parked' })).key === 'parked',
     'ghost swallowed the rider\'s real state');
   ok('every status has a distinct colour',
-    new Set(['cruise', 'parked', 'racing', 'nofix', 'stale'].map((k) => {
-      const map = { cruise: base, parked: with_({ mode: 'parked' }), racing: with_({ racing: true }),
+    new Set(['cruise', 'parked', 'nofix', 'stale'].map((k) => {
+      const map = { cruise: base, parked: with_({ mode: 'parked' }),
                     nofix: with_({ pos: null }), stale: with_({ ageMs: 99000 }) };
       return st(map[k]).color;
-    })).size === 5);
+    })).size === 4);
 
   ok('ago() reads in human units',
     admin._ago(null) === '—' && admin._ago(500) === 'now' &&
@@ -615,8 +612,8 @@ function calls(method, frag) {
   {
     const ctx = {
       riders: () => [],
-      snapshot: () => ({ clients: 0, parties: 0, races: 0 }),
-      tomtomKeyed: () => true, wazeKeyed: () => true, agentKeyed: () => false,
+      snapshot: () => ({ clients: 0, parties: 0 }),
+      tomtomKeyed: () => true,
       telemetryOn: () => true, secure: false,
       sanitizeProfile: (p) => p, validUsername: () => null,
       validPassword: () => null, validEmail: () => null

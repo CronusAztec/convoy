@@ -108,33 +108,18 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- Walkie-talkie voice (convoy PTT / open mic / toggle) -->
+    <!-- Walkie-talkie voice (convoy push-to-talk / open mic / toggle, and
+         proximity voice with riders around you) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
-    <!-- Hardware radar detector over BLE (Escort/Bel via the esclib protocol).
-         The SCAN/CONNECT runtime permissions exist only on API 31+; minSdk is
-         24, so Android 7–11 also needs the legacy pair (granted at install)
-         or the detector feature is dead on every pre-12 device. -->
-    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
-        android:usesPermissionFlags="neverForLocation" />
-    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <uses-permission android:name="android.permission.BLUETOOTH"
-        android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
-        android:maxSdkVersion="30" />
+    <!-- Location hardware is what the app is for, but a tablet without GPS can
+         still ride along as a passenger map — so it stays optional for Play's
+         device catalogue. -->
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
 
-    <!-- BLE feature is optional: the app must work on devices without it. -->
-    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
-
-    <!-- Package visibility (Android 11+). Without this, queryBroadcastReceivers()
-         in SabrePlugin.publish() returns an empty list no matter what is
-         installed, so publishing a crowd report to a SABRE host was a silent
-         no-op on every modern device. -->
+    <!-- Package visibility (Android 11+). -->
     <queries>
-        <intent>
-            <action android:name="app.sabre.CROWD" />
-        </intent>
         <!-- Custom Tabs (social sign-in). Under Android 11+ package visibility a
              browser the app cannot SEE is a browser it cannot launch: without
              this, CustomTabsIntent finds no provider and every provider sign-in

@@ -23,7 +23,7 @@
 <link rel="preload" as="font" type="font/woff2" crossorigin href="/fonts/chakra-petch-v13-latin-400.woff2">
 <link rel="preload" as="font" type="font/woff2" crossorigin href="/fonts/share-tech-mono-v16-latin-400.woff2">
 <link href="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.min.css" rel="stylesheet"/>
-<link rel="stylesheet" href="css/styles.css?v=cy139"/>
+<link rel="stylesheet" href="css/styles.css?v=cy140"/>
 </head>
 <body>
 
@@ -86,12 +86,6 @@
   <button type="button" class="chip chip-global" id="chip-global" title="Toggle global drivers (delayed feed)" aria-pressed="false">
     <span class="dot dot-global"></span><span>Global · ~5 min delay</span>
   </button>
-  <button type="button" class="chip chip-scan" id="chip-scan" title="Police scanners near you">
-    <span class="dot" style="background:#ff5a3c;box-shadow:0 0 6px #ff5a3c"></span><span>Scanners</span>
-  </button>
-  <button type="button" class="chip chip-dragy" id="chip-dragy" title="Performance meter · GPS drag timer">
-    <span class="dot" style="background:#ffd23f;box-shadow:0 0 6px #ffd23f"></span><span>0–60</span>
-  </button>
 </div>
 
 <!-- ======================= MAP CONTROLS ======================= -->
@@ -119,28 +113,8 @@
   <button type="button" class="ctl" id="ctl-global" title="Toggle global drivers" aria-label="Toggle global drivers">
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.8 2.6 4.2 5.6 4.2 9S14.8 18.4 12 21M12 3C9.2 5.6 7.8 8.6 7.8 12s1.4 6.4 4.2 9"/></svg>
   </button>
-  <button type="button" class="ctl ctl-hazard" id="ctl-hazard" title="Report a hazard" aria-label="Report a hazard">
-    <svg viewBox="0 0 24 24"><path d="M12 3.6 21.5 20H2.5Z"/><path d="M12 10v4.4"/><path d="M12 17.4v.02"/></svg>
-  </button>
-  <button type="button" class="ctl" id="ctl-loop" title="Cruise loop · plan a route that loops back here, avoiding police, stop signs &amp; lights" aria-label="Plan a cruise loop">
-    <svg viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.6-5.7"/><path d="M17.5 2.8v3.7h3.7"/></svg>
-  </button>
   <button type="button" class="ctl ctl-accent" id="ctl-recenter" title="Resume follow camera" aria-label="Resume follow camera" hidden>
     <svg viewBox="0 0 24 24"><path d="M12 3.5 18.5 20 12 16.2 5.5 20Z" fill="currentColor" stroke="none"/></svg>
-  </button>
-</div>
-
-<!-- ======================= LEFT CONTROL — ghost / radar toggle ======================= -->
-<div class="map-controls-left">
-  <button type="button" class="ctl ctl-ghost" id="ctl-ghost" title="Ghost mode · radar" aria-label="Toggle ghost mode radar">
-    <svg viewBox="0 0 24 24">
-      <path d="M5 21V10a7 7 0 0 1 14 0v11l-2.3-1.8-2.3 1.8-2.4-1.8-2.4 1.8L5 21Z"/>
-      <circle cx="9.5" cy="11" r="1.1" fill="currentColor" stroke="none"/>
-      <circle cx="14.5" cy="11" r="1.1" fill="currentColor" stroke="none"/>
-    </svg>
-  </button>
-  <button type="button" class="ctl ctl-park" id="ctl-park" title="Parking pin · drop it here / find your car" aria-label="Parking pin">
-    <svg viewBox="0 0 24 24"><rect x="3.2" y="3.2" width="17.6" height="17.6" rx="4.5"/><path d="M9.5 17V7h3.7a3.2 3.2 0 0 1 0 6.4H9.5"/></svg>
   </button>
 </div>
 
@@ -173,9 +147,6 @@
 <!-- ======================= ROUTE / TRIP CARD ======================= -->
 <div id="eta-card" class="eta-card" hidden></div>
 
-<!-- ======================= RACE HUD (live, during a drag race) ======================= -->
-<section id="race-hud" class="race-hud" hidden aria-label="Live race"></section>
-
 <!-- ======================= DOCK ======================= -->
 <nav id="dock" aria-label="Main navigation">
   <button type="button" class="dock-btn active" data-dock="map" aria-label="Map" aria-current="page">
@@ -197,7 +168,7 @@
   </button>
 </nav>
 
-<!-- ======================= WALKIE-TALKIE (voice overlay, convoy-only) ======================= -->
+<!-- ======================= WALKIE-TALKIE (voice overlay: convoy + proximity voice) ======================= -->
 <div id="wt-overlay" hidden>
   <button type="button" id="wt-ptt" class="wt-btn" data-mode="ptt" aria-label="Push to talk">
     <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
@@ -212,65 +183,6 @@
     </button>
   </div>
 </div>
-
-<!-- ======================= GHOST RADAR HUD (Highway-Radar-style takeover) ======================= -->
-<!-- Shown only while body.radar-on (Ghost Mode). Containers ignore pointer events;
-     their inner cards/buttons re-enable them so the map stays pannable in the gaps. -->
-<section id="radar-alerts" aria-live="polite" aria-label="Radar alerts"></section>
-
-<aside id="radar-side" aria-label="Radar status">
-  <div class="rstat">
-    <span class="rstat-k">Scan</span>
-    <span class="rstat-v" id="radar-clock">--:--</span>
-  </div>
-  <div class="rstat">
-    <span class="rstat-k">Risk</span>
-    <span class="rstat-v"><b id="radar-risk">0</b><small>/25</small></span>
-    <span class="rrisk"><span class="rrisk-fill lo" id="radar-risk-bar"></span></span>
-  </div>
-  <div class="rstat">
-    <span class="rstat-k">Status</span>
-    <span class="rstat-icons">
-      <i id="rst-gps" class="rst" title="GPS fix"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="6.4"/><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/><path d="M12 2.4v3M12 18.6v3M2.4 12h3M18.6 12h3"/></svg></i>
-      <i id="rst-sat" class="rst" title="Satellites"><svg viewBox="0 0 24 24"><path d="M5 13 11 7M7 5 9 7M17 15l2 2M4.5 19.5a6 6 0 0 0 0-8.5M2.5 21.5a9 9 0 0 0 0-12.5"/><rect x="9.5" y="9.5" width="5" height="5" rx="1" transform="rotate(45 12 12)"/></svg></i>
-      <i id="rst-link" class="rst" title="Network link"><svg viewBox="0 0 24 24"><path d="M5 12.5a10 10 0 0 1 14 0M8 15.5a6 6 0 0 1 8 0"/><circle cx="12" cy="19" r="1.4" fill="currentColor" stroke="none"/></svg></i>
-      <i id="rst-voice" class="rst" title="Voice"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></i>
-    </span>
-  </div>
-</aside>
-
-<section id="radar-dock" aria-label="Radar controls">
-  <button type="button" class="rd-btn" id="radar-locate" title="Recenter on me" aria-label="Recenter on me">
-    <svg viewBox="0 0 24 24"><path d="M12 21s-6.5-6-6.5-10.5a6.5 6.5 0 0 1 13 0C18.5 15 12 21 12 21Z"/><circle cx="12" cy="10.4" r="2.3"/></svg>
-  </button>
-  <button type="button" class="rd-btn" id="radar-mute" title="Mute radar audio (proximity pings)" aria-label="Mute radar audio">
-    <svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9Z" fill="currentColor" stroke="none"/><g class="spk-on"><path d="M16 9a4 4 0 0 1 0 6"/></g><g class="spk-x"><path d="m17 9.5 4 5M21 9.5l-4 5"/></g></svg>
-  </button>
-  <div class="rd-speed"><b id="radar-speed">--</b><span id="radar-speed-unit">MPH</span></div>
-  <div class="rd-limit"><b id="radar-limit">65</b><span>limit</span></div>
-  <button type="button" class="rd-btn rd-stop" id="radar-stop" title="Exit radar (Ghost off)" aria-label="Exit radar">
-    <svg viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor" stroke="none"/></svg>
-  </button>
-  <button type="button" class="rd-btn" id="radar-mic" title="Convoy voice" aria-label="Convoy voice">
-    <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
-  </button>
-  <button type="button" class="rd-btn" id="radar-hazard" title="Report a road hazard" aria-label="Report a road hazard">
-    <svg viewBox="0 0 24 24"><path d="M12 3 22 20H2L12 3Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 10v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="17" r="1" fill="currentColor"/></svg>
-  </button>
-</section>
-
-<!-- radar activation flourish (one-shot; plays when Ghost Mode engages) -->
-<div id="radar-fx" aria-hidden="true">
-  <div class="rfx-sweep"></div>
-  <div class="rfx-pulse"></div>
-  <div class="rfx-pulse rfx-pulse2"></div>
-  <div class="rfx-title">GHOST MODE<small>RADAR ACTIVE</small></div>
-</div>
-
-<!-- continuous rotating sweep line (persistent while radar is engaged; ties the
-     proximity sonar to a visible "scanning" motion. pointer-events:none so the
-     map stays pannable. hidden unless body.radar-on, and frozen by data-anim=off) -->
-<div id="radar-sweep" aria-hidden="true"></div>
 
 <div id="toasts" aria-live="polite"></div>
 <div id="onboarding" class="modal-backdrop" role="dialog" aria-modal="true" aria-label="Welcome to Slipstream" hidden></div>
@@ -288,37 +200,26 @@
      order right before DOMContentLoaded (which app.js waits on), so nothing is
      render-blocking. maplibre stays first so its global is ready for mapview. -->
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.min.js" defer crossorigin="anonymous"></script>
-<script src="js/config.js?v=cy139" defer></script>
+<script src="js/config.js?v=cy140" defer></script>
 <!-- Second, and deliberately so. telemetry.js installs the global error and
      unhandledrejection handlers at load time, so it has to run before every
      module it is supposed to be watching — a crash reporter that boots after
      state.js cannot report the crash IN state.js. It depends on nothing but
      config.js, and its release stamp is read off its own ?v= below. -->
-<script src="js/telemetry.js?v=cy139" defer></script>
-<script src="js/util.js?v=cy139" defer></script>
-<script src="js/state.js?v=cy139" defer></script>
-<script src="js/themes.js?v=cy139" defer></script>
-<script src="js/detectors.js?v=cy139" defer></script>
-<script src="js/space.js?v=cy139" defer></script>
-<script src="js/mapview.js?v=cy139" defer></script>
-<script src="js/sim.js?v=cy139" defer></script>
-<script src="js/net.js?v=cy139" defer></script>
-<script src="js/routing.js?v=cy139" defer></script>
-<script src="js/ghost.js?v=cy139" defer></script>
-<script src="js/overlays.js?v=cy139" defer></script>
-<script src="js/racetimer.js?v=cy139" defer></script>
-<script src="js/wake.js?v=cy139" defer></script>
-<script src="js/places.js?v=cy139" defer></script>
-<script src="js/triplog.js?v=cy139" defer></script>
-<script src="js/speedo.js?v=cy139" defer></script>
-<script src="js/hud.js?v=cy139" defer></script>
-<script src="js/compass.js?v=cy139" defer></script>
-<script src="js/clock.js?v=cy139" defer></script>
-<script src="js/quest.js?v=cy139" defer></script>
-<script src="js/party.js?v=cy139" defer></script><script src="js/ui.js?v=cy139" defer></script>
-<script src="js/auth.js?v=cy139" defer></script>
-<script src="js/native.js?v=cy139" defer></script>
-<script src="js/ota.js?v=cy139" defer></script>
-<script src="js/app.js?v=cy139" defer></script>
+<script src="js/telemetry.js?v=cy140" defer></script>
+<script src="js/util.js?v=cy140" defer></script>
+<script src="js/state.js?v=cy140" defer></script>
+<script src="js/themes.js?v=cy140" defer></script>
+<script src="js/space.js?v=cy140" defer></script>
+<script src="js/mapview.js?v=cy140" defer></script>
+<script src="js/sim.js?v=cy140" defer></script>
+<script src="js/net.js?v=cy140" defer></script>
+<script src="js/routing.js?v=cy140" defer></script>
+<script src="js/wake.js?v=cy140" defer></script>
+<script src="js/party.js?v=cy140" defer></script><script src="js/ui.js?v=cy140" defer></script>
+<script src="js/auth.js?v=cy140" defer></script>
+<script src="js/native.js?v=cy140" defer></script>
+<script src="js/ota.js?v=cy140" defer></script>
+<script src="js/app.js?v=cy140" defer></script>
 </body>
 </html>

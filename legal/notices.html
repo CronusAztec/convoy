@@ -27,7 +27,7 @@ and in Settings &rarr; About &mdash; and reproduced here.</p>
 <table>
 <tr><th>Component</th><th>Licence</th><th>Used for</th></tr>
 <tr><td><a href="https://maplibre.org/" rel="noopener" target="_blank">MapLibre GL JS</a> 5.24.0</td><td>BSD-3-Clause</td><td>Map renderer</td></tr>
-<tr><td><a href="https://capacitorjs.com/" rel="noopener" target="_blank">Capacitor</a> 8.x</td><td>MIT</td><td>Android shell, geolocation bridge</td></tr>
+<tr><td><a href="https://capacitorjs.com/" rel="noopener" target="_blank">Capacitor</a> 8.x</td><td>MIT</td><td>Android and iOS shells; geolocation, browser and app-lifecycle bridges</td></tr>
 <tr><td><a href="https://github.com/websockets/ws" rel="noopener" target="_blank">ws</a> 8.x</td><td>MIT</td><td>WebSocket server</td></tr>
 <tr><td><a href="https://node-postgres.com/" rel="noopener" target="_blank">node-postgres</a> 8.x</td><td>MIT</td><td>Database client</td></tr>
 <tr><td>Chakra Petch, Share Tech Mono</td><td>SIL Open Font License 1.1</td><td>Typefaces, self-hosted (licence text ships alongside the font files)</td></tr>
@@ -43,35 +43,19 @@ permission. Full text:
 <h2 id="map">Map, search and routing data</h2>
 <table>
 <tr><th>Source</th><th>Terms</th><th>Used for</th></tr>
-<tr><td><a href="https://www.openstreetmap.org/copyright" rel="noopener" target="_blank">OpenStreetMap</a></td><td><strong>ODbL 1.0</strong> &mdash; &copy; OpenStreetMap contributors</td><td>Basemap geometry, POIs, geocoding</td></tr>
+<tr><td><a href="https://www.openstreetmap.org/copyright" rel="noopener" target="_blank">OpenStreetMap</a></td><td><strong>ODbL 1.0</strong> &mdash; &copy; OpenStreetMap contributors</td><td>Basemap geometry, geocoding</td></tr>
 <tr><td><a href="https://carto.com/attributions" rel="noopener" target="_blank">CARTO</a></td><td>Attribution required</td><td>Dark, light and voyager tile styles</td></tr>
 <tr><td><a href="https://openfreemap.org/" rel="noopener" target="_blank">OpenFreeMap</a></td><td>ODbL (OSM data), free public tiles</td><td>Alternate tile host</td></tr>
 <tr><td><a href="https://operations.osmfoundation.org/policies/nominatim/" rel="noopener" target="_blank">Nominatim</a></td><td>OSMF usage policy &mdash; max 1 req/s</td><td>Destination search</td></tr>
 <tr><td><a href="https://routing.openstreetmap.de/" rel="noopener" target="_blank">OSRM demo server</a></td><td>Demo instance, no SLA</td><td>Keyless routing fallback</td></tr>
-<tr><td><a href="https://overpass-api.de/" rel="noopener" target="_blank">Overpass API</a></td><td>Instance fair-use policy</td><td>Police stations, cameras, road furniture</td></tr>
-<tr><td><a href="https://developer.tomtom.com/" rel="noopener" target="_blank">TomTom</a></td><td>TomTom Developer Terms &mdash; attribution required</td><td>Traffic-aware routing, traffic flow tiles</td></tr>
+<tr><td><a href="https://developer.tomtom.com/" rel="noopener" target="_blank">TomTom</a></td><td>TomTom Developer Terms &mdash; attribution required</td><td>Traffic-aware routing</td></tr>
 </table>
 
 <div class="warn">
-  <strong>Operator note.</strong> Nominatim, the OSRM demo server and the public
-  Overpass instances are shared community infrastructure offered for development,
-  not production traffic. Running Convoy at scale against them breaches their
+  <strong>Operator note.</strong> Nominatim and the OSRM demo server are shared
+  community infrastructure offered for development, not production traffic. Running Convoy at scale against them breaches their
   usage policies. Self-host or buy capacity before a public launch.
 </div>
-
-<h2 id="feeds">Live data feeds</h2>
-<table>
-<tr><th>Source</th><th>Terms</th><th>Used for</th></tr>
-<tr><td><a href="https://opensky-network.org/" rel="noopener" target="_blank">OpenSky Network</a></td><td>Free for <strong>non-commercial</strong> use; commercial use needs a licence</td><td>Live aircraft in Ghost Mode</td></tr>
-<tr><td><a href="https://airplanes.live/" rel="noopener" target="_blank">airplanes.live</a> / ADS-B Exchange</td><td>Attribution required, non-commercial</td><td>Aircraft fallback feed</td></tr>
-<tr><td><a href="https://www.rainviewer.com/api.html" rel="noopener" target="_blank">RainViewer</a></td><td>Free tier requires attribution</td><td>Precipitation radar overlay</td></tr>
-<tr><td><a href="https://openmhz.com/" rel="noopener" target="_blank">OpenMHz</a></td><td>Public feeds &mdash; listening is subject to local law, see the <a href="/terms#features">Terms &sect;5.3</a></td><td>Scanner feed directory</td></tr>
-<tr><td><a href="https://open-meteo.com/" rel="noopener" target="_blank">Open-Meteo</a></td><td>CC-BY 4.0, attribution required</td><td>Weather conditions</td></tr>
-<tr><td><a href="https://www.weather.gov/" rel="noopener" target="_blank">NWS / weather.gov</a></td><td>US Government work, public domain</td><td>US weather alerts</td></tr>
-<tr><td><a href="https://www.pulsepoint.org/" rel="noopener" target="_blank">PulsePoint</a></td><td>Public agency feed</td><td>Public incident feed (US)</td></tr>
-<tr><td>Waze, Citizen</td><td><strong>Publicly available data only.</strong> Not a partnership and not an endorsement.</td><td>Public incident reports</td></tr>
-<tr><td>Austin, Calgary and Honolulu open-data portals</td><td>Each portal&rsquo;s open-data licence</td><td>Enforcement and incident datasets</td></tr>
-</table>
 
 <h2 id="infra">Infrastructure</h2>
 <table>
@@ -89,8 +73,7 @@ permission. Full text:
 <p>Vehicle makes, models and trims listed in the garage are trademarks of their
 respective owners, used nominatively so that riders can describe their own car.
 Convoy is not affiliated with, endorsed by, or sponsored by any vehicle
-manufacturer. The same applies to Escort, Bel and SABRE (radar-detector
-interoperability), Waze, Citizen, Google and Apple.</p>
+manufacturer. The same applies to Google and Apple.</p>
 
 <footer class="site">
   <a href="/privacy">Privacy Policy</a>

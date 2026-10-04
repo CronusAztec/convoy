@@ -25,7 +25,7 @@ Environment=NEARBY_KM=30
 # client-controlled and honouring it from an untrusted peer disables every rate
 # limit in the server.
 Environment=TRUST_PROXY=loopback
-# Runtime cache (hotspots.json) lives OUTSIDE the app tree so deploys
+# Runtime state (flags, OTA manifests, telemetry rollup) lives OUTSIDE the app tree so deploys
 # (scp/cp/tar) can't clobber it. Accounts no longer live here — they moved to
 # Supabase. Create + chown convoy:convoy this dir before enabling the service.
 Environment=DATA_DIR=/var/lib/convoy
@@ -51,10 +51,7 @@ Environment=DATA_DIR=/var/lib/convoy
 #   SUPABASE_DB_URL=postgresql://...     (embeds the DB password)
 #
 # ── Optional — set only what you use ──
-#   TOMTOM_KEY=...            (traffic-aware routing + traffic heatmap)
-#   OPENWEBNINJA_KEY=...      (live Waze police/hazard layer + hotspot data)
-#   RAPIDAPI_KEY=...          (upstream data feeds)
-#   AGENT_KEY=...             (the /api/agent/* ingest secret)
+#   TOMTOM_KEY=...            (traffic-aware routing)
 #   ADMIN_TOKEN=...           (the /admin control panel; unset ⇒ /admin 404s.
 #                              This one secret can change any account and kill
 #                              the app — use `openssl rand -hex 32`.)

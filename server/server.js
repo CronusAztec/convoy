@@ -16,7 +16,7 @@ const { WebSocketServer } = require('ws');
 
 // Lightweight .env loader (no dependency): fills process.env from server/.env so
 // secrets like TOMTOM_KEY stay OUT of tracked files (.env is gitignored). MUST run
-// before the local requires below — tomtom.js / waze.js capture their keys from
+// before the local requires below — tomtom.js captures its key from
 // process.env at require time. Vars already set WIN (production uses systemd
 // Environment=, which must override the file); a missing .env is a silent no-op.
 (function loadDotenv() {
@@ -37,12 +37,7 @@ const store = require('./store');
 const sb = require('./supabase');
 const mail = require('./mailer');
 const oauth = require('./oauth');
-const overpass = require('./overpass');
 const tomtom = require('./tomtom');
-const waze = require('./waze');
-const hotspots = require('./hotspots');
-const aircraft = require('./aircraft');
-const agent = require('./agent');
 const telemetry = require('./telemetry');
 const ota = require('./ota');
 const flags = require('./flags');
@@ -332,8 +327,8 @@ function validEmail(e) {
    X-Forwarded-For is a CLIENT-CONTROLLED header unless the request actually
    arrived from a proxy we run. Reading it unconditionally meant anyone could
    send a fresh random value per request and get a fresh bucket for EVERY per-IP
-   limit in this file — auth (14/10min), route/waze/hotspots/incidents (30/min),
-   tiles (300/min), tts, crowd:report — plus a fresh slot against the MAX_PER_IP
+   limit in this file — auth (14/10min), route (30/min), tts — plus a fresh
+   slot against the MAX_PER_IP
    websocket ceiling. Effectively: no rate limiting at all, and unlimited
    password guessing.
 
@@ -471,7 +466,7 @@ function authFail(res, r) {
 // CORS — the native Android app runs at https://localhost and calls this API
 // cross-origin (https://odoreeci.tech/api/*). Without these, every /api fetch from
 // the app is blocked by the WebView (the JSON POSTs even get a preflight first),
-// which silently disabled traffic, hotspots and Waze on Android. The API is
+// which silently disabled TomTom routing on Android. The API is
 // anonymous + token-in-header (no cookies), so '*' is safe — no credentials mode.
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -533,8 +528,8 @@ function readBody(req, res, cb) {
 }
 
 // Rate buckets are keyed 'scope:ip' — every caller MUST prefix a scope. A single
-// shared per-IP bucket meant the map's background polls (waze/hotspots/incidents
-// at 30/min, traffic tiles at 300/min) filled the same bucket the auth check
+// shared per-IP bucket meant the map's background polls (route caps, TTS)
+// filled the same bucket the auth check
 // read, so a user whose map was open couldn't register ("Too many attempts").
 //
 // The scope half of the key is the UNIT the limit counts, and there are exactly
@@ -695,16 +690,11 @@ async function handleApi(req, res, urlPath) {
   // server has keys for, so it can opt in or fall back to keyless alternatives.
   // Cheap GET, no upstream call — safe to hit on every connect.
   if (req.method === 'GET' && urlPath === '/api/route/caps') {
-    // waze/incidents stay "on" when the agent ingest is configured, even without
-    // upstream keys — agent-pushed police/hazards flow through those endpoints.
-    // Every cap flows through the runtime flag store (flags.js): env/key state
-    // is the DEFAULT, the admin panel can force any cap on/off live, and
-    // riders see the change on their next app open (caps are session-cached).
+    // The cap flows through the runtime flag store (flags.js): env/key state
+    // is the DEFAULT, the admin panel can force it on/off live, and riders see
+    // the change on their next app open (caps are session-cached).
     return json(res, 200, {
-      routing: flags.pick('routing', tomtom.hasKey()),
-      waze: flags.pick('waze', waze.hasKey() || agent.enabled()),
-      hotspots: flags.pick('hotspots', true),
-      incidents: flags.pick('incidents', tomtom.hasKey() || agent.enabled())
+      routing: flags.pick('routing', tomtom.hasKey())
     });
   }
 
@@ -742,13 +732,6 @@ async function handleApi(req, res, urlPath) {
     // being retried, not one that has been shrugged off. See authresidue.js.
     stats.pendingAuthDeletions = store.pendingAuthDeletions();
     return json(res, 200, stats);
-  }
-
-  // Agent status probe (auth'd): live item counts for debugging an integration.
-  if (req.method === 'GET' && urlPath === '/api/agent/status') {
-    if (!agent.enabled()) return json(res, 503, { error: 'Agent API not configured (set AGENT_KEY)' });
-    if (!agent.authed(req)) return json(res, 401, { error: 'unauthorized' });
-    return json(res, 200, { ok: true, live: agent.counts() });
   }
 
   if (req.method !== 'POST') return json(res, 404, { error: 'not found' });
@@ -1616,30 +1599,6 @@ async function handleApi(req, res, urlPath) {
         return json(res, 200, { ok: true, profile });
       }
 
-      // Dragy personal best (auth'd). The client POSTs after finish() when it
-      // computes a new PB; the server only persists if it beats the stored time.
-      // Returns the full stats object so the client adopts the authoritative view.
-      if (urlPath === '/api/dragy/pb') {
-        const u = userFromToken(bearer(req));
-        if (!u) return json(res, 401, { error: 'unauthorized' });
-        if (!rateOk('pb:' + ip, 30, 60 * 1000)) return json(res, 429, { error: 'Too many requests — slow down' });
-        const DRAGY_MODES = ['0-60', '0-100k', '0-30', '0-100', '60-130', '100-200k', 'eighth', 'quarter'];
-        const modeId = str(body && body.modeId, 16, '');
-        if (DRAGY_MODES.indexOf(modeId) < 0) return json(res, 400, { error: 'bad mode' });
-        const time = Number(body && body.time);
-        const trap = body && body.trap != null ? Number(body.trap) : null;
-        if (!Number.isFinite(time) || time <= 0 || time > 600) return json(res, 400, { error: 'bad time' });
-        if (trap != null && (!Number.isFinite(trap) || trap < 0)) return json(res, 400, { error: 'bad trap' });
-        const stats = store.recordPB(u.id, modeId, time, trap == null ? null : trap);
-        // Propagate to the live client + notify scoped riders (live profile updates).
-        const c = online.get(u.id);
-        if (c) {
-          c.stats = stats;
-          fanoutStat(c, stats);
-        }
-        return json(res, 200, { ok: true, stats: stats });
-      }
-
       // Traffic-aware routing via TomTom (key is a server secret). Anonymous:
       // routing is core app functionality and routing isn't sensitive data, so
       // no token required — but it is rate-limited per IP to protect the quota.
@@ -1657,150 +1616,6 @@ async function handleApi(req, res, urlPath) {
         return;
       }
 
-      // Live Waze alerts (police/accidents/hazards) via OpenWeb Ninja. Anonymous —
-      // the bbox is public road data — but rate-limited per IP to protect the
-      // upstream quota. Returns normalized GeoJSON the client layers consume.
-      // body: { bottomLeft:[lng,lat], topRight:[lng,lat] }
-      if (urlPath === '/api/waze') {
-        const ip = clientIp(req);
-        if (!rateOk('waze:' + ip, 30, 60 * 1000)) return json(res, 429, { error: 'Too many requests — slow down' });
-        const bl = body && body.bottomLeft, tr = body && body.topRight;
-        if (!tomtom.isLngLat(bl) || !tomtom.isLngLat(tr)) return json(res, 400, { error: 'bad bbox' });
-        // Agent-pushed live police merge into every response (already recorded
-        // into the hotspot model at ingest — don't record them again here).
-        const agentFeats = agent.enabled() ? agent.policeFeatures(bl, tr) : [];
-        if (!waze.hasKey()) {
-          // No upstream key but the agent feed is on → serve agent sightings alone.
-          if (agent.enabled()) return json(res, 200, { type: 'FeatureCollection', features: agentFeats });
-          return json(res, 503, { error: 'Waze key not configured' });
-        }
-        waze.alerts(bl, tr, (err, status, fc) => {
-          // Surface upstream rate-limiting as 429 (not a generic 502) so the client +
-          // collector back off instead of retry-storming the shared free-tier key —
-          // unless the agent feed has sightings for this view: those are local and
-          // quota-free, so serving them beats an empty error (waze.js's cooldown
-          // still protects the upstream key either way).
-          if (err) {
-            if (agentFeats.length) return json(res, 200, { type: 'FeatureCollection', features: agentFeats });
-            return json(res, status === 429 ? 429 : 502,
-              { error: status === 429 ? 'Waze rate limited — backing off' : 'Waze service unavailable' });
-          }
-          // Feed live police sightings into the probability model — they become
-          // the observations hotspot queries are scored from. Server time, since
-          // the sighting is "now" from the rider's perspective. Non-police alerts
-          // (hazards/accidents) are intentionally excluded from police hotspots.
-          if (fc && fc.features) {
-            const now = Date.now();
-            for (let i = 0; i < fc.features.length; i++) {
-              const f = fc.features[i];
-              if (f.properties && f.properties.kind === 'police' && f.geometry && f.geometry.coordinates) {
-                hotspots.record(f.geometry.coordinates[0], f.geometry.coordinates[1], now);
-              }
-            }
-            if (agentFeats.length) fc.features = fc.features.concat(agentFeats);
-          }
-          return json(res, 200, fc);
-        });
-        return;
-      }
-
-      // Police probability hotspots for a bbox + hour. Derived from accumulated
-      // Waze + crowd police sightings (see server/hotspots.js). Anonymous, rate-
-      // limited. body: { bottomLeft:[lng,lat], topRight:[lng,lat], hour?:0..23 }.
-      // hour defaults to the current UTC hour server-side, but the client passes
-      // its LOCAL hour (police patterns are local — "morning rush" = local morning).
-      // OpenStreetMap lookups (police stations, speed cameras, ALPR, stops,
-      // signals). Proxied because overpass-api.de serves no CORS header, so the
-      // browser cannot call it at all — and because one cached answer here
-      // serves every rider in the area instead of each of them asking.
-      //
-      // Anonymous: this is public map data and guests use the same map layers.
-      // The caller picks a KIND, never a query — see server/overpass.js.
-      if (urlPath === '/api/overpass') {
-        if (!rateOk('overpass:' + ip, 30, 60 * 1000)) {
-          return json(res, 429, { error: 'Too many requests — slow down' });
-        }
-        const kind = String(body && body.kind || '');
-        if (!overpass.hasKind(kind)) return json(res, 400, { error: 'Unknown lookup' });
-        const r = await overpass.query(kind, body && body.bbox);
-        if (r.error === 'bad-bbox') return json(res, 400, { error: 'Bad bounding box' });
-        // 502, not 500: upstream is down or busy, and the client already treats
-        // a failure here as "skip this layer" rather than as an error to show.
-        if (r.error) return json(res, 502, { error: 'Map data is unavailable right now' });
-        return json(res, 200, r.body);
-      }
-
-      // Live aircraft for the Ghost-mode sky layer.
-      //
-      // This is a proxy because it HAS to be: OpenSky answers browsers with
-      // `Access-Control-Allow-Origin: https://opensky-network.org`, so the old
-      // client-side fetch could never complete and the layer was dead. Going
-      // through here also means one upstream poll per deployment rather than one
-      // per rider, which is what OpenSky's anonymous budget expects.
-      //
-      // Anonymous, like the other public map layers: guests see the same sky.
-      if (urlPath === '/api/aircraft') {
-        if (!rateOk('aircraft:' + ip, 40, 60 * 1000)) {
-          return json(res, 429, { error: 'Too many requests — slow down' });
-        }
-        const r = await aircraft.states(body && body.bbox);
-        if (r.error === 'bad-bbox') return json(res, 400, { error: 'Bad bounding box' });
-        // 502/429 rather than 500: the client treats any failure here as "skip
-        // this poll and keep the dots you have", not as an error to show.
-        if (r.error === 'rate-limited') return json(res, 429, { error: 'Aircraft feed is busy' });
-        if (r.error) return json(res, 502, { error: 'Aircraft data is unavailable right now' });
-        return json(res, 200, { aircraft: r.rows, cached: !!r.cached, stale: !!r.stale });
-      }
-
-      if (urlPath === '/api/hotspots') {
-        const ip = clientIp(req);
-        if (!rateOk('hotspots:' + ip, 30, 60 * 1000)) return json(res, 429, { error: 'Too many requests — slow down' });
-        const bl = body && body.bottomLeft, tr = body && body.topRight;
-        if (!tomtom.isLngLat(bl) || !tomtom.isLngLat(tr)) return json(res, 400, { error: 'bad bbox' });
-        let hour = Number(body && body.hour);
-        if (!Number.isInteger(hour) || hour < 0 || hour > 23) hour = new Date().getHours();
-        return json(res, 200, hotspots.query(bl[0], bl[1], tr[0], tr[1], hour));
-      }
-
-      // Live traffic INCIDENTS (accidents, closures, road hazards) via TomTom — same
-      // key as the traffic heatmap. Anonymous + rate-limited. Returns hazard-pin GeoJSON
-      // the client's hazard layer consumes. body: { bottomLeft:[lng,lat], topRight:[lng,lat] }
-      if (urlPath === '/api/incidents') {
-        const ip = clientIp(req);
-        if (!rateOk('incidents:' + ip, 30, 60 * 1000)) return json(res, 429, { error: 'Too many requests — slow down' });
-        const bl = body && body.bottomLeft, tr = body && body.topRight;
-        if (!tomtom.isLngLat(bl) || !tomtom.isLngLat(tr)) return json(res, 400, { error: 'bad bbox' });
-        // Agent-pushed hazards/traffic/weather ride on the same hazard-pin feed.
-        const agentFeats = agent.enabled() ? agent.hazardFeatures(bl, tr) : [];
-        if (!tomtom.hasKey()) {
-          if (agent.enabled()) return json(res, 200, { type: 'FeatureCollection', features: agentFeats });
-          return json(res, 503, { error: 'Incidents key not configured' });
-        }
-        tomtom.incidents(bl[0], bl[1], tr[0], tr[1], (err, status, fc) => {
-          if (err) {
-            // Upstream down: agent pins are better than an empty error for the map.
-            if (agentFeats.length) return json(res, 200, { type: 'FeatureCollection', features: agentFeats });
-            return json(res, 502, { error: 'Incidents service unavailable' });
-          }
-          if (fc && fc.features && agentFeats.length) fc.features = fc.features.concat(agentFeats);
-          return json(res, 200, fc);
-        });
-        return;
-      }
-
-      // Agent ingest: an external AI/script pushes live map data (police, hazards,
-      // traffic, weather, hotspot observations). See AGENT-API.md for the contract.
-      // Auth is the AGENT_KEY env var — unset means the feature is off.
-      if (urlPath === '/api/agent/update') {
-        if (!agent.enabled()) return json(res, 503, { error: 'Agent API not configured (set AGENT_KEY)' });
-        if (!agent.authed(req)) return json(res, 401, { error: 'unauthorized' });
-        if (!rateOk('agent:' + ip, 120, 60 * 1000)) return json(res, 429, { error: 'Too many agent updates — slow down' });
-        const items = Array.isArray(body && body.items) ? body.items : (body && body.type ? [body] : null);
-        if (!items || !items.length) return json(res, 400, { error: 'body must be {items:[...]} or a single item' });
-        if (items.length > 100) return json(res, 400, { error: 'max 100 items per call' });
-        const result = agent.ingest(items);
-        return json(res, 200, { ok: true, accepted: result.accepted, rejected: result.rejected, live: agent.counts() });
-      }
       return json(res, 404, { error: 'not found' });
     } catch (e) {
       console.error('[api ' + urlPath + ']', e.message);
@@ -1825,35 +1640,18 @@ const PARTY_GRACE_MS = Number(process.env.PARTY_GRACE_MS || 90000);
 const RESUME_MAX = 500;                 // hard ceiling; seats are pruned on write
 const resumeSeats = new Map();          // token -> { pid, userId, at }  (the socket was already reaped)
 const seatOwner = new Map();            // token -> the client that still owns it (the socket is still open)
-// Ad-hoc drag races (NOT convoy-gated). Any nearby rider can create/join. A race
-// is proximity-scoped at join (B.haversine ≤ NEARBY_KM) so two riders out of range
-// can't race. Auto-cleans up on finish, abandon, or leader disconnect.
-const races = new Map();   // raceId -> race
-const RACE_DRAGY_MODES = ['0-60', '0-100k', '0-30', '0-100', '60-130', '100-200k', 'eighth', 'quarter'];
-const RACE_MAX = 8;        // racers per race (matches the parking-lot feel of a drag strip)
-// race:fix budgets. The client relays at 10Hz for the WHOLE race (js/race.js
-// fixSendTimer), so one racer needs 600/min — a 200/min PER-IP bucket starved
-// every race 10–20s in (instantly so for two riders sharing a phone-hotspot
-// NAT, which is this app's home turf). Budget per CONNECTION at the real
-// cadence, and per IP at "a full NAT'd race group" headroom.
-const RACE_FIX_BUDGET = parseInt(process.env.RACE_FIX_BUDGET || '700', 10);        // per connection /min
-const RACE_FIX_IP_BUDGET = parseInt(process.env.RACE_FIX_IP_BUDGET || '3600', 10); // per IP /min (6 racers @10Hz)
 // Global per-connection websocket message budget (server-024). Every bucket
 // above throttles ONE message type; this is the ceiling over ALL of them, so a
 // signed-in client cannot push {"t":"wave"} at line rate and turn each one
-// into a scoped broadcast. Sized against a legitimate racer's documented peak:
-// race:fix at 10Hz (RACE_FIX_BUDGET, 700/min) + pos at 1Hz (60/min, js/net.js
-// sendPos) + voice:signal at its own ceiling of 40 per 5s (480/min) ≈ 1240/min.
-// 1800 leaves ~1.45× headroom and still cuts a line-rate flood by orders of
-// magnitude; test/serverpolicy.test.js W1 pins that arithmetic. Per
-// connection, per fixed 60s window; the gate itself sits in the socket's
-// message handler, after the hello-first guard and before the handler lookup.
+// into a scoped broadcast. Sized against a legitimate client's documented peak:
+// pos at 1Hz (60/min, js/net.js sendPos) + voice:signal at its own ceiling of
+// 40 per 5s (480/min) + voice:relay at its own 1200/min ≈ 1740/min. 1800
+// leaves headroom and still cuts a line-rate flood by orders of magnitude;
+// test/serverpolicy.test.js W1 pins that arithmetic. Per connection, per fixed
+// 60s window; the gate itself sits in the socket's message handler, after the
+// hello-first guard and before the handler lookup.
 const WS_MSG_BUDGET = parseInt(process.env.WS_MSG_BUDGET || '1800', 10);
 const WS_MSG_WINDOW_MS = 60 * 1000;
-// How far from your own position you may drop a crowd report. Generous enough
-// for "police a couple of exits up", tight enough that the hotspot model can't
-// be seeded from the other side of the planet.
-const REPORT_MAX_M = parseInt(process.env.REPORT_MAX_M || '8000', 10);
 // voice:relay budget. Each accepted chunk fans out to up to MAX_PARTY-1 convoy
 // members plus VOICE_PROX_MAX nearby riders, so an unmetered sender amplified
 // its own bandwidth ~16x through the server. ~20 chunks/s is well clear of the
@@ -1893,7 +1691,7 @@ function assignAnchors() {
 /* ================= the unverified-email gate =================
    An account that has an email address but has not confirmed it sees the map
    ANONYMISED: other riders keep their car and their pin, but lose their name,
-   handle, photo, username and stats. Confirming the address restores all of it,
+   handle, photo and username. Confirming the address restores all of it,
    live, without a reconnect.
 
    WHO IS **NOT** GATED, and why each matters:
@@ -1949,8 +1747,7 @@ function anonymise(rec) {
     name: 'Rider',
     handle: '',
     avatar: null,
-    account: null,   // no username → no "add friend" either
-    stats: null
+    account: null    // no username → no "add friend" either
   });
 }
 
@@ -1962,15 +1759,14 @@ function riderRecord(r, viewer) {
   if (r.bot) {
     rec = {
       id: r.id, name: r.name, handle: r.handle, emoji: r.emoji, vibe: r.vibe,
-      car: r.car, pos: r.pos, heading: r.heading, mode: r.mode, account: null, stats: null
+      car: r.car, pos: r.pos, heading: r.heading, mode: r.mode, account: null
     };
   } else {
     rec = {
       id: r.id, name: r.profile.name, handle: r.profile.handle, emoji: r.profile.emoji,
       avatar: r.profile.avatar || null, // profile photo (small data URL) — null keeps the glyph
       vibe: r.profile.vibe, car: r.profile.car, pos: r.pos, heading: r.heading, mode: r.mode,
-      account: r.username || null, // username when this rider is signed in (enables "add friend")
-      stats: r.stats || null       // dragy PBs + race win/run counters (null on guests/old records)
+      account: r.username || null  // username when this rider is signed in (enables "add friend")
     };
   }
   return gated(viewer) ? anonymise(rec) : rec;
@@ -2177,19 +1973,6 @@ function applyBlockNow(c, targetUserId) {
     // mid-transmission stays lit up as "speaking" forever.
     send(c, { t: 'voice:mic', from: tc.id, on: false, name: '' });
     send(tc, { t: 'voice:mic', from: c.id, on: false, name: '' });
-    // A shared race is the realistic mid-block case: you are racing someone when
-    // they turn abusive. race:fix already refuses to cross a block, so leaving
-    // them both in would produce a race neither can see the other in.
-    //
-    // The race is ABANDONED rather than left, and nobody is charged for it.
-    // Routing this through leaveRace looked right and was not: when the blocker
-    // happened to be the host it cascaded into endRace, which DNFs everyone
-    // still in and counts the run — so the OTHER rider took a recorded loss
-    // because someone else blocked them. Neither rider chose to abandon this
-    // race, so neither pays for it.
-    if (c.raceId && tc.raceId && c.raceId === tc.raceId) {
-      abandonRace(races.get(c.raceId), 'A rider blocked another — race abandoned, nothing recorded');
-    }
   }
   syncScope(c);
 }
@@ -2398,152 +2181,6 @@ function restoreSeat(rider, party) {
   return true;
 }
 
-/* ================= races =================
-   Open ad-hoc drag-race lobby (NOT convoy-gated). Helpers used by the race:*
-   handlers above + the socket-close cleanup. Mirrors the party helpers' shape. */
-function raceLite(r, id) {
-  const c = clients.get(id);
-  if (!c) return null;
-  const res = r.results[id];
-  return {
-    id: c.id, name: riderName(c),
-    emoji: c.profile.emoji, paint: c.profile.car.paint,
-    ready: !!r.ready[id],
-    finished: !!res,
-    time: res ? res.time : null,
-    trap: res ? res.trap : null,
-    dnf: res ? !!res.dnf : false
-  };
-}
-function sendRaceState(race) {
-  const members = race.members.map((id) => raceLite(race, id)).filter(Boolean);
-  for (const id of race.members) {
-    const c = clients.get(id);
-    if (!c) continue;
-    send(c, {
-      t: 'race:state',
-      race: {
-        id: race.id, modeId: race.modeId, host: race.host,
-        status: race.status, startedAt: race.startedAt,
-        isHost: race.host === c.id,
-        members: members
-      }
-    });
-  }
-}
-// True once every member has a result (a finish or a DNF).
-function raceFinished(race) {
-  for (const id of race.members) if (!race.results[id]) return false;
-  return true;
-}
-// Resolve a race: mark anyone without a finish as DNF, credit the winner, broadcast.
-function endRace(race) {
-  if (race.status === 'finished') return;
-  /* A race that never reached the green light was never raced.
-
-     There are three statuses — 'lobby', 'countdown', 'running' — and only the
-     last one means anybody actually drove: clients arm their timer on 'running'.
-     Ending before that used to do two wrong things at once. It DNF'd every
-     member and counted the run, so creating a race and cancelling it (nobody
-     stages, host changes their mind, host leaves during the 3s countdown) put a
-     loss on everyone's record for something that never happened. And it flipped
-     the race to 'finished', so the clients drew a results screen for a race with
-     no results in it.
-
-     Abandoning is the honest outcome for both: tear it down, record nothing,
-     show nobody a leaderboard. Handled here rather than at each call site so
-     every path into endRace gets it — the host leaving, the early-end button,
-     and the last racer walking out. */
-  if (race.status !== 'running') {
-    abandonRace(race, 'Race cancelled before it started — nothing recorded');
-    return;
-  }
-  race.status = 'finished';
-  // Mark no-shows as DNF. A DNF is still a race entered, so it counts as a run —
-  // otherwise the denominator behind the win rate only ever includes finishers.
-  for (const id of race.members) {
-    if (race.results[id]) continue;
-    race.results[id] = { time: null, trap: null, dnf: true };
-    const dc = clients.get(id);
-    if (dc && dc.userId) { dc.stats = store.recordRun(dc.userId); fanoutStat(dc, dc.stats); }
-  }
-  // Fastest legal time wins. Tally a win on the winner's user record.
-  // The loop above fills a result for every member, so `r` is always set by the
-  // time we get here — the guard is belt-and-braces against a future caller that
-  // reaches this without going through it.
-  let winnerId = null, bestTime = Infinity;
-  for (const id of race.members) {
-    const r = race.results[id];
-    if (r && !r.dnf && r.time != null && r.time < bestTime) { bestTime = r.time; winnerId = id; }
-  }
-  if (winnerId) {
-    const wc = clients.get(winnerId);
-    if (wc && wc.userId) { store.recordWin(wc.userId); wc.stats = store.getStats(wc.userId); fanoutStat(wc, wc.stats); }
-  }
-  sendRaceState(race);
-  // Tear down after a short grace so clients can render the final leaderboard.
-  const id = race.id;
-  defer(() => {
-    const r = races.get(id);
-    if (!r) return;
-    for (const mid of r.members) { const mc = clients.get(mid); if (mc && mc.raceId === id) mc.raceId = null; }
-    races.delete(id);
-  }, 8000).unref();
-}
-/* Tear a race down with no result for anyone.
-
-   Distinct from endRace, which resolves a race: it DNFs whoever has not finished
-   and counts the run, because they entered a race and it ran. Abandoning is for
-   when the race stops being a race through nobody's fault — today that means a
-   block was made between two of its entrants. Recording a loss against either of
-   them for that would make the safety tool cost something to use, and would
-   charge the rider who was blocked for a decision that was not theirs. */
-function abandonRace(race, reason) {
-  if (!race) return;
-  for (const id of race.members) {
-    const mc = clients.get(id);
-    if (!mc) continue;
-    mc.raceId = null;
-    send(mc, { t: 'race:state', race: null });
-    send(mc, { t: 'err', msg: reason });
-  }
-  race.members.length = 0;
-  races.delete(race.id);
-}
-
-// A racer leaves (or disconnects). DNF them if the race is running; if the host
-// leaves mid-race, the race ends. `silent` suppresses the re-broadcast (used
-// when the rider is mid-join into another race).
-// `noPenalty` skips the DNF and the run counter. Used only when the rider is
-// being pulled out of the race by a BLOCK: they did not bail on the race, they
-// removed themselves from someone who was abusing them, and charging a recorded
-// loss for that makes the safety tool cost something to use.
-function leaveRace(c, silent, noPenalty) {
-  const race = c.raceId && races.get(c.raceId);
-  c.raceId = null;
-  if (!race) return;
-  const i = race.members.indexOf(c.id);
-  if (i >= 0) race.members.splice(i, 1);
-  delete race.ready[c.id];
-  // If they finished already, keep their result; otherwise DNF them so the race
-  // can still resolve (only meaningful while running).
-  if (race.status === 'running' && !race.results[c.id] && !noPenalty) {
-    race.results[c.id] = { time: null, trap: null, dnf: true };
-    // Bailing out mid-race is still a race entered — count the run so the win
-    // rate isn't computed against finishers only.
-    if (c.userId) c.stats = store.recordRun(c.userId);
-  }
-  const humanLeft = race.members.filter((id) => clients.has(id));
-  if (!humanLeft.length) { races.delete(race.id); return; }
-  // Host left mid-lobby → promote the next racer; mid-race → end the race.
-  if (race.host === c.id) {
-    if (race.status === 'lobby') { race.host = humanLeft[0]; }
-    else { endRace(race); return; }
-  }
-  if (!silent) sendRaceState(race);
-  if (raceFinished(race)) endRace(race);
-}
-
 /* ================= friends ================= */
 // A friend record marked online (the recipient is, by definition, looking at a live session)
 function friendLiteOnline(u) { const l = store.friendLite(u); l.online = true; return l; }
@@ -2577,9 +2214,6 @@ function notifyFriendsOf(u, msg) {
   }
 }
 
-// Fan a stats update (new dragy PB) to every client currently scoping this rider,
-// so open profile views + the Nearby list update live. Mirrors the rider:update
-// fanout in the `profile` handler.
 // Re-send every rider a now-verified session already knows, un-anonymised, plus
 // a fresh global feed. Without this the map keeps saying "Rider" until each pin
 // happens to leave and re-enter scope — which for a parked rider is never, and
@@ -2599,17 +2233,6 @@ function liftGateFor(userId) {
   send(c, { t: 'verified' });           // the client drops its banner on this
 }
 
-function fanoutStat(c, stats) {
-  const msg = { t: 'dragy:pb', id: c.id, stats: stats };
-  // Built per recipient rather than once, because a viewer who has not confirmed
-  // their email gets no stats at all — sending the shared message to everyone
-  // would leak straight past the gate riderRecord() applies.
-  const hidden = { t: 'dragy:pb', id: c.id, stats: null };
-  for (const other of clients.values()) {
-    if (other.known && other.known.has(c.id)) send(other, gated(other) ? hidden : msg);
-  }
-}
-
 /* ================= message handlers ================= */
 const handlers = {
   hello(c, m) {
@@ -2625,7 +2248,6 @@ const handlers = {
       c.userId = u.id;
       c.username = u.username;
       c.profile = u.profile;           // account profile is authoritative
-      c.stats = u.stats || { pb: {} };  // dragy PBs + race counters (live profile view)
       // One session per account. The previous socket used to be left open and
       // still in `clients`, so the account showed up as two rider pins on every
       // nearby map until it happened to time out.
@@ -3103,228 +2725,6 @@ const handlers = {
   'voice:prox'(c, m) {
     const mode = ['radius', 'road', 'sight'].indexOf(m.mode) >= 0 ? m.mode : null;
     c.voiceProx = mode;
-  },
-
-  // A rider set a new dragy personal best (reported over the socket so live
-  // profile views of this rider update without a reload). Auth'd riders only —
-  // guests have no server-side stats. The authoritative path is /api/dragy/pb,
-  // but this lets a pure-WS client (e.g. the native shell) push a PB too.
-  'dragy:pb'(c, m) {
-    if (!c.userId) return;
-    // Same per-IP budget as the /api/dragy/pb path: every accepted update can
-    // queue a DB write + fan out to viewers, so it must not be spinnable.
-    if (!rateOk('wspb:' + c.ip, 30, 60 * 1000)) return;
-    const DRAGY_MODES = ['0-60', '0-100k', '0-30', '0-100', '60-130', '100-200k', 'eighth', 'quarter'];
-    const modeId = str(m && m.modeId, 16, '');
-    if (DRAGY_MODES.indexOf(modeId) < 0) return;
-    const time = Number(m && m.time);
-    const trap = m && m.trap != null ? Number(m.trap) : null;
-    if (!Number.isFinite(time) || time <= 0 || time > 600) return;
-    if (trap != null && (!Number.isFinite(trap) || trap < 0)) return;
-    const stats = store.recordPB(c.userId, modeId, time, trap == null ? null : trap);
-    c.stats = stats;
-    fanoutStat(c, stats);
-  },
-
-  /* ----- drag races (open lobby, any nearby rider) ----- */
-  'race:create'(c, m) {
-    if (!c.pos) return send(c, { t: 'err', msg: 'Set your location first' });
-    const modeId = str(m && m.modeId, 16, '');
-    if (RACE_DRAGY_MODES.indexOf(modeId) < 0) return send(c, { t: 'err', msg: 'Pick a race type' });
-    if (c.raceId) leaveRace(c, true); // one race at a time
-    const race = {
-      id: 'r' + crypto.randomBytes(4).toString('hex'),
-      modeId: modeId,
-      host: c.id,
-      status: 'lobby',           // lobby | countdown | running | finished
-      startedAt: 0,
-      members: [c.id],           // rider ids
-      ready: {},                 // id -> bool
-      results: {},               // id -> { time, trap, dnf }  (filled on finish)
-      createdAt: Date.now()
-    };
-    races.set(race.id, race);
-    c.raceId = race.id;
-    race.ready[c.id] = false;
-    sendRaceState(race);
-  },
-
-  'race:join'(c, m) {
-    if (!c.pos) return send(c, { t: 'err', msg: 'Set your location first' });
-    const race = races.get(str(m && m.id, 40));
-    if (!race) return send(c, { t: 'err', msg: 'That race is gone' });
-    if (race.status !== 'lobby') return send(c, { t: 'err', msg: 'Race already started' });
-    if (race.members.length >= RACE_MAX) return send(c, { t: 'err', msg: 'Race is full' });
-    // Proximity gate: only nearby riders can join (mirrors crowd:report scoping).
-    const host = getRider(race.host);
-    if (host && host.pos && B.haversine(c.pos, host.pos) > NEARBY_KM * 1000) {
-      return send(c, { t: 'err', msg: 'Too far to race — move closer to the host' });
-    }
-    // Refuse the pairing outright rather than letting them in and quietly
-    // withholding the position stream: a race where one entrant is invisible to
-    // another is a broken race, and neither of them would know why. Better to
-    // never start it. The wording names no one, so it does not confirm who.
-    for (const mid of race.members) {
-      if (blockedPair(c, getRider(mid))) {
-        return send(c, { t: 'err', msg: 'You can\'t join this race' });
-      }
-    }
-    if (c.raceId) leaveRace(c, true);
-    race.members.push(c.id);
-    race.ready[c.id] = false;
-    c.raceId = race.id;
-    sendRaceState(race);
-  },
-
-  'race:ready'(c, m) {
-    const race = c.raceId && races.get(c.raceId);
-    if (!race || race.status !== 'lobby') return;
-    // Each flip re-broadcasts state to every member; throttle to UI toggle
-    // cadence so it can't be spun as an amplification flood.
-    const now = Date.now();
-    if (now - (c.lastReadyAt || 0) < 500) return;
-    c.lastReadyAt = now;
-    race.ready[c.id] = !!m.on;
-    sendRaceState(race);
-  },
-
-  // Host starts the race. Server mints startedAt and broadcasts a countdown;
-  // everyone arms their own RaceTimer from their real GPS. A 3s countdown gives
-  // racers a fair synchronized launch (everyone goes green together).
-  'race:start'(c, m) {
-    const race = c.raceId && races.get(c.raceId);
-    if (!race || race.host !== c.id) return;
-    if (race.status !== 'lobby') return;
-    if (race.members.length < 2) return send(c, { t: 'err', msg: 'Need at least 2 racers' });
-    race.status = 'countdown';
-    race.startedAt = Date.now() + 3000; // green light in 3s
-    sendRaceState(race);
-    // Flip to running at green. Each racer's client arms on 'running'.
-    const id = race.id;
-    defer(() => {
-      const r = races.get(id);
-      if (!r || r.status !== 'countdown') return;
-      r.status = 'running';
-      sendRaceState(r);
-    }, 3000).unref();
-  },
-
-  // Live GPS relay during a race (~10Hz, only while running). Bounded + rate-
-  // limited so it can't be abused out of a race.
-  'race:fix'(c, m) {
-    const race = c.raceId && races.get(c.raceId);
-    if (!race || race.status !== 'running') return;
-    if (!rateOk('racefix:' + c.id, RACE_FIX_BUDGET, 60 * 1000) ||
-        !rateOk('racefixip:' + c.ip, RACE_FIX_IP_BUDGET, 60 * 1000)) return;
-    const pos = [m && m.lng, m && m.lat];
-    if (!validPos(pos)) return;
-    const payload = {
-      t: 'race:fix', from: c.id,
-      lng: m.lng, lat: m.lat,
-      speed: num(m && m.speed, 0, 250, null),   // m/s, may be null
-      heading: num(m && m.heading, 0, 360, null),
-      acc: num(m && m.acc, 0, 5000, null),
-      // Coerce: m.ts arrives unvalidated and is relayed verbatim — a non-number
-      // (object/array) would ride the 64KB frame out to every race peer.
-      ts: Number.isFinite(Number(m && m.ts)) ? Number(m.ts) : Date.now()
-    };
-    for (const id of race.members) {
-      if (id === c.id) continue;
-      const tc = clients.get(id);
-      if (!tc) continue;
-      // race:fix is a continuous stream of live lat/lng/speed/heading — the most
-      // sensitive frame the server sends. Joining a race must not become a way
-      // around a block, and a block made MID-race has to stop the stream on the
-      // very next fix rather than at the end of the race.
-      if (blockedPair(c, tc)) continue;
-      send(tc, payload);
-    }
-  },
-
-  // A racer finished (their local RaceTimer crossed the target). Server records
-  // the result; when everyone's in, the race ends and results are broadcast.
-  'race:finish'(c, m) {
-    const race = c.raceId && races.get(c.raceId);
-    if (!race || race.status !== 'running') return;
-    if (race.results[c.id]) return; // already finished
-    const time = Number(m && m.time);
-    const trap = m && m.trap != null ? Number(m.trap) : null;
-    if (!Number.isFinite(time) || time <= 0 || time > 600) return;
-    race.results[c.id] = { time: time, trap: trap != null && Number.isFinite(trap) ? trap : null, dnf: false };
-    // Tally a race stat on the user record (auth'd riders only) + a win for the
-    // fastest finisher once the race resolves.
-    if (c.userId) c.stats = store.recordRun(c.userId);
-    sendRaceState(race);
-    if (raceFinished(race)) endRace(race);
-  },
-
-  'race:leave'(c) {
-    if (c.raceId) leaveRace(c, false);
-  },
-
-  // Host invited a specific rider to their race (from the profile "Challenge"
-  // button). Relay an invite toast to that rider with the race id so they can
-  // join. Validates the sender actually owns the race + the target is nearby.
-  'race:invite'(c, m) {
-    const race = c.raceId && races.get(c.raceId);
-    if (!race || race.host !== c.id) return;
-    const target = getRider(str(m && m.to, 40));
-    if (!target || !target.pos || !c.pos) return;
-    // Silently dropped, like party:invite — a distinct refusal would confirm the
-    // block to the sender.
-    if (blockedPair(c, target)) return;
-    if (B.haversine(c.pos, target.pos) > NEARBY_KM * 1000) {
-      return send(c, { t: 'err', msg: 'Too far to challenge — move closer' });
-    }
-    send(target, {
-      t: 'race:invite',
-      from: c.id, fromName: riderName(c),
-      raceId: race.id, modeId: race.modeId
-    });
-  },
-
-  'race:end'(c) {
-    // Host can end a not-yet-finished race early (e.g. someone won't stage).
-    const race = c.raceId && races.get(c.raceId);
-    if (!race || race.host !== c.id) return;
-    endRace(race);
-  },
-
-  // Crowd hazard report (e.g. a live police sighting). The live pin is ephemeral
-  // (clients hold it for the session and cap their own array), BUT police reports
-  // are also recorded into the probability model so recurring spots become hotspots.
-  // Coords are validated, the label sanitized, and the broadcast is SCOPED: only
-  // riders within NEARBY_KM of the report receive it (a police spot on the other
-  // side of the world is noise). The reporter's lite is attached so a client can
-  // drop its own echo (it already drew the pin locally at report time).
-  'crowd:report'(c, m) {
-    const pos = [m.lng, m.lat];
-    if (!validPos(pos)) return;
-    // Proximity gate. The BROADCAST below is already scoped to riders near the
-    // report, but hotspots.record() ran unconditionally — so one client could
-    // walk the globe writing permanent police observations into the probability
-    // model that every user's map reads from. You can only report what you can
-    // see, so the pin has to be near where you actually are.
-    if (!c.pos || B.haversine(c.pos, pos) > REPORT_MAX_M) {
-      return send(c, { t: 'err', msg: 'You can only report what’s near you' });
-    }
-    // Per-IP throttle so one source can't flood the area. Reuses the auth/window
-    // rate limiter; a 60s budget is generous for genuine reporting cadence.
-    if (!rateOk('report:' + c.ip, 20, 60 * 1000)) return send(c, { t: 'err', msg: 'Too many reports — slow down' });
-    const kind = str(m.kind, 24, 'hazard');
-    const label = str(m.label, 48, '');
-    // A rider-reported police sighting feeds the probability model just like a
-    // Waze sighting would. Timestamped server-side ("now" from the rider's view).
-    if (kind === 'police') hotspots.record(m.lng, m.lat, Date.now());
-    const payload = { t: 'crowd:report', from: liteOf(c), lat: m.lat, lng: m.lng, kind, label };
-    const radius = NEARBY_KM * 1000;
-    for (const other of clients.values()) {
-      if (!other.pos || other.id === c.id) continue;
-      // The pin carries the reporter's identity (liteOf), so it is content from
-      // them and a block applies to it like any other.
-      if (blockedPair(c, other)) continue;
-      if (B.haversine(pos, other.pos) <= radius) send(other, payload);
-    }
   }
 };
 
@@ -3625,6 +3025,15 @@ const LEGAL_PAGES = {
    App integrity → App signing key certificate), or links will open in the
    browser for every Play install while working fine for a sideloaded APK. */
 const ANDROID_PACKAGE = process.env.ANDROID_PACKAGE || 'tech.odoreeci.convoy';
+/* ---- iOS Universal Links ----
+   The iOS half of the same arrangement: /.well-known/apple-app-site-association
+   lets the iPhone app claim the /l/… links, given the associated-domains
+   entitlement in ios/App/App/App.entitlements. Apple identifies the app as
+   <TEAMID>.<bundle id> — set APPLE_APP_IDS to that (comma list if several
+   builds are signed by different teams). Unset ⇒ 404, and the links keep
+   opening in Safari, which still works. */
+const APPLE_APP_IDS = (process.env.APPLE_APP_IDS || '')
+  .split(',').map((s) => s.trim()).filter(Boolean);
 const ANDROID_FINGERPRINTS = (process.env.ANDROID_CERT_SHA256 ||
   '0F:B0:BB:9D:6D:99:D0:40:E2:C7:3C:44:AF:96:90:F6:C2:63:76:C6:EB:23:FB:8B:D5:02:00:B9:21:4D:1E:08')
   .split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
@@ -3690,7 +3099,7 @@ const httpServer = http.createServer((req, res) => {
   // Set CORS as response defaults up front so EVERY response carries them —
   // including the bare res.writeHead(4xx/5xx) error paths below. Without this the
   // native WebView blocks the app from reading rate-limit / upstream-error bodies
-  // (and a failed traffic/police tile poisons the layer). writeHead() still wins
+  // (and a failed response poisons the layer). writeHead() still wins
   // for any header it sets explicitly, so the per-response CORS_HEADERS merges stay
   // harmless duplicates of the same values.
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -3713,7 +3122,7 @@ const httpServer = http.createServer((req, res) => {
 
   // CSP for the app shell. The allowlist mirrors what the client actually loads
   // today — the map library and the NSFW model come from jsDelivr, fonts from
-  // Google, and the map/traffic/weather/scanner layers talk to a fixed set of
+  // Google, and the map layers talk to a fixed set of
   // APIs. Note there is no 'unsafe-inline' for script-src: index.html has no
   // inline <script>, so nothing needs it. Inline STYLE attributes are used
   // throughout (paint swatches, marker sizing), hence 'unsafe-inline' there.
@@ -3810,37 +3219,6 @@ const httpServer = http.createServer((req, res) => {
     return;
   }
 
-  // TomTom flow tiles (binary PNG). Served before the JSON /api router so the
-  // bytes don't get JSON-wrapped. Path: /api/traffic/<z>/<x>/<y>.png
-  // NOTE: tile x/y coordinates exceed 999 at zoom ≥ 10 (z13 has coords like
-  // 1410/3273), so the coord groups allow up to 6 digits — the old \d{1,3} cap
-  // 404'd every useful-zoom tile and left the traffic layer blank/blobby.
-  const traffic = urlPath.match(/^\/api\/traffic\/(\d{1,2})\/(\d{1,6})\/(\d{1,6})\.png$/);
-  if (traffic) {
-    // Bounds-check BEFORE spending quota: any z/x/y the regex admits goes
-    // straight into the upstream URL, and a garbage tile still burns one of the
-    // ~2,500 free calls/day. x,y must be < 2^z; z > 22 doesn't exist anywhere.
-    const tz = +traffic[1], tx = +traffic[2], ty = +traffic[3];
-    if (tz > 22 || tx >= (1 << tz) || ty >= (1 << tz)) { res.writeHead(400); res.end('bad tile'); return; }
-    const ip = clientIp(req);
-    // Flow tiles are fetched per visible tile, so the budget is generous per window;
-    // the cap is mainly to stop an abusive client from burning the TomTom quota.
-    if (!tomtom.hasKey()) { res.writeHead(503); res.end('traffic unavailable'); return; }
-    if (!rateOk('tile:' + ip, 300, 60 * 1000)) { res.writeHead(429); res.end('rate limited'); return; }
-    tomtom.tile(traffic[1], traffic[2], traffic[3], (err, status, headers, buf) => {
-      if (err || !buf || status !== 200) { res.writeHead(502); res.end('upstream'); return; }
-      res.writeHead(200, Object.assign({
-        'Content-Type': headers['Content-Type'] || 'image/png',
-        // 90s — matches the client's TRAFFIC_REFRESH_MS so a cache-busted tile URL
-        // actually reaches TomTom fresh on the next refresh, instead of being served
-        // from an intermediate/browser cache that would mask live flow changes.
-        'Cache-Control': 'public, max-age=90'
-      }, CORS_HEADERS));   // WebGL textures (MapLibre raster tiles) require CORS cross-origin
-      res.end(req.method === 'HEAD' ? undefined : buf);
-    });
-    return;
-  }
-
   if (urlPath.indexOf('/api/') === 0) {
     handleApi(req, res, urlPath).catch((e) => { try { json(res, 500, { error: 'Server error' }); } catch (e2) {} });
     return;
@@ -3889,6 +3267,25 @@ const httpServer = http.createServer((req, res) => {
      Play App Signing fingerprint through the environment without a redeploy of
      the app tree. With no fingerprints configured this 404s, which fails
      verification loudly rather than serving a statement that claims nothing. */
+  if (urlPath === '/.well-known/apple-app-site-association') {
+    if (!APPLE_APP_IDS.length) { res.writeHead(404); res.end('Not found'); return; }
+    // No file extension by Apple's spec; served as JSON. Only the /l/ links are
+    // claimed — claiming "/" would route every website link into the app.
+    const body = JSON.stringify({
+      applinks: {
+        apps: [],
+        details: [{ appIDs: APPLE_APP_IDS, components: [{ '/': '/l/*', comment: 'Mailed links: reset, verify, magic, change' }] }]
+      },
+      webcredentials: { apps: APPLE_APP_IDS }
+    });
+    res.writeHead(200, Object.assign({
+      'Content-Type': 'application/json',
+      'Cache-Control': 'public, max-age=3600'
+    }, CORS_HEADERS));
+    res.end(req.method === 'HEAD' ? undefined : body);
+    return;
+  }
+
   if (urlPath === '/.well-known/assetlinks.json') {
     if (!ANDROID_FINGERPRINTS.length) { res.writeHead(404); res.end('Not found'); return; }
     const body = JSON.stringify([{
@@ -4106,7 +3503,6 @@ wss.on('connection', (ws, req) => {
     heading: 0,
     mode: 'cruise',
     party: null,
-    raceId: null,            // active drag race (ad-hoc lobby), if any
     known: new Set(),
     wire: new Map(),   // per-rider wiregate memory — see server/wiregate.js
     lastPosAt: 0,
@@ -4144,7 +3540,7 @@ wss.on('connection', (ws, req) => {
     // during a reconnect storm, and hello floods are already bounded by
     // MAX_PER_IP plus the once-per-socket guard in the handler itself. Over
     // budget → drop the MESSAGE, keep the socket: every high-rate type (pos at
-    // 1Hz, race:fix at 10Hz) is superseded within a second, and disconnecting
+    // 1Hz) is superseded within a second, and disconnecting
     // a rider whose phone burped is worse than the flood. Logged once per
     // window so a real rider tripping it shows up in journalctl with a name
     // and the limit — WS_MSG_BUDGET in convoy.env is the dial.
@@ -4169,11 +3565,9 @@ wss.on('connection', (ws, req) => {
   ws.on('close', () => {
     seatOwner.delete(c.resume);
     // Hold the seat FIRST: a held seat makes the leave silent and posts "lost
-    // signal" instead of "left the convoy" (server-035). Races are not held —
-    // a race is 10-20 s long and endRace/abandonRace have ledger side effects.
+    // signal" instead of "left the convoy" (server-035).
     const held = rememberSeat(c, Date.now());
     if (c.party) leaveParty(c, held);
-    if (c.raceId) leaveRace(c, false);
     clients.delete(c.id);
     const left = (ipCount.get(c.ip) || 1) - 1;
     if (left <= 0) ipCount.delete(c.ip); else ipCount.set(c.ip, left);
@@ -4298,7 +3692,7 @@ setInterval(() => {
      over explicitly rather than exported — the panel gets a capability, not a
      handle on the server's internals. */
   admin.init({
-    snapshot: () => ({ clients: clients.size, parties: parties.size, races: races.size }),
+    snapshot: () => ({ clients: clients.size, parties: parties.size }),
     // Close a rider's live sockets. Used by ban and delete: without it a
     // banned rider keeps their socket (and their pin on everyone's map) until
     // they happen to disconnect, because auth is checked at connect time.
@@ -4339,7 +3733,6 @@ setInterval(() => {
           mode: c.mode === 'parked' ? 'parked' : 'cruise',
           ghost: !!c.ghost,
           party: c.party || null,
-          racing: !!c.raceId,
           mic: !!c.micActive,
           ageMs: c.lastPosAt ? now - c.lastPosAt : null,
           ip: c.ip || ''
@@ -4353,7 +3746,7 @@ setInterval(() => {
           id: b.id, userId: null, username: b.name || 'bot', guest: false, bot: true,
           pos: validPos(b.pos) ? [b.pos[0], b.pos[1]] : null,
           heading: b.heading || 0, mode: b.mode === 'parked' ? 'parked' : 'cruise',
-          ghost: false, party: b.party || null, racing: !!b.raceId, mic: false,
+          ghost: false, party: b.party || null, mic: false,
           ageMs: 0, ip: ''
         });
       }
@@ -4368,8 +3761,6 @@ setInterval(() => {
     },
     sanitizeProfile, validUsername, validPassword, validEmail,
     tomtomKeyed: () => tomtom.hasKey(),
-    wazeKeyed: () => waze.hasKey() || agent.enabled(),
-    agentKeyed: () => agent.enabled(),
     telemetryOn: () => TELEMETRY_ON,
     // Cookies get Secure only on an https deployment; setting it on a plain
     // http dev server would make the session cookie silently undeliverable
@@ -4418,13 +3809,12 @@ function shutdown(sig) {
   console.log(`\n[shutdown] ${sig} received — draining…`);
   try { wss.close(); } catch (e) {}            // no new ws; existing sockets get 1001
   httpServer.close(async () => {
-    // AWAIT these. store.flush()/hotspots.flush() are async, and firing them
-    // un-awaited immediately before process.exit(0) meant the write never ran —
-    // and the process-'exit' flushSync fallback couldn't cover for it either.
-    // Net effect: every account, password change and PB from the last ~800ms
-    // before a restart was silently discarded.
+    // AWAIT this. store.flush() is async, and firing it un-awaited immediately
+    // before process.exit(0) meant the write never ran — and the process-'exit'
+    // flushSync fallback couldn't cover for it either. Net effect: every
+    // account and password change from the last ~800ms before a restart was
+    // silently discarded.
     try { await store.flush(); } catch (e) { console.error('[shutdown] store flush:', e.message); }
-    try { await hotspots.flush(); } catch (e) { console.error('[shutdown] hotspots flush:', e.message); }
     // Close the pool only AFTER the queued writes have drained, or the drain
     // fails on a dead pool and the last few mutations are lost.
     try { await store.close(); } catch (e) { console.error('[shutdown] db close:', e.message); }

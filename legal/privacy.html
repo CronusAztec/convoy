@@ -16,7 +16,7 @@
 </header>
 
 <h1>Privacy Policy</h1>
-<p class="meta">Effective 26 August 2026 &middot; Version 1.2</p>
+<p class="meta">Effective 4 October 2026 &middot; Version 1.3</p>
 
 <div class="card">
   <p style="margin:0"><strong>The short version.</strong> Convoy is a live map. To put
@@ -53,8 +53,8 @@ Representative under GDPR Article 27: <span class="todo">[APPOINT, OR STATE &ldq
 <h3>2.1 Location &mdash; the core of the Service</h3>
 <table>
 <tr><th>Data</th><th>Why</th><th>Legal basis</th></tr>
-<tr><td>Precise GPS position, heading, speed, accuracy</td><td>To draw you on the map, place you near other riders, run navigation, and time performance runs</td><td>Consent &mdash; you grant the OS permission and can revoke it</td></tr>
-<tr><td>Background location (Android, while a convoy or trip is active)</td><td>To keep your position live with the screen off, via a foreground service with a visible notification</td><td>Consent</td></tr>
+<tr><td>Precise GPS position, heading, speed, accuracy</td><td>To draw you on the map, place you near other riders, find riders in range for proximity voice, and run navigation</td><td>Consent &mdash; you grant the OS permission and can revoke it</td></tr>
+<tr><td>Background location (Android and iOS, while the app is open in the background)</td><td>To keep your position live with the screen off &mdash; on Android via a foreground service with a visible notification, on iOS with the system&rsquo;s location indicator showing; never when the app is closed notification</td><td>Consent</td></tr>
 </table>
 <p><strong>Who sees your location.</strong> While you are connected in live mode:</p>
 <ul>
@@ -64,7 +64,7 @@ Representative under GDPR Article 27: <span class="todo">[APPOINT, OR STATE &ldq
   &mdash; a snapshot at least five minutes old, clustered and coarse.</li>
   <li>Members of your convoy see you continuously, at full rate.</li>
 </ul>
-<p><strong>Ghost Mode</strong> removes you from the feed for everyone outside your convoy,
+<p><strong>Invisible mode</strong> removes you from the feed for everyone outside your convoy,
 including the global layer.</p>
 <p><strong>We do not store location history.</strong> Positions live in server memory only,
 in a rolling buffer of roughly the last five minutes, and are discarded after
@@ -101,8 +101,8 @@ data erases them.</p>
   <li><strong>Walkie-talkie voice</strong> &mdash; peer-to-peer between convoy members wherever
   possible. If a direct connection fails, audio is relayed live through our
   server. <strong>We do not record it</strong> and it is never written to disk.</li>
-  <li><strong>Hazard reports and waves</strong> &mdash; broadcast to riders nearby with your
-  rider identity attached.</li>
+  <li><strong>Waves</strong> &mdash; sent to the rider you wave at, with your rider identity
+  attached.</li>
 </ul>
 <p>Legal basis: contract. Anything you broadcast is seen by other people &mdash; treat
 it as public.</p>
@@ -156,9 +156,8 @@ below, each only for the purpose named:</p>
 <tr><td><a href="https://supabase.com/privacy" rel="noopener" target="_blank">Supabase</a></td><td>Authentication and database &mdash; this is where your account lives</td><td>All account data in &sect;2.2</td></tr>
 <tr><td><a href="https://resend.com/legal/privacy-policy" rel="noopener" target="_blank">Resend</a></td><td>Sending confirmation, reset and sign-in email</td><td>Email address, username</td></tr>
 <tr><td>OAuth providers you choose (Google, Apple, GitHub, Discord, Microsoft)</td><td>Social sign-in</td><td>Whatever you authorise at their consent screen</td></tr>
-<tr><td><a href="https://developer.tomtom.com/" rel="noopener" target="_blank">TomTom</a></td><td>Traffic-aware routing and traffic tiles</td><td>Route coordinates, proxied by our server so your IP is not exposed to TomTom</td></tr>
-<tr><td>CARTO, OpenFreeMap, Nominatim, OSRM, RainViewer, OpenMHz, Open-Meteo</td><td>Map tiles, search, routing, overlays, scanner directory</td><td>Requested <strong>directly by your device</strong>, so these services see your IP address and the map area you are viewing &mdash; see &sect;5</td></tr>
-<tr><td><a href="https://opensky-network.org/about/privacy-policy" rel="noopener" target="_blank">OpenSky Network</a></td><td>Live aircraft shown in Ghost mode</td><td>Map area only. Requested <strong>by our server</strong>, not your device, so OpenSky never sees your IP address</td></tr>
+<tr><td><a href="https://developer.tomtom.com/" rel="noopener" target="_blank">TomTom</a></td><td>Traffic-aware routing</td><td>Route coordinates, proxied by our server so your IP is not exposed to TomTom</td></tr>
+<tr><td>CARTO, OpenFreeMap, Nominatim, OSRM</td><td>Map tiles, search, routing</td><td>Requested <strong>directly by your device</strong>, so these services see your IP address and the map area you are viewing &mdash; see &sect;5</td></tr>
 <tr><td><a href="https://sentry.io/privacy/" rel="noopener" target="_blank">Sentry</a> <span class="todo">[ONLY IF ENABLED &mdash; delete this row if you have not set a Sentry DSN]</span></td><td>Crash reporting &mdash; grouping and alerting on the errors described in &sect;2.4</td><td>Error message and stack trace, screen name, app version, device model and OS, random session id</td></tr>
 <tr><td>Our hosting provider</td><td>Running the Service</td><td>All of the above, in transit</td></tr>
 </table>
@@ -167,13 +166,13 @@ warrant or equivalent legal process &mdash; and where necessary to investigate a
 or protect someone&rsquo;s safety. We will tell you when we are permitted to.</p>
 
 <h2 id="third">5. Requests your device makes directly</h2>
-<p>Map tiles, destination search, keyless routing, weather, precipitation radar,
-aircraft feeds and the scanner directory are fetched by your device from the
-third parties listed above. Those requests carry <strong>your IP address</strong> and the
-area of the map you are viewing, and are governed by each provider&rsquo;s own privacy
-policy, not this one. We proxy what we can &mdash; TomTom, Overpass, incident feeds
-&mdash; specifically so that fewer of these requests leave your device directly. Full
-list and licences: <a href="/notices">third-party notices</a>.</p>
+<p>Map tiles, destination search and keyless routing are fetched by your device
+from the third parties listed above. Those requests carry <strong>your IP
+address</strong> and the area of the map you are viewing, and are governed by each
+provider&rsquo;s own privacy policy, not this one. We proxy what we can &mdash;
+TomTom routing &mdash; specifically so that fewer of these requests leave your
+device directly. Full list and licences: <a href="/notices">third-party
+notices</a>.</p>
 
 <h2 id="where">6. Where your data is held</h2>
 <p>Our servers and our Supabase project are hosted in
@@ -215,7 +214,7 @@ the account.</p>
   <li><strong>Correct it</strong> &mdash; most of it is editable in Profile.</li>
   <li><strong>Withdraw location consent</strong> &mdash; revoke the permission in your OS
   settings. The map still works; you simply are not on it.</li>
-  <li><strong>Go invisible without leaving</strong> &mdash; Ghost Mode.</li>
+  <li><strong>Go invisible without leaving</strong> &mdash; Invisible mode, in Settings.</li>
 </ul>
 <p>If the UK or EU GDPR applies to you, you also have the rights of access,
 rectification, erasure, restriction, portability and objection, including
@@ -228,7 +227,7 @@ so there is nothing to opt out of, and we will never discriminate against you fo
 exercising a right.</p>
 
 <h2 id="sec">10. Security</h2>
-<p>Traffic is encrypted in transit (HTTPS and WSS; the Android build refuses
+<p>Traffic is encrypted in transit (HTTPS and WSS; the mobile apps refuse
 cleartext). Passwords and recovery codes are stored only as salted hashes, by our
 authentication provider &mdash; we cannot read them. Access tokens are short-lived.
 Rate limits and per-IP ceilings apply across the API and the realtime layer. No

@@ -328,22 +328,19 @@
 
   /* ---------------- every client fetch gets a deadline ----------------
      A fetch with no signal never rejects when the socket stalls (a tunnel, a
-     captive portal — a phone on a motorcycle), and five map layers set a bbox
-     latch BEFORE their fetch that only .catch() clears, so one stalled response
-     killed the layer for the rest of the ride, silently (BUGS.md frontend-020).
+     captive portal — a phone on a motorcycle), and a map layer that sets a
+     latch BEFORE its fetch which only .catch() clears is dead for the rest of
+     the ride after one stalled response, silently (BUGS.md frontend-020).
      Every fetch in js/ goes through fetchT(); test/fetchtimeout.test.js fails
      the build on a bare fetch(). A caller's own signal is honoured (combined
      with the deadline through AbortSignal.any where the engine has it).
 
-     The table is load-bearing: server/overpass.js tries MIRRORS.length (2)
-     mirrors at TIMEOUT_MS (30 s) each before it answers, so a client deadline
-     below 60 s aborts WORKING enforcement lookups. test/fetchtimeout.test.js
-     group C pins overpass >= MIRRORS × TIMEOUT_MS and aircraft >
-     UPSTREAM_TIMEOUT_MS (server/aircraft.js) — change the server first. */
+     One deadline today: every same-origin /api/* answers from memory or a
+     short upstream call, and the direct third-party calls (Nominatim, OSRM,
+     Open-Meteo-free) are the same shape. A slower upstream added later gets
+     its own row here, sized against the server's budget for it. */
   var FETCH_TIMEOUT = {
-    overpass: 75000,  // /api/overpass: 2 mirrors × 30 s, plus 15 s for the proxy and the pipe
-    aircraft: 20000,  // /api/aircraft: server UPSTREAM_TIMEOUT_MS 12 s, plus slack
-    api: 15000        // every other same-origin /api/* and every direct third-party call
+    api: 15000        // every same-origin /api/* and every direct third-party call
   };
   function deadlineSignal(ms) {
     if (typeof AbortSignal === 'function' && typeof AbortSignal.timeout === 'function') return AbortSignal.timeout(ms);

@@ -14,10 +14,6 @@
   var player = { pos: S.playerStart.slice(), heading: 0 };
   var npcs = {};            // id -> rider
   var npcOrder = [];
-  // Local player's dragy stats (PBs + race counters). Mirrors what the server
-  // stores; kept in sync via adoptStats() and read by the profile overlay. Stays
-  // null for guests.
-  var selfStats = null;
   var lastFrame = 0;
   var linksAt = 0;
   var linksSig = ''; // position signature of the last convoy-link build (skip no-op rebuilds)
@@ -47,7 +43,6 @@
       vibe: rec.vibe,
       car: rec.car,
       account: rec.account || null, // username when this rider is a signed-in account
-      stats: rec.stats || null,     // dragy PBs + race win/run counters (null on guests/bots)
       pos: rec.pos.slice(),
       heading: rec.heading || 0,
       speed: rec.speed || 10,
@@ -172,15 +167,6 @@
     A.mapview.addNpc(npc);
     if (npc.member) A.mapview.setNpcMember(id, true);
     ST.emit('nearby:seeded', npcOrder.length);
-  }
-
-  // Stats arrived over the wire (a rider set a dragy PB). Update the NPC record
-  // and nudge any open profile view to refresh.
-  function remoteStats(id, stats) {
-    var npc = npcs[id];
-    if (!npc) return;
-    npc.stats = stats || null;
-    ST.emit('stats', { id: id, stats: stats });
   }
 
   /* ---------------- trip motion + follow camera ---------------- */
@@ -422,8 +408,8 @@
      anchor until either the receiver reports real Doppler speed — instant on
      launch, so timed runs never start late — or the fix escapes an
      accuracy-scaled hold radius (covers devices that never report speed).
-     Only the DISPLAYED/shared position is filtered; dragy and the other
-     gpsfix consumers still get the raw fix. */
+     Only the DISPLAYED/shared position is filtered; gpsfix consumers still
+     get the raw fix. */
   var MOVING_MS = 1.2; // m/s of speed that counts as actually moving (~2.7 mph)
   var holdPos = null;  // [lng,lat] anchor while parked
   // Last raw fix, used to derive speed when the receiver reports no Doppler.
@@ -494,8 +480,7 @@
       hasRealPos = true;
       if (liveTrip) S.trip.gotFix = true; // stepTrip now snaps this real position onto the route
       gpsPred = { pos: pos, speed: fixSpeed, heading: player.heading, at: Date.now() };
-      // Feed the performance meter (dragy.js) the RAW fix: the timer needs true
-      // position deltas; only the displayed/shared position is jitter-held.
+      // Emit the RAW fix: only the displayed/shared position is jitter-held.
       ST.emit('gpsfix', {
         pos: raw,
         speed: fixSpeed,
@@ -537,7 +522,7 @@
 
   // Apply a position fix that originates OUTSIDE the WebView's own watchPosition —
   // namely the native background-location foreground service (js/native.js). Mirrors
-  // the in-WebView watch handler so the player marker, gpsfix consumers (dragy, radar)
+  // the in-WebView watch handler so the player marker, gpsfix consumers
   // and follow-cam behave identically whether the fix came from JS or native code.
   function externalFix(f) {
     if (!f || typeof f.lng !== 'number' || typeof f.lat !== 'number') return;
@@ -678,21 +663,6 @@
     remoteAdd: remoteAdd,
     remoteRemove: remoteRemove,
     remoteTick: remoteTick,
-    remoteProfile: remoteProfile,
-    remoteStats: remoteStats,
-    // Stats for a rider by NPC id; pass 'self' (or null) for the local player's
-    // own stats. The player's own stats aren't stored on an NPC — they live in a
-    // dedicated slot kept in sync by adoptStats().
-    getStats: function (id) {
-      if (id == null || id === 'self') return selfStats;
-      var npc = npcs[id];
-      return npc ? npc.stats : null;
-    },
-    // Adopt authoritative stats for the local player (from /api/dragy/pb or a
-    // dragy:pb echo) and notify any open profile view.
-    adoptStats: function (stats) {
-      selfStats = stats || null;
-      ST.emit('stats', { id: 'self', stats: selfStats });
-    }
+    remoteProfile: remoteProfile
   };
 })();

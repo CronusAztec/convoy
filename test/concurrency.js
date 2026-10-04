@@ -12,7 +12,7 @@
    an await. So the interesting cases are:
 
      · check-then-act across an await in the REST layer
-     · caps (MAX_PARTY, RACE_MAX) enforced across several separate frames
+     · caps (MAX_PARTY) enforced across several separate frames
      · the "one session per account" rule when two sockets arrive together
 
    Every case asserts an INVARIANT that must hold however the interleaving lands,
@@ -29,8 +29,8 @@
 'use strict';
 const WebSocket = require('../server/node_modules/ws');
 const BASE = 'http://localhost:5173';
+const MAX_PARTY = 6;
 const PW = 'concpw12345';
-const MAX_PARTY = 6, RACE_MAX = 8;
 
 let pass = 0, fail = 0;
 const ok = (l, c, x) => { c ? (pass++, console.log('  ✓ ' + l)) : (fail++, console.log('  ✗ ' + l + (x !== undefined ? '  ' + JSON.stringify(x) : ''))); };
@@ -140,40 +140,6 @@ async function poolAccount(name) {
     const st = host.frames.filter((m) => m.t === 'party').pop();
     const size = st ? st.party.members.length : -1;
     ok('convoy never exceeds MAX_PARTY=' + MAX_PARTY + ' (got ' + size + ')', size > 0 && size <= MAX_PARTY, size);
-    riders.forEach((r) => r.close());
-    }
-    await sleep(300);
-  }
-
-  head('3. RACE_MAX is not overshot by simultaneous joins');
-  {
-    const n = RACE_MAX + 2;
-    const toks = [];
-    for (let i = 0; i < n; i++) {
-      const t = await poolAccount('zzconcrider' + i);
-      if (t) toks.push(t);
-    }
-    const all2 = [];
-    for (let i = 0; i < toks.length; i++) all2.push(await open(toks[i], prof('q' + i), [-118.25 + i * 0.0001, 34.05]));
-    const riders = all2.filter((r) => !r.refused);
-    all2.filter((r) => r.refused).forEach((r) => r.close());
-    console.log('  (' + riders.length + ' sockets connected, ' + (all2.length - riders.length) + ' refused by MAX_PER_IP)');
-    if (riders.length <= RACE_MAX) {
-      console.log('  ! pool too small to exercise the cap (need > ' + RACE_MAX + ') — skipped.');
-      console.log('    the account pool needs a clear auth rate-limit window; retry in ~10 min.');
-      riders.forEach((r) => r.close());
-    } else {
-    riders[0].send({ t: 'race:create', modeId: '0-60' });
-    await sleep(500);
-    const rs = riders[0].frames.filter((m) => m.t === 'race:state' && m.race).pop();
-    ok('race created', !!rs);
-    if (rs) {
-      for (let i = 1; i < riders.length; i++) riders[i].send({ t: 'race:join', id: rs.race.id });
-      await sleep(1200);
-      const st = riders[0].frames.filter((m) => m.t === 'race:state' && m.race).pop();
-      const size = st ? st.race.members.length : -1;
-      ok('race never exceeds RACE_MAX=' + RACE_MAX + ' (got ' + size + ')', size > 0 && size <= RACE_MAX, size);
-    }
     riders.forEach((r) => r.close());
     }
     await sleep(300);

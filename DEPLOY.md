@@ -92,7 +92,7 @@ npm install --omit=dev
 
 ```bash
 # Needs the Supabase config (see §6) — the server exits at boot without it.
-# DATA_DIR holds the hotspot cache and is created on first run if missing.
+# DATA_DIR holds runtime state (flags, OTA manifests, telemetry rollup) and is created on first run if missing.
 PORT=5173 DATA_DIR=/var/lib/convoy node /opt/convoy/server/server.js
 # → Convoy server → http://localhost:5173 (ws: /ws, bots: 12, nearby: 30km)
 ```
@@ -174,14 +174,12 @@ Set in `/etc/systemd/system/convoy.service` (then `sudo systemctl daemon-reload 
 | `MAIL_REPLY_TO` | _(empty)_ | Optional reply-to. Unset means replies bounce off the no-reply box. |
 | `APP_URL` | `https://odoreeci.tech` | Origin every emailed link and OAuth redirect points back at. **Required** whenever `RESEND_API_KEY` or `OAUTH_PROVIDERS` is set. Deliberately not derived from the `Host` header — otherwise anyone who can set `Host` chooses where a password-reset link lands. No trailing slash. |
 | `OAUTH_PROVIDERS` | `google` | Comma list of social sign-in providers: `google, apple, github, discord, facebook, azure, twitter, twitch, spotify, gitlab, linkedin_oidc`. **Set-but-empty means none.** Unknown names are dropped. Each still needs dashboard setup — see below. |
-| `OAUTH_NATIVE_REDIRECT` | `tech.odoreeci.convoy://auth` | Where the **APK's** sign-in comes back to. The Capacitor WebView's `https://localhost` origin is not a valid redirect target, so the app claims a scheme in its manifest instead. Changing it means changing `AndroidManifest.xml` and `AuthPlugin.java` too. A running server reports the value in use at `GET /api/auth/config`. |
+| `OAUTH_NATIVE_REDIRECT` | `tech.odoreeci.convoy://auth` | Where the **mobile apps'** sign-in comes back to. The Capacitor WebView's origin is not a valid redirect target, so the apps claim a scheme instead. Changing it means changing `AndroidManifest.xml` + `AuthPlugin.java` (Android) and `ios/App/App/Info.plist` + `js/native.js` (iOS) too. A running server reports the value in use at `GET /api/auth/config`. |
 | `ANDROID_CERT_SHA256` | _(release keystore)_ | Comma list of APK signing-certificate SHA-256 fingerprints published at `/.well-known/assetlinks.json`. This is what lets the app claim the `/l/…` links Convoy emails. **Public values, not secrets.** Set to empty to stop publishing the file (App Links off; mailed links open in the browser). **With Play App Signing you must add Play's fingerprint** — see below. |
 | `ANDROID_PACKAGE` | `tech.odoreeci.convoy` | Package name in the same file. Only change it alongside `applicationId` in `android/app/build.gradle`. |
-| `DATA_DIR` | `server/data` (in-repo) | Runtime cache only (`hotspots.json`) now that accounts live in Supabase. Still worth pointing outside the app tree (e.g. `/var/lib/convoy`) so a deploy can't clobber it. |
-| `TOMTOM_KEY` | _(empty)_ | TomTom Web key. Set it to enable **traffic-aware routing** (`/api/route`) and the **live traffic heatmap** (`/api/traffic/*`). Empty → the client falls back to keyless OSRM routing and hides the traffic layer. **Never put this in client JS** — it's a server secret. Free tier (~2,500 routes/day) at https://developer.tomtom.com. |
-| `OVERPASS_URLS` | _(2 mirrors)_ | Comma list of Overpass endpoints, tried in order. The client cannot call Overpass directly — it serves no `Access-Control-Allow-Origin` header — so the server proxies and caches it at `/api/overpass`. No key needed. |
-| `OVERPASS_TTL_MS` | `1800000` | How long a cached Overpass answer serves everyone in that area (30 min). These are static POIs. |
-| `OVERPASS_MAX_SPAN_DEG` | `4` | Largest bounding box the proxy will run. **Must not be below what the clients clamp to** (`js/ghost.js` uses 4°), or their normal wide view is refused and the layer silently goes dark. |
+| `APPLE_APP_IDS` | _(empty)_ | Comma list of `<TEAMID>.<bundle id>` published at `/.well-known/apple-app-site-association` so the iPhone app can claim the same `/l/…` links (Universal Links; the entitlement is in `ios/App/App/App.entitlements`). Empty → the file 404s and mailed links open in Safari, which still works. **Public values, not secrets.** |
+| `DATA_DIR` | `server/data` (in-repo) | Runtime state only (flags, OTA manifests, telemetry rollup, audit log) now that accounts live in Supabase. Still worth pointing outside the app tree (e.g. `/var/lib/convoy`) so a deploy can't clobber it. |
+| `TOMTOM_KEY` | _(empty)_ | TomTom Web key. Set it to enable **traffic-aware routing** (`/api/route`). Empty → the client falls back to keyless OSRM routing. **Never put this in client JS** — it's a server secret. Free tier (~2,500 routes/day) at https://developer.tomtom.com. |
 | `TTS_DIR` / `TTS_BIN` / `TTS_MODEL` | `../tts/...` | Self-hosted Piper neural TTS for spoken turn-by-turn nav. Absent → text nav cues only. Install via `node deploy/setup-tts.js`. |
 
 > **Two Supabase dashboard settings are part of this deployment**, and neither
@@ -352,7 +350,7 @@ configure** — there is no account to create and no SDK bundle to load.
 `unhandledrejection` handlers before any other module runs, and posts to
 `POST /api/telemetry`. Alongside crashes it records a fixed core-loop funnel —
 app opened, map loaded, GPS fix, went live, route set, trip started, trip
-arrived, convoy, race — plus the screen each session ended on. The server keeps a
+arrived, convoy — plus the screen each session ended on. The server keeps a
 30-day rollup in `DATA_DIR/telemetry.json` and the raw stacks in
 `DATA_DIR/telemetry-errors.jsonl` (append-only, rotated at 8MB). The server's own
 `uncaughtException` / `unhandledRejection` handlers feed the same rollup.
@@ -620,15 +618,13 @@ plus a roster of who is registered but *not* connected.
 | --- | --- |
 | green | cruising |
 | blue | parked |
-| red | racing |
 | amber | connected, no GPS fix yet |
 | grey | stale — no position update in 60s |
 | violet dashed ring | **ghost mode** |
 | hollow dot | simulated rider (`BOTS=N`) |
 
 Ghost is drawn as a *ring around* the status dot, not as its own colour, because
-a ghosted rider is still cruising or parked or racing and you need both facts at
-once.
+a ghosted rider is still cruising or parked and you need both facts at once.
 
 The map is a **server-rendered SVG** — no MapLibre, no JavaScript at all. The
 panel's CSP forbids inline script, and the page with the most sensitive data on
@@ -698,6 +694,10 @@ panel-driven change (the file is re-read on mtime change), only for this manual
 path if you want to be certain.
 
 ### Publishing to Google Play
+
+The store-side checklist for both stores — signing, the Data Safety and App
+Privacy forms, Sign in with Apple, the Xcode archive — is
+[STORE-RELEASE.md](STORE-RELEASE.md). This section is the panel's part of it.
 
 The panel can ship a build, promote it between tracks, turn the staged-rollout
 knob, and halt a rollout — without opening the Play Console.
@@ -792,22 +792,24 @@ Then check off:
 - [ ] **Account deletion**: in-app path, `/delete-account` URL, and the deletion
       URL pasted into Play Console → App content → **Data deletion**. All three
       exist (see §6) — this is a check that the public URL resolves on your real
-      domain, because Play tests it without the app installed. If you ever ship
-      an iOS build, the same in-app path satisfies **Apple 5.1.1(v)**, which has
-      been enforced since 2022 and is still a top rejection reason; there is no
-      iOS target in this repo today.
+      domain, because Play tests it without the app installed. The same in-app
+      path satisfies **Apple 5.1.1(v)** for the iOS build, which has been
+      enforced since 2022 and is still a top rejection reason.
 - [ ] Bump `LEGAL_VERSION` in `js/state.js` whenever you change either document
       materially. That single constant re-opens the consent gate for every rider
       and invalidates the feature legality acknowledgements. Keep it in step with
       the version printed at the top of `legal/terms.html`.
 - [ ] Review the **third-party usage policies** in
       [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) against your expected
-      traffic. Nominatim, the OSRM demo server and the public Overpass instances
-      are development infrastructure — running a launched app against them
-      breaches their terms. OpenSky and airplanes.live are non-commercial only.
-      Self-host or buy capacity first.
+      traffic. Nominatim and the OSRM demo server are development
+      infrastructure — running a launched app against them breaches their
+      terms. Self-host or buy capacity first.
 - [ ] Confirm the age rating you declare matches the Terms: **16+**, with live
-      location, open chat, voice and user-generated reports.
+      location, open chat and voice.
+- [ ] **Apple App Privacy** filled from [SDK-INVENTORY.md](SDK-INVENTORY.md) §9,
+      matching `ios/App/App/PrivacyInfo.xcprivacy`; `APPLE_APP_IDS` set so the
+      mailed links open in the iPhone app; `OAUTH_PROVIDERS` includes `apple`
+      whenever it includes any other social provider (guideline 4.8).
 - [ ] If you have a lawyer, have them read `legal/terms.html` §§3–5 and §12.
       Those sections are what stand between you and a claim after a collision,
       and they are drafted to be read, not to be decorative.
@@ -832,10 +834,10 @@ Then check off:
   reported location in realtime, and the global feed shows everyone delayed ~5 min.
   Share the URL accordingly.
 - **Back up Supabase, not `DATA_DIR`** — every account, password, friendship and
-  personal best now lives in the Supabase project. Enable Point-in-Time Recovery (or
-  take regular `pg_dump`s) there. `DATA_DIR` holds the hotspot cache, the telemetry
-  rollup, and the OTA bundles (§8) — all reproducible or operational, none of it
-  account data: losing it means re-pushing the last OTA bundle, nothing more.
+  block now lives in the Supabase project. Enable Point-in-Time Recovery (or take
+  regular `pg_dump`s) there. `DATA_DIR` holds the flag overrides, the telemetry
+  rollup, the audit log and the OTA bundles (§8) — all reproducible or operational,
+  none of it account data: losing it means re-pushing the last OTA bundle, nothing more.
 - Chat/invites/auth are rate-limited and inputs sanitized server-side, but this is a
   friends-scale server, not hardened SaaS.
 

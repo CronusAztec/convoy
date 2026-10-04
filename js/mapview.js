@@ -25,44 +25,12 @@
   var needRefilter = false; // a camera move happened — reclassify global drivers on next idle
   var RESIDENTIAL_RE = /residential|suburb|neighbou?rhood/i;
 
-  /* The five aircraft ownership categories and their paint. One table, read by
-     the layer paint, the popup and the legend, so a colour can never disagree
-     with itself across three files. Order is the legend order: most notable
-     first, routine traffic last. */
-  var AIRCRAFT_OWNERS = ['military', 'police', 'ems', 'unknown', 'civilian'];
-  var AIRCRAFT_COLORS = {
-    military: '#ff3b3b',
-    police: '#3b82f6',
-    ems: '#22c55e',
-    unknown: '#f59e0b',
-    civilian: '#e8edf6'
-  };
-  // '#rrggbb' + alpha -> 'rgba(r,g,b,a)'. line-gradient stops need real colour
-  // values; there is no opacity channel to lean on the way line-opacity gave us.
-  function rgba(hex, a) {
-    var n = parseInt(hex.slice(1), 16);
-    return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
-  }
-
-  var AIRCRAFT_LABELS = {
-    military: 'Military',
-    police: 'Law enforcement',
-    ems: 'EMS / medevac',
-    unknown: 'Unidentified',
-    civilian: 'Civilian'
-  };
-
   // Layer data survives style switches via this cache (setStyle wipes sources)
   var cache = {
     route: emptyFC(),
     trail: emptyFC(),   // drive-log replay breadcrumb (js/triplog.js)
     links: emptyFC(),
     global: emptyFC(),
-    aircraft: emptyFC(),
-    aircraftTrail: emptyFC(),   // fading motion trails for aircraft (ghost mode)
-    police: emptyFC(),
-    hotspots: emptyFC(),   // police probability hotspots (ghost mode)
-    rings: emptyFC()    // ghost-mode radar range circles
   };
 
   function emptyFC() { return { type: 'FeatureCollection', features: [] }; }
@@ -130,8 +98,6 @@
     // setData re-renders → idle, but we only act when a real move set needRefilter.
     map.on('moveend', function () {
       needRefilter = true;
-      // Tell the always-on layers (police, hotspots) the view changed so they can
-      // refetch for the new area. They're bbox-gated, so a tiny nudge is a no-op.
       if (ST && ST.emit) ST.emit('mapmoved');
     });
     map.on('idle', function () { if (needRefilter) { needRefilter = false; applyGlobalFilter(); } });
@@ -189,10 +155,6 @@
     addSrc('trail', cache.trail);
     addSrc('links', cache.links);
     addSrc('global', cache.global, { cluster: true, clusterRadius: 46, clusterMaxZoom: 9 });
-    addSrc('aircraft', cache.aircraft);
-    addSrc('police', cache.police);
-    addSrc('hotspots', cache.hotspots);
-    addSrc('rings', cache.rings);
 
     // ----- ROUTE: one solid GTA V-style GPS line -----
     // A single flat line in the theme's GPS color (GTA waypoint purple on that
@@ -258,162 +220,6 @@
     });
 
     setGlobalVisible(S.settings.showGlobal);
-
-    // ----- RADAR RINGS (ghost mode): concentric range circles around the player -----
-    // Drawn before the ghost points so targets/markers render on top of the rings.
-    addLayer({
-      id: 'radar-rings-glow', type: 'line', source: 'rings',
-      layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': ['get', 'color'], 'line-width': 5, 'line-blur': 7, 'line-opacity': 0.3 }
-    });
-    addLayer({
-      id: 'radar-rings', type: 'line', source: 'rings',
-      layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: {
-        'line-color': ['get', 'color'],
-        'line-width': ['coalesce', ['get', 'width'], 1.6],
-        'line-opacity': ['coalesce', ['get', 'opacity'], 0.85]
-      }
-    });
-    setRingsVisible(!!(S.settings && S.settings.ghost));
-
-    // ----- GHOST MODE: aircraft + police stations (blue) -----
-    // Aircraft colour is ownership, five ways:
-    //   military=red · police=blue · ems=green · civilian=silver · unknown=amber
-    // Unknown gets its own colour rather than falling in with civilian, because
-    // it means something different: the server could not identify the contact,
-    // and on a layer whose job is telling a rider what is overhead, "we don't
-    // know" is information. Size and opacity carry it too — the classified
-    // categories are drawn larger and more solid than routine civilian traffic,
-    // so a red or amber dot pulls the eye across a screen full of airliners.
-    addLayer({
-      id: 'aircraft-points', type: 'circle', source: 'aircraft',
-      paint: {
-        'circle-color': ['match', ['get', 'owner'],
-          'military', '#ff3b3b',
-          'police', '#3b82f6',
-          'ems', '#22c55e',
-          'unknown', '#f59e0b',
-          '#e8edf6'], /* civilian default = silver */
-        'circle-stroke-color': ['match', ['get', 'owner'],
-          'civilian', 'rgba(255,255,255,.65)',
-          '#ffffff'],
-        'circle-stroke-width': ['match', ['get', 'owner'],
-          'civilian', 1,
-          1.6],
-        'circle-radius': ['match', ['get', 'owner'],
-          'civilian', 5,
-          'unknown', 6.5,
-          7],
-        'circle-opacity': ['match', ['get', 'owner'],
-          'civilian', 0.72,
-          0.95],
-        'circle-blur': 0.25
-      }
-    });
-    // Aircraft motion trails: a line source fed by ghost.js's predictor. Each
-    // feature is a LineString of recent predicted positions with a per-segment
-    // opacity so the tail fades into the dot's current position.
-    //
-    // It belongs UNDER the dot, and the old comment said so — but the layer was
-    // added after aircraft-points, and MapLibre draws in insertion order, so the
-    // comet tail was actually painting over the aircraft it trails. The explicit
-    // `before` is what the comment always meant.
-    // `lineMetrics` is what makes ['line-progress'] available, and that is what
-    // turns the fade into a real gradient instead of a staircase.
-    addSrc('aircraft-trail', cache.aircraftTrail, { lineMetrics: true });
-    /* Each trail is ONE LineString faded with line-gradient.
-
-       It used to be thirteen separate segment features per aircraft, each with
-       its own flat opacity and width stepped up toward the head. That is a
-       staircase, not a fade: every step was visible, and the round line-caps
-       left a bead at each joint — the blocky, chopped look. It also meant
-       ~1,300 features re-parsed by MapLibre five times a second.
-
-       line-gradient interpolates continuously along the line, so the tail
-       dissolves. Its one limitation is that it cannot read a feature property,
-       so ownership colour comes from one thin layer per category instead of
-       ['get','color'] — five layers, each drawing a handful of lines, bought
-       with a fade that has no seams in it. */
-    AIRCRAFT_OWNERS.forEach(function (owner) {
-      var c = AIRCRAFT_COLORS[owner];
-      addLayer({
-        id: 'aircraft-trail-' + owner,
-        type: 'line',
-        source: 'aircraft-trail',
-        filter: ['==', ['get', 'owner'], owner],
-        layout: { 'line-cap': 'round', 'line-join': 'round' },
-        paint: {
-          'line-width': ['interpolate', ['linear'], ['zoom'], 6, 1.6, 12, 2.6, 16, 3.4],
-          'line-blur': 0.6,
-          // 0 = oldest point, 1 = the aircraft itself. Eased rather than linear
-          // so the tail fades into the background instead of ending on an edge.
-          'line-gradient': ['interpolate', ['linear'], ['line-progress'],
-            0, rgba(c, 0),
-            0.35, rgba(c, 0.16),
-            0.7, rgba(c, 0.45),
-            1, rgba(c, 0.85)]
-        }
-      }, 'aircraft-points');   // under the dots
-    });
-    // Apply the saved category filter the moment the layer exists — otherwise a
-    // rider who turned a category off last session sees it back on every launch
-    // until they touch the switch again.
-    setAircraftFilter();
-    addLayer({
-      id: 'police-points', type: 'circle', source: 'police',
-      paint: {
-        // camera=amber, alpr=red, station=slate (static building), police=bright blue
-        // (LIVE sighting, default). Live police pop; stations read as muted infrastructure.
-        'circle-color': ['match', ['get', 'kind'], 'camera', '#ffcf2e', 'alpr', '#ff3b3b', 'station', '#64748b', '#3b82f6'],
-        'circle-stroke-color': '#ffffff',
-        'circle-stroke-width': 1.5,
-        'circle-radius': 5.5,
-        'circle-opacity': 0.95
-      }
-    });
-    // Probability hotspots, drawn as two stacked layers so the area reads clearly
-    // AND the exact spot is unambiguous:
-    //   1) 'police-hotspots' — a coloured halo whose radius grows with probability,
-    //      giving the "roughly here" footprint.
-    //   2) 'police-hotspots-core' — a small solid dot with a white ring at the exact
-    //      cell centre, so the precise location is obvious.
-    // Both sit BENEATH the live police pins (added first → lower z) so a hard
-    // live-sighting pin still draws on top.
-    addLayer({
-      id: 'police-hotspots', type: 'circle', source: 'hotspots',
-      paint: {
-        // radius grows with probability; bigger = more sightings at this hour
-        'circle-radius': ['interpolate', ['linear'], ['get', 'prob'], 0, 12, 0.5, 22, 1, 36],
-        // green(low) → amber(mid) → red(high), heatmap-style
-        'circle-color': ['interpolate', ['linear'], ['get', 'prob'],
-          0, '#22c55e', 0.5, '#f59e0b', 1, '#ef4444'],
-        // Clearly visible ambient footprint (was near-invisible at 0.2 / soft stroke).
-        'circle-opacity': ['interpolate', ['linear'], ['get', 'prob'], 0, 0.28, 1, 0.42],
-        // No stroke. A 2px hard-edged ring drawn at the nominal radius of a
-        // circle whose FILL is blurred by 0.65 puts a crisp outline in the
-        // middle of a soft glow — the halo fades out, then a sharp ring appears
-        // floating in it. That contradiction is most of why the hotspot layer
-        // read as blocky. The exact coordinate is already marked by the crisp
-        // core dot in the layer below, so the ring was carrying no information
-        // the map did not already show.
-        'circle-blur': 0.9
-      }
-    });
-    addLayer({
-      id: 'police-hotspots-core', type: 'circle', source: 'hotspots',
-      paint: {
-        // Small, crisp, fixed-size dot marking the EXACT hotspot coordinate.
-        'circle-radius': 4.5,
-        'circle-color': ['interpolate', ['linear'], ['get', 'prob'],
-          0, '#16a34a', 0.5, '#d97706', 1, '#dc2626'],
-        'circle-stroke-color': '#ffffff',
-        'circle-stroke-width': 2,
-        'circle-opacity': 1,
-        'circle-stroke-opacity': 1
-      }
-    });
-    setGhostLayersVisible(!!(S.settings && S.settings.ghost));
 
     // Basemap (re)loaded → recompute landuse layer ids and reclassify global drivers
     // once tiles settle, so the residential filter tracks the new style.
@@ -575,68 +381,7 @@
     });
   }
 
-  /* The map's aircraft category filter, read from the SAME settings the radar
-     board uses (ghostAirMil / -Police / -Ems / -Civ / -Unknown).
-
-     Those keys used to gate the threat board only, while every category was
-     drawn on the map regardless — so turning "Civilian" off quietened the board
-     and changed nothing you could see. One switch, one meaning: it now governs
-     both. */
-  var OWNER_SETTING = {
-    military: 'ghostAirMil',
-    police: 'ghostAirPolice',
-    ems: 'ghostAirEms',
-    civilian: 'ghostAirCiv',
-    unknown: 'ghostAirUnknown'
-  };
-  function enabledOwners() {
-    return AIRCRAFT_OWNERS.filter(function (o) { return S.settings[OWNER_SETTING[o]] !== false; });
-  }
-  function setAircraftFilter() {
-    if (!map || !map.getLayer || !map.getLayer('aircraft-points')) return;
-    var list = enabledOwners();
-    var all = list.length === AIRCRAFT_OWNERS.length;
-    map.setFilter('aircraft-points', all ? null : ['in', ['get', 'owner'], ['literal', list]]);
-    // Trails now carry `owner` and live in one layer per category, so a hidden
-    // category takes its own tail with it. Turning one category off used to hide
-    // EVERY trail, because the old segment features had no owner to filter on.
-    var ghostOn = !!(S.settings && S.settings.ghost);
-    AIRCRAFT_OWNERS.forEach(function (o) {
-      var id = 'aircraft-trail-' + o;
-      if (!map.getLayer(id)) return;
-      var show = ghostOn && list.indexOf(o) >= 0;
-      map.setLayoutProperty(id, 'visibility', show ? 'visible' : 'none');
-    });
-  }
-
-  function setAircraftData(fc) { cache.aircraft = fc || emptyFC(); setData('aircraft', cache.aircraft); }
-  function setAircraftTrailData(fc) { cache.aircraftTrail = fc || emptyFC(); setData('aircraft-trail', cache.aircraftTrail); }
-  function setPoliceData(fc) { cache.police = fc || emptyFC(); setData('police', cache.police); }
-  function setHotspotData(fc) { cache.hotspots = fc || emptyFC(); setData('hotspots', cache.hotspots); }
-  function setGhostLayersVisible(on) {
-    // NB: 'police-hotspots' AND 'police-points' are intentionally NOT toggled here —
-    // both are always-on layers, independent of ghost mode. Police pins show
-    // everywhere (gated by the "Police stations" setting); ghost mode only adds the
-    // aircraft layer (points + trails) and the hotspot legend/scrubber over them.
-    var ids = ['aircraft-points'];
-    AIRCRAFT_OWNERS.forEach(function (o) { ids.push('aircraft-trail-' + o); });
-    ids.forEach(function (id) {
-      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
-    });
-    // Re-apply the per-category filter so an owner the rider switched off does
-    // not come back visible just because ghost mode was toggled.
-    if (on) setAircraftFilter();
-  }
-  // Radar HUD reads the current ghost layers to build its alert list.
-  function getGhostData() { return { aircraft: cache.aircraft, police: cache.police }; }
-  function setRingsData(fc) { cache.rings = fc || emptyFC(); setData('rings', cache.rings); }
-  function setRingsVisible(on) {
-    ['radar-rings', 'radar-rings-glow'].forEach(function (id) {
-      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
-    });
-  }
-
-  // Ghost Mode: dim/phase the player marker so it reads as invisible.
+  // Invisible mode: dim/phase the player marker so it reads as hidden.
   function setPlayerGhost(on) {
     if (!playerMarker) return;
     playerMarker.getElement().classList.toggle('ghost', !!on);
@@ -967,194 +712,9 @@
     openPopup(lngLat, card);
   }
 
-  // Ghost Mode popups — aircraft (OpenSky) + police stations (OSM).
-  function showAircraftPopup(props, lngLat) {
-    var card = U.el('div', 'pop-card');
-    var altStr = props.alt != null
-      ? (S.settings.units === 'km' ? Math.round(props.alt) + ' m' : Math.round(props.alt * 3.28084) + ' ft')
-      : '—';
-    var spdStr = props.speed != null
-      ? (S.settings.units === 'km' ? Math.round(props.speed * 3.6) + ' km/h' : Math.round(props.speed * 2.23694) + ' mph')
-      : '—';
-    // Ownership drives the avatar color + a headline tag so it's the first thing
-    // you read. Each of the five categories gets a distinct paint.
-    var ownColor = AIRCRAFT_COLORS[props.owner] || AIRCRAFT_COLORS.civilian;
-    var ownName = props.ownerName || 'Unidentified';
-    var climb = props.vertRate != null && Math.abs(props.vertRate) > 0.5
-      ? (props.vertRate > 0 ? 'Climbing' : 'Descending') : '';
-    // An unidentified contact is exactly the case where the rider wants the raw
-    // data, so show what we DO have — hex, squawk — instead of a blank card.
-    var sub = props.country
-      || (props.icao ? 'ICAO ' + String(props.icao).toUpperCase() : '')
-      || 'Unknown origin';
-    card.innerHTML =
-      '<div class="pop-head">' +
-      '  <div class="u-ava" style="--paint:' + ownColor + '">' + U.riderIcon(0, { size: 20 }) + '</div>' +
-      '  <div class="pop-id"><div class="u-name">' + U.esc(props.callsign || '—') + '</div>' +
-      '  <div class="u-handle">' + U.esc(sub) + '</div></div>' +
-      '</div>' +
-      '<div class="pop-tags">' +
-      '<span class="tag tag-live"><span class="dot dot-live" style="background:' + ownColor + '"></span>' + U.esc(ownName) + '</span>' +
-      (props.ground ? '<span class="tag">On ground</span>' : '<span class="tag">Airborne</span>') +
-      (climb ? '<span class="tag">' + climb + '</span>' : '') +
-      '<span class="tag">Altitude ' + altStr + '</span>' +
-      '<span class="tag">Speed ' + spdStr + '</span>' +
-      (props.heading != null ? '<span class="tag">HDG ' + Math.round(props.heading) + '°</span>' : '') +
-      (props.squawk ? '<span class="tag">Squawk ' + U.esc(props.squawk) + '</span>' : '') +
-      (props.icao ? '<span class="tag">ICAO ' + U.esc(String(props.icao).toUpperCase()) + '</span>' : '') +
-      '<span class="tag tag-delayed"><span class="dot dot-global"></span>Live · OpenSky</span>' +
-      '</div>';
-    openPopup(lngLat, card);
-  }
-
-  function showPolicePopup(props, lngLat) {
-    var kind = props.kind;
-    // kinds: 'camera' (speed cam), 'alpr' (surveillance), 'station' (OSM police
-    // building), 'police' (LIVE sighting from Waze/crowd — the only kind that feeds
-    // hotspots). Each gets its own color, label, icon and source credit.
-    var meta = kind === 'alpr' ? { color: '#ff3b3b', sub: 'ALPR / surveillance camera', icon: 4, src: 'OpenStreetMap' }
-      : kind === 'camera' ? { color: '#ffcf2e', sub: 'Speed / enforcement camera', icon: 7, src: 'OpenStreetMap' }
-      : kind === 'station' ? { color: '#64748b', sub: 'Police station', icon: 1, src: 'OpenStreetMap' }
-      : { color: '#3b82f6', sub: 'Live police sighting', icon: 1, src: props.waze ? 'Waze' : 'Rider report' };
-    var name = props.name || props.label || (kind === 'station' ? 'Police station' : 'Police');
-    var card = U.el('div', 'pop-card');
-    card.innerHTML =
-      '<div class="pop-head">' +
-      '  <div class="u-ava" style="--paint:' + meta.color + '">' + U.riderIcon(meta.icon, { size: 20 }) + '</div>' +
-      '  <div class="pop-id"><div class="u-name">' + U.esc(name) + '</div>' +
-      '  <div class="u-handle">' + meta.sub + '</div></div>' +
-      '</div>' +
-      '<div class="pop-tags"><span class="tag tag-delayed"><span class="dot dot-global"></span>' + meta.src + '</span></div>';
-    openPopup(lngLat, card);
-  }
-
-  // A probability hotspot pin. Shows the likelihood + how many sightings back it,
-  // and roughly when it was last seen. Probabilities are derived from real
-  // accumulated sightings (server/hotspots.js), not a static dataset.
-  function showHotspotPopup(props, lngLat) {
-    var prob = Math.round((props.prob || 0) * 100);
-    var count = props.count || 0;
-    var hour = props.hour != null ? props.hour : -1;
-    var ago = props.latest ? 'last seen ' + relAgo(props.latest) : '';
-    var color = prob >= 67 ? '#ef4444' : (prob >= 34 ? '#f59e0b' : '#22c55e');
-    var card = U.el('div', 'pop-card');
-    card.innerHTML =
-      '<div class="pop-head">' +
-      '  <div class="u-ava" style="--paint:' + color + '">' + U.riderIcon(6, { size: 20 }) + '</div>' +
-      '  <div class="pop-id"><div class="u-name">Police hotspot</div>' +
-      '  <div class="u-handle">~' + prob + '% likely here' +
-           (props.allHours ? ' · seen at various hours' : (hour >= 0 ? ' · ' + pad2(hour) + ':00' : '')) + '</div></div>' +
-      '</div>' +
-      '<div class="pop-tags">' +
-        '<span class="tag"><span class="dot" style="background:' + color + '"></span>Based on ' + count + ' sighting' + (count === 1 ? '' : 's') + '</span>' +
-        (ago ? '<span class="tag tag-delayed">' + ago + '</span>' : '') +
-      '</div>';
-    openPopup(lngLat, card);
-  }
-
-  // Hazard pin → a description popup, mirroring the police/hotspot dots. The label is
-  // the human description (e.g. "Accident", "Flood Warning", "Heavy rain") and the tag
-  // credits the source it came from.
-  var HZ_WEATHER = { rain: 1, snow: 1, ice: 1, wind: 1, fog: 1, flood: 1, alert: 1 };
-  function showHazardPopup(props, lngLat) {
-    props = props || {};
-    var color = props.color || '#ff5a3c';
-    var src = props.waze ? 'Waze'
-      : props.tomtom ? 'TomTom traffic'
-      : props.alert ? 'NWS weather alert'
-      : props.crowd ? 'Reported by a rider'
-      : props.reported ? 'You reported this'
-      : props.agent ? 'Live data feed'
-      : 'Local conditions';
-    var cat = HZ_WEATHER[props.kind] ? 'Weather' : 'Road hazard';
-
-    // Which way is it, and how far — relative to where the rider is right now.
-    var me = A.sim && A.sim.playerPos && A.sim.playerPos();
-    var dirText = '';
-    if (me && lngLat && (me[0] !== lngLat[0] || me[1] !== lngLat[1])) {
-      var dist = U.haversine(me, lngLat);
-      dirText = U.fmtDist(dist, S.settings.units) + ' to the ' + compass8(U.bearing(me, lngLat));
-    }
-    // Location detail (street / city) when the source provides it.
-    var place = [props.street, props.city].filter(function (s) { return s; }).map(U.esc).join(', ');
-
-    // Extra source detail: Waze crowd confidence + how fresh the report is.
-    var extra = [];
-    if (dirText) extra.push('<span class="tag"><span class="dot" style="background:' + color + '"></span>' + dirText + '</span>');
-    if (props.reliability) extra.push('<span class="tag">Confidence ' + Math.round(props.reliability) + '/10</span>');
-    // Coerce: `thumbs` comes straight off the upstream Waze payload and was the
-    // one remote value interpolated into HTML without escaping or coercion.
-    var thumbs = Math.max(0, Math.round(Number(props.thumbs) || 0));
-    if (thumbs) extra.push('<span class="tag">' + thumbs + ' confirmed</span>');
-    if (props.when) { var w = new Date(props.when); if (!isNaN(w)) extra.push('<span class="tag tag-delayed">' + relAgo(w.getTime()) + '</span>'); }
-
-    var card = U.el('div', 'pop-card');
-    card.innerHTML =
-      '<div class="pop-head">' +
-      '  <div class="u-ava" style="--paint:' + color + '">' + U.riderIcon(6, { size: 20 }) + '</div>' +
-      '  <div class="pop-id"><div class="u-name">' + U.esc(props.label || 'Hazard') + '</div>' +
-      '  <div class="u-handle">' + cat + (place ? ' · ' + place : '') + '</div></div>' +
-      '</div>' +
-      '<div class="pop-tags">' + extra.join('') +
-        '<span class="tag tag-delayed"><span class="dot dot-global"></span>' + U.esc(src) + '</span>' +
-      '</div>';
-    openPopup(lngLat, card);
-  }
-
-  function pad2(n) { return (n < 10 ? '0' : '') + n; }
-  // 8-point compass name for a bearing in degrees (0 = north).
-  function compass8(deg) {
-    var names = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
-    return names[Math.round(((deg % 360) + 360) % 360 / 45) % 8];
-  }
-  function relAgo(ts) {
-    var mins = Math.round((Date.now() - ts) / 60000);
-    if (mins < 60) return mins + 'm ago';
-    var hrs = Math.round(mins / 60);
-    if (hrs < 24) return hrs + 'h ago';
-    return Math.round(hrs / 24) + 'd ago';
-  }
-
   /* =================== map click → route prompt =================== */
   function onMapClick(e) {
-    // always-on enforcement layers first (aircraft, police pins, hotspot dot + halo).
-    // The crisp core dot is listed first so a tap on the exact spot always wins.
-    var gLayers = ['aircraft-points', 'police-points', 'police-hotspots-core', 'police-hotspots'].filter(function (id) { return map.getLayer(id); });
-    if (gLayers.length) {
-      var gf = map.queryRenderedFeatures(e.point, { layers: gLayers });
-      var hit = null;
-      for (var gi = 0; gi < gf.length; gi++) {
-        var cand = gf[gi];
-        if (cand.layer && cand.layer.id === 'police-hotspots') {
-          // The halo is a big soft circle (up to ~36px radius) that can blanket whole
-          // blocks — only claim the tap near its centre, otherwise fall through so
-          // tap-to-route still works inside hotspot areas. (The core dot has no such
-          // guard: it's small and precise, so any hit on it opens the popup.)
-          var cpt = map.project(cand.geometry.coordinates.slice());
-          var hdx = cpt.x - e.point.x, hdy = cpt.y - e.point.y;
-          if (hdx * hdx + hdy * hdy > 16 * 16) continue;
-        }
-        hit = cand;
-        break;
-      }
-      if (hit) {
-        var ll = hit.geometry.coordinates.slice();
-        var lid = hit.layer && hit.layer.id;
-        if (lid === 'police-points') showPolicePopup(hit.properties, ll);
-        else if (lid === 'police-hotspots' || lid === 'police-hotspots-core') showHotspotPopup(hit.properties, ll);
-        else showAircraftPopup(hit.properties, ll);
-        return;
-      }
-    }
-
-    // hazards (weather, TomTom incidents, NWS alerts, rider reports) — tap for a description
-    var hzLayers = ['hazard-icon', 'hazard-circle'].filter(function (id) { return map.getLayer(id); });
-    if (hzLayers.length) {
-      var hf = map.queryRenderedFeatures(e.point, { layers: hzLayers });
-      if (hf.length) { showHazardPopup(hf[0].properties, hf[0].geometry.coordinates.slice()); return; }
-    }
-
-    // global driver layers next
+    // global driver layers first
     var layers = ['global-clusters', 'global-points'].filter(function (id) { return map.getLayer(id); });
     var feats = layers.length ? map.queryRenderedFeatures(e.point, { layers: layers }) : [];
     if (feats.length) {
@@ -1443,14 +1003,6 @@
     setLinksData: setLinksData,
     setGlobalData: setGlobalData,
     setGlobalVisible: setGlobalVisible,
-    setAircraftData: setAircraftData,
-    setAircraftTrailData: setAircraftTrailData,
-    setPoliceData: setPoliceData,
-    setHotspotData: setHotspotData,
-    setGhostLayersVisible: setGhostLayersVisible,
-    getGhostData: getGhostData,
-    setRingsData: setRingsData,
-    setRingsVisible: setRingsVisible,
     setPlayerGhost: setPlayerGhost,
     addDest: addDest,
     removeDest: removeDest,
@@ -1460,10 +1012,6 @@
     flyToUser: flyToUser,
     focusRider: focusRider,
     fitRiders: fitRiders,
-    setAircraftFilter: setAircraftFilter,
-    AIRCRAFT_OWNERS: AIRCRAFT_OWNERS,
-    AIRCRAFT_COLORS: AIRCRAFT_COLORS,
-    AIRCRAFT_LABELS: AIRCRAFT_LABELS,
     followPlayer: followPlayer,
     createPlayerMarker: createPlayerMarker,
     refreshPlayer: refreshPlayer,

@@ -1,6 +1,6 @@
 /* Convoy — Postgres data layer (Supabase).
 
-   Account data (profiles, friends, stats, PBs, recovery codes) lives in the
+   Account data (profiles, friends, blocks, recovery codes) lives in the
    project's Postgres. Identity itself lives in Supabase Auth — see supabase.js.
 
    Connects as the database owner (the `postgres` role in SUPABASE_DB_URL), so
@@ -96,18 +96,16 @@ async function init() {
 function query(text, params) { return pool.query(text, params); }
 
 /* ---------------- boot load ----------------
-   One round-trip per table, then stitched in memory — five small queries beats
+   One round-trip per table, then stitched in memory — four small queries beats
    an N+1 over profiles. At friends-scale the whole account set is a few hundred
    rows; if this ever outgrows memory the store's read API is the thing to
    change, not this. */
 async function loadAll() {
-  const [profiles, friendships, requests, stats, pbs, blocks] = await Promise.all([
+  const [profiles, friendships, requests, blocks] = await Promise.all([
     query('select id, username, profile, email, email_verified, auth_provider, ' +
       'extract(epoch from created_at) * 1000 as created_ms from public.profiles'),
     query('select user_a, user_b from public.friendships'),
     query('select from_id, to_id from public.friend_requests'),
-    query('select user_id, runs, wins from public.user_stats'),
-    query('select user_id, mode_id, time_s, trap, extract(epoch from achieved_at) * 1000 as when_ms from public.dragy_pbs'),
     query('select blocker_id, blocked_id from public.blocks')
   ]);
 
@@ -131,7 +129,6 @@ async function loadAll() {
       // app that broadcasts live location.
       blocked: [],
       blockedBy: [],
-      stats: { pb: {}, runs: 0, wins: 0 },
       createdAt: Number(r.created_ms) || Date.now()
     });
   });
@@ -152,14 +149,6 @@ async function loadAll() {
     // Mirrored onto the target so the symmetric check is a set lookup on either
     // side rather than a scan of every account's block list.
     if (t) t.blockedBy.push(r.blocker_id);
-  });
-  stats.rows.forEach((r) => {
-    const u = byId.get(r.user_id);
-    if (u) { u.stats.runs = r.runs; u.stats.wins = r.wins; }
-  });
-  pbs.rows.forEach((r) => {
-    const u = byId.get(r.user_id);
-    if (u) u.stats.pb[r.mode_id] = { time: r.time_s, trap: r.trap, when: Number(r.when_ms) };
   });
 
   return [...byId.values()];
@@ -185,8 +174,6 @@ async function insertProfile(id, username, profile, opts) {
       [id, username, JSON.stringify(profile || {}),
         opts.email || null, !!opts.emailVerified, opts.provider || 'password']
     );
-    // Stats row up front so recordRun/recordWin never have to branch on absence.
-    await query('insert into public.user_stats (user_id) values ($1) on conflict do nothing', [id]);
     return { ok: true };
   } catch (e) {
     // unique_violation. TWO unique indexes can raise it now, and they mean very
@@ -394,36 +381,6 @@ function queueProfile(id, profile) {
     [id, JSON.stringify(profile || {})]);
 }
 
-function queuePB(id, modeId, time, trap, when) {
-  // Guarded by the same "only if better" rule the store applies in memory, so a
-  // replayed or out-of-order write can't regress a personal best.
-  enqueue(
-    `insert into public.dragy_pbs (user_id, mode_id, time_s, trap, achieved_at)
-     values ($1, $2, $3, $4, to_timestamp($5 / 1000.0))
-     on conflict (user_id, mode_id) do update
-       set time_s = excluded.time_s, trap = excluded.trap, achieved_at = excluded.achieved_at
-       where excluded.time_s < public.dragy_pbs.time_s`,
-    [id, modeId, time, trap, when]
-  );
-}
-
-// Counters are incremented in SQL rather than written as absolute values, so the
-// database stays correct even if the in-memory copy and the queue disagree.
-function queueRunIncrement(id) {
-  enqueue(
-    `insert into public.user_stats (user_id, runs) values ($1, 1)
-     on conflict (user_id) do update set runs = public.user_stats.runs + 1, updated_at = now()`,
-    [id]
-  );
-}
-function queueWinIncrement(id) {
-  enqueue(
-    `insert into public.user_stats (user_id, wins) values ($1, 1)
-     on conflict (user_id) do update set wins = public.user_stats.wins + 1, updated_at = now()`,
-    [id]
-  );
-}
-
 /* friends */
 // Canonical ordering for the undirected friendship row.
 function pair(a, b) { return a < b ? [a, b] : [b, a]; }
@@ -514,7 +471,7 @@ module.exports = {
   insertProfile, deleteProfile, setRecovery, getRecovery, burnRecovery,
   setEmail, markEmailVerified, setProvider, updateUsername,
   putEmailToken, takeEmailToken, purgeExpiredTokens,
-  queueProfile, queuePB, queueRunIncrement, queueWinIncrement,
+  queueProfile,
   queueFriendRequest, queueClearRequests, queueFriendship, queueUnfriend,
   queueBlock, queueUnblock, insertReport, countRecentReports
 };

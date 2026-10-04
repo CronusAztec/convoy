@@ -492,15 +492,10 @@ function bootRealUi(opts) {
   // it here too would set A.data.loaded/A.voice before a single test ran,
   // permanently taking the fast path and making the lazy/failure branch this
   // file exists to test unreachable. So: everything else index.html loads,
-  // MINUS 'data', 'voice', 'radar', 'scanners', 'race' and 'dragy' — those six
-  // are loaded lazily, on demand, by the real A.data.ensure() /
-  // A.voiceLoader.ensure() / A.lazy.radar() / A.lazy.scanners() /
-  // A.lazy.race() / A.lazy.dragy() calls under test.
-  const MODULE_ORDER = ['config', 'telemetry', 'util', 'state', 'themes', 'detectors', 'space',
-    'mapview', 'sim', 'net', 'routing', 'ghost', 'overlays',
-    'racetimer', 'wake', 'places', 'triplog', 'speedo', 'hud', 'compass',
-    'clock', 'tripmeter', 'gmeter', 'quest', 'weathernow', 'battery', 'coords',
-    'destarrow', 'riderarrows', 'speedalert', 'dimmer', 'tripextras', 'party',
+  // MINUS 'data' and 'voice' — those are loaded lazily, on demand, by the
+  // real A.data.ensure() / A.voiceLoader.ensure() calls under test.
+  const MODULE_ORDER = ['config', 'telemetry', 'util', 'state', 'themes', 'space',
+    'mapview', 'sim', 'net', 'routing', 'wake', 'riderarrows', 'party',
     'ui', 'auth', 'native', 'ota'];
   MODULE_ORDER.forEach(function (name) {
     win.eval(fs.readFileSync(path.join(ROOT, 'js', name + '.js'), 'utf8'));
@@ -509,11 +504,9 @@ function bootRealUi(opts) {
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-// A.lazy.race() chains TWO sequential "script load" macrotasks (dragy, then
-// race — Trap A's dependency order), so a fixed sleep long enough on a quiet
-// box can still be too short on this one (a persistent, unrelated Chromium
-// session — see STATE.md §8 — makes Node's own timer scheduling jittery
-// under load). Poll instead of guessing a constant.
+// A lazy load is a "script load" macrotask, so a fixed sleep long enough on a
+// quiet box can still be too short on a loaded one (Node's own timer
+// scheduling jitters under load). Poll instead of guessing a constant.
 async function waitFor(predicate, timeoutMs) {
   const t0 = Date.now();
   while (!predicate()) {

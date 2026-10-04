@@ -5,6 +5,7 @@
 > The previous mission's 136 KB STATE.md (cycles 0–61, aspects A–C) is archived verbatim in `HISTORY.md`. Owner of this file: the implementer; ≤ 400 lines / 30 KB.
 
 ## 1. What this app is
+> **2026-10-04 store-readiness cut:** the radar/ghost HUD, scanners, drag timer and racing, map overlays, instrument HUD cards, drive log, parking pin and their server feeds were removed so the app can ship on Google Play and the App Store; an iOS target (`ios/`) was added. The feature list below is historical — read `README.md` for what ships now, `STORE-RELEASE.md` for the store checklist.
 "Slipstream" (UI) / Convoy (repo): a passenger-side multiplayer map for riders — live nearby riders, convoys with chat and walkie-talkie voice (WebRTC mesh + WS relay), routing/ETA, police/radar/scanner/aircraft/traffic overlays, drag-timer and race modes, HUD instrument cards. Live at https://odoreeci.tech (Caddy → Node on VPS 2.25.184.90) and as a Capacitor Android APK with an OTA channel (`/api/ota`). Real riders use production — treat it gently (one request is a measurement, a loop is an attack).
 
 ## 2. Stack & layout

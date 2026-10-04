@@ -33,22 +33,7 @@
     showSpace: true,      // stars/planets/moon + day-night shading around the globe
     followCam: true,
     adaptiveZoom: true,   // follow camera eases zoom out at highway speed, in around town
-    showSpeedo: true,     // HUD speedometer (js/speedo.js)
     keepAwake: false,     // Wake Lock — keep the screen on while the app is open
-    autoParkPin: true,    // drop a parking pin automatically when a trip arrives
-    // ---- instrument HUD cards (js/hud.js rail + per-widget modules) ----
-    showCompass: true,    // heading rose (js/compass.js)
-    showClock: true,      // local time + next sun event (js/clock.js)
-    showTripmeter: false, // session distance + moving time (js/tripmeter.js)
-    showGforce: false,    // GPS-derived g-force meter (js/gmeter.js)
-    showWeatherNow: false,// current conditions at your position (js/weathernow.js)
-    showBattery: false,   // device battery level (js/battery.js)
-    showCoords: false,    // live lat/lng, tap to copy (js/coords.js)
-    showDestArrow: false, // arrow to the active route destination (js/destarrow.js)
-    showQuest: true,      // Top Speed Quest — all-time top speed + fastest 60–100 (js/quest.js)
-    speedAlert: 0,        // overspeed alert threshold in current units; 0 = off (js/speedalert.js)
-    nightDim: 0,          // night-drive glare dimmer 0..0.7 (js/dimmer.js)
-    avoidPolice: true,    // prefer route alternatives that skirt police stations + speed cameras
     // Anonymous crash reports + core-loop analytics (js/telemetry.js). ON by
     // default and disclosed in the privacy policy; turning it off stops all
     // sending immediately and drops anything already queued. telemetry.js reads
@@ -72,53 +57,15 @@
     voiceAgc: true,       // automatic gain control
     voiceIsolation: false,// browser voice isolation, where the engine offers it
     voiceLeveler: false,  // compressor on the master bus — evens out a loud rider
-    ghost: false,         // invisible to other riders; reveal aircraft + police
+    // Invisible mode: hidden from every rider outside your convoy (the server
+    // drops you from their scope and from the delayed global feed) and silent on
+    // proximity voice. Convoy members still see you.
+    ghost: false,
     // Edge arrows pointing at convoy riders who are off screen (js/riderarrows.js).
     // The complement to "fit the convoy": once riders are far enough apart that
     // fitting them all would zoom out past usefulness, arrows are how you still
     // know where everyone is.
     riderArrows: true,
-    // ---- radar sonar (Ghost Mode audio) ----
-    sonarVol: 0.8,        // master sonar volume 0..1
-    sonarHeart: true,     // heartbeat on/off
-    sonarPings: true,     // proximity pings on/off
-    sonarStings: true,    // new-contact stings on/off
-    sonarSpoken: true,    // voice callout ("Police ahead, 1.2 miles") on a new contact
-    heartSense: 'normal', // heartbeat sensitivity: off | low | normal | aggressive
-    pingRate: 'normal',   // ambient ping cadence: slow | normal | fast
-    // ---- hardware radar detector (BLE, native only) ----
-    detectorAuto: true,   // auto-connect a paired detector when Ghost Mode turns on
-    // Opt-IN. When a paired detector alerts, this publishes the rider's EXACT
-    // position to everyone within 30km, into the server's permanent hotspot
-    // model, and out to any installed SABRE host — with no confirmation step.
-    // That is not a decision to make on someone's behalf by default.
-    detectorUpload: false, // share likely-police detections to the crowd map
-    detectorId: '',       // remembered BLE device id (MAC) of the chosen detector
-    detectorName: '',     // ...and its display name, for the settings label
-    // ---- data overlay layers ----
-    showWeather: false,   // Open-Meteo precipitation tiles
-    weatherLayer: 'rain', // rain | temp | wind
-    showTraffic: false,   // traffic-flow heatmap (needs a provider key in radar.js)
-    showHazards: false,   // hazard pins (weather + user-reported)
-    // ---- ghost target filters (which Ghost-Mode targets are tracked/alerted) ----
-    ghostPolice: true,
-    ghostCamera: true,
-    ghostAir: true,
-    ghostHeli: true,
-    // ---- aircraft ownership filters (independent of the airplane/heli shape filter) ----
-    // Each gates a class of aircraft on the radar board. All default on; turning one
-    // off hides that class from the threat list + sonar (the map dot stays unless
-    // its shape filter ghostAir/ghostHeli is also off). See radar.js kindAllowed.
-    ghostAirCiv: true,      // civilian aircraft
-    ghostAirMil: true,      // military
-    ghostAirPolice: true,   // law-enforcement (police planes + rotor units)
-    ghostAirEms: true,      // EMS / medevac / air-ambulance
-    // Contacts the classifier will not guess at: no callsign, or a tactical one
-    // that is neither an airline flight number nor a registration. Kept ON by
-    // default — an unidentified aircraft overhead is the interesting case, and
-    // calling it "civilian" to tidy the map would be the wrong kind of tidy.
-    ghostAirUnknown: true,
-    ghostHotspots: true,  // police probability "usually here" heatmap layer
     // ---- map rider-dot colors (recolor the 5 rider categories live) ----
     // Each maps to a CSS var (--dot-you, --dot-friend, …) written inline on :root.
     // Keys here mirror the var suffix. Defaults match the originals in styles.css.
@@ -142,7 +89,6 @@
     // boolean because the thing that matters legally is WHICH version of the
     // terms was accepted and at what moment — see LEGAL_VERSION.
     consent: null,         // { version, at, passenger, age, terms }
-    featureAck: {},        // riskyFeature -> ms timestamp of the legality notice
     // Riders this account has blocked: [{ id (account id), username, name, emoji }].
     // Server-authoritative when signed in — the socket sends the canonical list
     // at join and after every change — and the only copy there is for a guest.
@@ -217,7 +163,6 @@
       if (state.settings.accent === '#00f0ff') state.settings.accent = DEFAULT_SETTINGS.accent;
       state.onboarded = !!saved.onboarded;
       if (saved.consent && saved.consent.version) state.consent = saved.consent;
-      if (saved.featureAck && typeof saved.featureAck === 'object') state.featureAck = saved.featureAck;
       if (Array.isArray(saved.blocked)) state.blocked = saved.blocked;
       if (saved.auth && saved.auth.token) state.auth = saved.auth;
     } catch (e) { console.warn('[convoy] could not load saved state', e); }
@@ -230,7 +175,6 @@
         settings: state.settings,
         onboarded: state.onboarded,
         consent: state.consent,
-        featureAck: state.featureAck,
         // hiddenRiders is deliberately NOT persisted — a rider id is only
         // meaningful for the life of that socket, so keeping it would hide a
         // stranger who happened to be assigned the same id later.
@@ -402,9 +346,9 @@
   function setVoiceNav(v) { state.settings.voiceNav = v; save(); emit('voicenav', v); }
   function setNavVoice(name) { state.settings.navVoiceName = name || ''; save(); emit('navvoice', name || ''); }
   function setGhost(v) { state.settings.ghost = v; save(); emit('ghost', v); }
-  // Generic setter for the many new toggle/value settings (radar audio, layers,
-  // ghost filters). All do the same thing: set, persist, emit a 'setting' event
-  // (plus an optional specific one) so any interested module can react.
+  // Generic setter for the toggle/value settings (voice chat, camera, scenery).
+  // All do the same thing: set, persist, emit a 'setting' event (plus an
+  // optional specific one) so any interested module can react.
   function setSetting(key, val, evt) {
     if (!(key in DEFAULT_SETTINGS)) return;   // refuse unknown keys
     state.settings[key] = val;
@@ -426,7 +370,7 @@
      stored consent, so the gate reappears and everyone re-accepts before they
      can ride. Bump it whenever either document changes materially, and keep it
      in step with the version printed at the top of legal/terms.html. */
-  var LEGAL_VERSION = '1.2';
+  var LEGAL_VERSION = '1.3';
 
   // TRUE only for a consent recorded against the CURRENT documents, with every
   // box actually ticked. An older version, or a partial record, reads as no
@@ -448,10 +392,6 @@
     return state.consent;
   }
 
-  // One-shot acknowledgement of the legality notice on a feature whose lawfulness
-  // depends on where the rider is (radar detector, enforcement layers, scanner
-  // audio, timed runs). Keyed per feature, and cleared by a legal-version bump
-  // for the same reason consent is.
   /* ---------- blocking ----------
      Two tiers, because two kinds of rider exist.
 
@@ -531,17 +471,6 @@
     emit('blocked', state.blocked);
   }
 
-  function featureAcked(key) {
-    var c = state.consent;
-    if (!c || c.version !== LEGAL_VERSION) return false;
-    return !!(state.featureAck && state.featureAck[key]);
-  }
-  function ackFeature(key) {
-    if (!state.featureAck || typeof state.featureAck !== 'object') state.featureAck = {};
-    state.featureAck[key] = Date.now();
-    save();
-  }
-
   // `session` is a Supabase session as reshaped by the server:
   //   { token, refreshToken, expiresAt, username, profile, email, emailVerified, provider }
   // The access token is short-lived (an hour by default), so the refresh token
@@ -611,7 +540,6 @@
     saveProfile: saveProfile, setOnboarded: setOnboarded,
     LEGAL_VERSION: LEGAL_VERSION,
     hasConsent: hasConsent, setConsent: setConsent,
-    featureAcked: featureAcked, ackFeature: ackFeature,
     blockedIds: blockedIds, isBlockedAccount: isBlockedAccount, isBlockedUsername: isBlockedUsername,
     isBlockedRider: isBlockedRider,
     setBlocks: setBlocks, addBlock: addBlock, removeBlock: removeBlock, hideRider: hideRider,
