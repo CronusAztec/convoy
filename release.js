@@ -258,7 +258,10 @@ function buildTarball() {
     // registered with Google Play. Leaving it out of the tarball ships a build
     // where every one of those 404s — which is a store-policy violation, not a
     // cosmetic gap.
-    'index.html', 'css', 'js', 'legal', 'server', 'fonts', 'landing',
+    // 'packs' is the feature packs (packs/README.md): served by server.js only to
+    // accounts that redeemed a code, never copied into www/ or an OTA bundle.
+    // It belongs in the SERVER tarball and nowhere else.
+    'index.html', 'css', 'js', 'legal', 'server', 'fonts', 'landing', 'packs',
     'README.md', 'DEPLOY.md', 'LICENSE', 'THIRD-PARTY-NOTICES.md'
   );
   run('tar', args, { cwd: ROOT, label: 'tarball' });

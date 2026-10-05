@@ -79,6 +79,20 @@ otherwise it falls back to solo. Two server dependencies (`ws`, `pg`), no API ke
 - **Spoken nav** uses a self-hosted Piper neural TTS served from `/api/tts`
   (`TTS_DIR`/`TTS_BIN`/`TTS_MODEL` env; absent → text nav cues only).
 
+## Feature packs
+
+The store build is the core above. The features withdrawn for store review —
+enforcement awareness (aircraft, police and camera layers, the radar HUD,
+police-avoiding routes), police scanner audio, the performance timers and
+racing, map overlays, the instrument HUD with drive log and saved places — live
+under [packs/](packs/README.md) and are **served by the server to an account that
+has redeemed a code** (Settings → Feature packs). Nothing under `packs/` is
+bundled into the APK, the IPA or an OTA zip; `js/packs.js` is a loader only.
+Codes are minted on `/admin/packs`, grants managed per account on
+`/admin/account/<id>`, and every pack has a `pack:<id>` kill switch on
+`/admin/flags`. Why it is built this way, and what it means for review, is in
+[STORE-RELEASE.md](STORE-RELEASE.md#feature-packs-and-the-stores).
+
 ## Honest notes
 
 - In **solo mode** riders/chat are simulated on-device; nothing leaves the browser. Voice

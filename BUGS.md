@@ -24,7 +24,7 @@ Each bug has:
 
 **Severity legend:** `critical` = security hole / data loss / hard crash · `high` = broken feature / resource leak · `medium` = degraded UX / latent bug · `low` = polish / a11y.
 
-**Jump to a section:** [Frontend (23)](#frontend) · [Server (30)](#server) · [Android (20)](#android) · [UI/UX (23)](#uiux) · [Runtime (6)](#runtime)
+**Jump to a section:** [Frontend (24)](#frontend) · [Server (30)](#server) · [Android (20)](#android) · [UI/UX (23)](#uiux) · [Runtime (6)](#runtime)
 
 ### Top priorities (fix first — Server/Runtime rows re-verified 2026-09-03, the whole Frontend ledger re-verified 2026-09-03 (cycle 60) and the whole UI/UX ledger re-verified 2026-09-03 (cycle 61), see each entry's `- **Status:**` line; Android rows not yet re-verified)
 
@@ -46,7 +46,7 @@ Each bug has:
 ---
 
 ## Frontend
-*Client-side JS (`js/*.js`) — 23 entries, re-verified 2026-09-03 (cycle 60, aspect C milestone C4a): **0 OPEN / 21 FIXED / 2 STALE** — see each entry's `- **Status:**` line (machine-checked by `test/bugstats.test.js`) and the roll-up under Stats*
+*Client-side JS (`js/*.js`) — 24 entries, re-verified 2026-09-03 (cycle 60, aspect C milestone C4a) plus frontend-024 filed and fixed 2026-10-05: **0 OPEN / 13 FIXED / 11 STALE** after the 2026-10-04 cut re-statused 11 entries whose feature left the tree — see each entry's `- **Status:**` line (machine-checked by `test/bugstats.test.js`) and the roll-up under Stats*
 
 ### BUG frontend-001 — FIXED (re-statused cycle 60 stage 59, 2026-09-03; fixed in an earlier cycle, never re-statused)
 - **Severity:** high
@@ -254,6 +254,17 @@ Each bug has:
 - **Repro:** code-read by the cycle-57 improve stage (`stages/0048-c057-improve.md` §3.2 item 7), executed in R4: open two FakeWS sockets, make the second current, deliver `{t:'party:left'}` on the first → before the fix `S.party` was nulled and "You left the convoy" toasted
 - **Impact:** latent for every late frame on a superseded socket (the `auth:invalid` refresh path closes and replaces the socket in one tick); C2 turns it live: `claimSeat()`'s half-open branch calls `leaveParty(prev, true)`, which sends `party:left` to the OLD socket while unseating it — delivered late, it would clear the roster the new socket just restored
 - **Fix (applied):** one line, the onclose guard copied to onmessage, with the comment explaining why it is load-bearing now
+
+---
+
+### BUG frontend-024 — FIXED (feature-pack framework, 2026-10-05)
+- **Severity:** medium
+- **Status:** FIXED (re-verified 2026-10-05) — `js/ui.js` `buildProfilePanel()` now builds the Settings box inside the microtask that renders the profile page (right after `buildProfileMain(body)`, and on the garage-fallback path), where `#settings-host` exists; the two synchronous call sites (`openPanel('profile')` and `showProfileView('main')`) no longer call `buildSettings`; executed in `test/packs.test.js` group G ("the Settings box is populated after the profile page renders")
+- **File:** `js/ui.js:66` and `js/ui.js:1507` before the fix (`buildSettings(document.getElementById('settings-host'))` called synchronously right after `buildProfilePanel()`)
+- **Title:** the Settings box rendered EMPTY — `buildSettings()` ran before `#settings-host` existed, because `buildProfilePanel()` renders the profile page on a microtask (the T1.5a lazy-`js/data.js` change) and `buildSettings` guards a null host with a silent return
+- **Repro:** boot the real page in jsdom (`test/harness.js` `bootRealUi()`), `A.ui.init()`, `A.ui.openPanel('profile')`, wait a tick → `#gearbox-head` and `#settings-host` exist but the host has 0 children; on a phone, every Settings open since the lazy-data change showed the gear bar with nothing under it
+- **Impact:** every setting (theme, map style, privacy/Invisible mode, voice chat, units, Legal & data with account deletion, blocked riders) unreachable from the UI — a store-policy problem as much as a UX one (the in-app deletion path lives there)
+- **Fix (applied):** build inside the render path, where the host is real; pinned by the packs suite so the Feature packs section (which lives in the same box) can never silently vanish the same way
 
 ---
 
@@ -1235,14 +1246,14 @@ this table ever drifts from what's actually here.
 
 | Area | critical | high | medium | low | total |
 |---|---:|---:|---:|---:|---:|
-| Frontend | 0 | 6 | 16 | 1 | 23 | (all six highs — 001/002/003/008/009/022 — FIXED; **0 OPEN / 21 FIXED / 2 STALE** — unchanged by the 2026-09-04 mission-cycle-7 close of 015's residual, since 015 was already counted FIXED (re-scoped) before; only its evidence/description changed: 001/002/004/006/007/008/009/010/011/016/018 were phantoms fixed in earlier cycles and never re-statused, 003 deleted in cycle 60, 005/014 STALE, 015 fully FIXED (mission 20260903-173653-75d3 cycle 7), 012/013/017 re-statused cycle 58, 019 cycle 52, 020 cycle 57, 021 cycle 59, 022/023 cycle 58; roll-up below) |
+| Frontend | 0 | 6 | 17 | 1 | 24 | (frontend-024 filed and FIXED 2026-10-05 — the Settings box rendered empty; all six highs — 001/002/003/008/009/022 — FIXED; **0 OPEN / 21 FIXED / 2 STALE** — unchanged by the 2026-09-04 mission-cycle-7 close of 015's residual, since 015 was already counted FIXED (re-scoped) before; only its evidence/description changed: 001/002/004/006/007/008/009/010/011/016/018 were phantoms fixed in earlier cycles and never re-statused, 003 deleted in cycle 60, 005/014 STALE, 015 fully FIXED (mission 20260903-173653-75d3 cycle 7), 012/013/017 re-statused cycle 58, 019 cycle 52, 020 cycle 57, 021 cycle 59, 022/023 cycle 58; roll-up below) |
 | Server | 5 | 11 | 15 | 1 | 32 | (server-003/006/008/011/032 critical — 003/008/032 FIXED, 006 STALE, 011 OPEN-latent; 5 OPEN / 24 FIXED / 3 STALE after the 2026-09-03 re-verification, the cycle-54 B3b fixes of 002 + 020, the cycle-55 fixes of 032 + 033, the cycle-56 fixes of 017 + 034 and the cycle-58 seat hold 035, roll-up below) |
 | Android | 3 | 8 | 8 | 1 | 20 | (android-001/002/003 critical) |
 | UI/UX | 1 | 5 | 10 | 7 | 23 | (**5 OPEN / 17 FIXED / 1 STALE** after the 2026-09-03 cycle-61 re-verification of every entry: 002 re-filed and FIXED — the chat log froze at message 100 — with `test/chatlog.test.js`; 008/011/012 FIXED with `testAriaState()`; 010 was already fixed, 009 STALE; 005/007 OPEN as phone-only layout calls, 020/021 visual-verification-pending, 022 filed; roll-up below) |
 | Runtime | 0 | 2 | 3 | 1 | 6 | (runtime-001 STALE, the other five FIXED — re-verified 2026-09-03) |
 | Add | 0 | 1 | 1 | 2 | 4 | |
 | Perf | 0 | 0 | 1 | 0 | 1 | |
-| **Total** | **9** | **33** | **54** | **13** | **109** |
+| **Total** | **9** | **33** | **55** | **13** | **110** |
 
 ### Open-status roll-up (Server + Runtime + Frontend + UI/UX — re-verified 2026-09-03; 16 entries re-statused STALE on 2026-10-04 when their feature left the tree)
 
@@ -1253,11 +1264,11 @@ OPEN entries marked *latent* describe a real risk whose premise production has n
 
 | Area | OPEN | FIXED | STALE | total |
 |---|---:|---:|---:|---:|
-| Frontend | 0 | 12 | 11 | 23 |
+| Frontend | 0 | 13 | 11 | 24 |
 | Server | 5 | 20 | 7 | 32 |
 | Runtime | 0 | 5 | 1 | 6 |
 | UI/UX | 5 | 17 | 1 | 23 |
-| **Total** | **10** | **54** | **20** | **84** |
+| **Total** | **10** | **55** | **20** | **85** |
 
 Open after the pass (updated cycle 56 — `server-017` high FIXED as milestone B5 and `server-034` medium filed and fixed as milestone B4, both with executed tests; cycle 55 fixed `server-032` and `server-033`; cycle 54 fixed `server-002` and `server-020`): `server-009`, `server-011` (latent, **deferred with a trigger**), `server-014` (latent), `server-015`, `server-016`. No open HIGH or CRITICAL remains in the Server/Runtime ledger other than the deferred `server-011`.
 

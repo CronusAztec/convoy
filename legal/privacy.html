@@ -173,6 +173,16 @@ provider&rsquo;s own privacy policy, not this one. We proxy what we can &mdash;
 TomTom routing &mdash; specifically so that fewer of these requests leave your
 device directly. Full list and licences: <a href="/notices">third-party
 notices</a>.</p>
+<p><strong>Feature packs.</strong> If you redeem a code (Settings &rarr; Feature packs)
+we record which packs your account holds; that record is deleted with the account.
+Pack features make further requests, only while the pack is on: the scanner pack
+asks OpenMHz for feeds near <strong>your approximate position</strong>; the instrument
+panel and overlays ask Open-Meteo and RainViewer for weather at or around your
+position; the enforcement pack asks our server, which in turn queries OpenSky
+(aircraft), OpenStreetMap&rsquo;s Overpass service (police stations) and traffic
+providers for the <strong>area around you</strong> &mdash; your device&rsquo;s IP address
+reaches those providers only where the request is made directly. None of these
+receive your account or username.</p>
 
 <h2 id="where">6. Where your data is held</h2>
 <p>Our servers and our Supabase project are hosted in
@@ -187,6 +197,7 @@ or an adequacy decision where one applies.</p>
 <tr><td>Live positions</td><td>In memory only; discarded within about 5 minutes</td></tr>
 <tr><td>Chat and voice</td><td>Not stored. Chat is dropped when the convoy ends.</td></tr>
 <tr><td>Account data</td><td>Until you delete your account</td></tr>
+<tr><td>Feature-pack grants (which packs your account holds)</td><td>Until you delete your account</td></tr>
 <tr><td>After you delete</td><td>Erased from the live database immediately. Encrypted backups roll off within <strong>30 days</strong>.</td></tr>
 <tr><td>Email tokens (confirmation, reset, sign-in)</td><td>15 minutes to 1 hour, then purged</td></tr>
 <tr><td>Security and abuse logs</td><td>Up to 90 days</td></tr>

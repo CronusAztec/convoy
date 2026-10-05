@@ -163,7 +163,8 @@ Set in `/etc/systemd/system/convoy.service` (then `sudo systemctl daemon-reload 
 | `MAX_PER_IP` | `10` | Per-IP socket ceiling (one source can't exhaust `MAX_CLIENTS`) |
 | `SUPABASE_URL` | _(required)_ | Supabase project URL. Accounts and identity live here. |
 | `SUPABASE_SECRET_KEY` | _(required)_ | Supabase secret key (`sb_secret_…`) or a legacy `service_role` JWT. **Full admin over Auth and the database — server-side only, never in client JS or the APK.** |
-| `SUPABASE_DB_URL` | _(required)_ | Postgres connection string (embeds the DB password). Session pooler or direct. |
+| `SUPABASE_DB_URL` | _(required)_ | Postgres connection string (embeds the DB password). Session pooler or direct. Apply every file in `server/migrations/` in order (the SQL editor is fine); `004_feature_packs.sql` must be in before the first code is redeemed. |
+| `PACK_TOKEN_SECRET` | _(random per process)_ | Signs the short-lived URLs feature-pack files are fetched with (`packs/README.md`). Only needed across more than one server process. Each pack is a `pack:<id>` kill switch on `/admin/flags`; codes are minted on `/admin/packs`. |
 | `SUPABASE_JWT_SECRET` | _(empty)_ | Only for legacy projects that still sign JWTs with HS256. Projects on asymmetric keys need nothing here. |
 | `SUPABASE_DB_CA` | _(empty)_ | The Supabase CA cert, as a **path or inline PEM**. Set it to verify the database TLS chain; without it the connection is encrypted but its certificate is **not verified**, and the server warns at every boot. |
 | `SUPABASE_DB_STRICT_TLS` | _(empty)_ | Set to `1` in production once `SUPABASE_DB_CA` is in place. Turns "no CA configured" from a warning into a refusal to boot. |

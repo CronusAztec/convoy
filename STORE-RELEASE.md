@@ -10,7 +10,10 @@ you and across the world, proximity voice, convoys with chat and walkie-talkie,
 routes, profiles, friends, block/report and account deletion. Nothing in the
 build warns about enforcement, pairs with a radar detector, plays scanner audio
 or times a run — the features that draw a "promotes dangerous driving" or
-"unlawful in the territory" rejection are gone, not hidden behind a notice.
+"unlawful in the territory" rejection are **not in the binary**. They exist as
+**feature packs** the server sends to an account that has redeemed a code; see
+[Feature packs and the stores](#feature-packs-and-the-stores) below before
+writing either review note.
 
 ---
 
@@ -35,6 +38,7 @@ or times a run — the features that draw a "promotes dangerous driving" or
 | Data Safety and App Privacy answers derived from the SDK list | `SDK-INVENTORY.md` §8, §9 |
 | Crash reporting with a real opt-out, no third-party SDK | `js/telemetry.js`, Settings → Crash reports |
 | OTA web-bundle updates (Android only; permitted — interpreted WebView code from our own host) | `LiveUpdatePlugin.java`, `js/ota.js`, DEPLOY.md §8 |
+| Feature packs: withdrawn features served only to code-holding accounts, never bundled; visible redeem screen; legality notices; kill switch per pack | `packs/README.md`, `server/packs/index.js`, `js/packs.js`, `test/packs.test.js`, Settings → Feature packs, `/admin/packs` |
 
 ---
 
@@ -71,7 +75,10 @@ or times a run — the features that draw a "promotes dangerous driving" or
    - **Health**: no. **Financial features**: none.
 5. **Reviewer access.** Play's reviewers get the guest path (no credentials
    needed). Add a note that the app is for passengers and that the consent gate
-   is deliberate.
+   is deliberate. Paste the feature-pack paragraph from
+   [Feature packs and the stores](#feature-packs-and-the-stores) and the
+   reviewer code; Play's "app access" form wants the credentials and the code
+   together.
 6. **Pre-launch report.** Check the crawler run for crashes; the consent gate
    stops it early, which is expected.
 7. **Release.** Internal testing → closed → production, with the staged-rollout
@@ -119,11 +126,60 @@ or times a run — the features that draw a "promotes dangerous driving" or
      app is closed.
    - **Review notes**: passenger-only product, consent gate on purpose, voice
      is live and never recorded, location sharing is the feature and is
-     disclosed at first launch; no enforcement, scanner or racing features.
+     disclosed at first launch; the binary carries no enforcement, scanner or
+     racing feature — then the feature-pack paragraph and the reviewer code
+     from [Feature packs and the stores](#feature-packs-and-the-stores).
 9. **TestFlight** a build to a real phone first: microphone prompt on first
    push-to-talk, location prompt on first launch, a mailed link opening in the
    app (Universal Links need the AASA file live before the app is installed),
    and a Google/Apple sign-in round-trip through Safari and back.
+
+## Feature packs and the stores
+
+The withdrawn features came back on 2026-10-05 as **feature packs**
+(`packs/README.md`): each lives under `packs/<id>/` on the server and is sent to
+an account only after that account redeems a code. The compliance position, in
+the words a reviewer needs:
+
+- **Nothing dormant is in the binary.** `scripts/copy-web.js` names what the
+  app bundles (`index.html`, `js`, `css`, `fonts`); `packs/` is not in it, and
+  `test/packs.test.js` fails the build if it ever is. A code does not switch on
+  code that ships — there is none to switch on. That is the line Apple's
+  guideline 2.3.1 (hidden features) draws.
+- **What the app downloads is interpreted JavaScript from our own origin**,
+  run in the WebView: permitted by Apple 2.5.2 and by Play's policy on
+  downloaded code, which prohibits native code only. Packs extend the map the
+  rider already has; they do not change the app's purpose.
+- **It is disclosed, not hidden.** Settings → Feature packs is on every build,
+  signed in or not: it lists the packs, says they are served by our server to
+  accounts with a code, and holds the redeem field. Terms §5 covers the packs
+  and the legal restrictions on each; Privacy §5 covers the extra requests.
+- **Regulated packs warn in plain words before they switch on** (enforcement
+  markers, scanner audio, timed runs), default off, and the server can kill any
+  pack for everyone instantly (`/admin/flags`, `pack:<id>`).
+
+### The reviewer code
+
+1. On the live server open `/admin/packs`, label it `App Review <date>`, tick
+   every pack, **max uses 2** (Apple and Google each redeem once), **expires in
+   60 days**, mint. Copy the code — it is shown once.
+2. Paste into both stores' review notes, with the reviewer account:
+
+   > Some features (enforcement awareness, police scanners, performance timers,
+   > map overlays, the instrument panel) are not part of the app binary. They
+   > are feature packs our server sends to an account that has redeemed a code;
+   > the app itself only contains the loader (Settings → Feature packs, visible
+   > to everyone). To review them: sign in with the reviewer account, open
+   > Settings → Feature packs, enter `CONVOY-XXXX-XXXX-XXXX-XXXX` and tap
+   > Redeem. Each regulated pack shows a legality notice before it switches on;
+   > all of them are off by default. No Bluetooth, no radar-detector pairing.
+
+3. After the review, revoke the code on `/admin/packs` (the reviewer account
+   keeps its packs; revoke those on `/admin/account/<id>` if you prefer).
+
+If a store nonetheless objects to a specific pack, kill that pack (`pack:<id>`
+off) — the build, the loader and the redeem screen are unchanged and the app
+stays as submitted.
 
 ## After the first release
 

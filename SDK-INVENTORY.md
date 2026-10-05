@@ -96,6 +96,15 @@ identifier at all** (platform + version numbers only), so it adds nothing to the
 Data Safety form. On iOS `js/ota.js` finds no plugin and does nothing; iOS fixes
 ship through App Store Connect, which keeps the build within guideline 2.5.2.
 
+**Feature packs** (house-built, no SDK; `packs/README.md`): the features
+withdrawn from the store build are served from **our own server**
+(`odoreeci.tech`, `/packs/<id>/*` behind signed, per-account URLs) only to an
+account that redeemed a code, and only after sign-in. Interpreted WebView code
+from our own origin, like the OTA channel, so permitted on both platforms; it
+sends the account's bearer token and nothing else. A pack may call further
+services directly — listed in §5 as *pack-only* — and `packs/<id>/README.md`
+names each pack's server-side keys.
+
 ## 4. First-party telemetry
 
 | Component | Where | Collects |
@@ -109,6 +118,15 @@ Nominatim (destination search) and OSRM (keyless routing). These are HTTP APIs t
 app calls; no vendor code runs in the app. They see the IP address and the query.
 Listed in full, with terms, in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
 and disclosed in privacy §5.
+
+*Pack-only* (never contacted unless the account holds the pack and the feature
+is switched on; disclosed in privacy §5): `api.openmhz.com` (scanner audio;
+sees the approximate position), `api.open-meteo.com` (weather at the
+position), RainViewer weather tiles (the map area), and — through our server,
+so the device's IP never reaches them — OpenSky (aircraft), the OpenStreetMap
+Overpass service (police stations), OpenWeb Ninja/Waze and TomTom (traffic and
+incidents) for the area around the rider. The core build makes none of these
+requests.
 
 ## 6. Server-side processors
 
