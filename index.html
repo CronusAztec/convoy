@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8"/>
+<meta name="convoy-base" content="https://odoreeci.tech">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<!-- CSP mirrored from the server's Content-Security-Policy header (server.js).
+     The header covers the deployed site; this meta covers every OTHER way the
+     app can load (file://, python http.server, a static mirror), where without
+     it there would be no CSP at all and any markup-injection bug would become
+     script execution. frame-ancestors is header-only by spec (and prohibited
+     in meta — including it risks the whole policy being dropped), so anti-
+     framing relies on the server header. Keep in sync with the header. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.min.js https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js https://cdn.jsdelivr.net/npm/nsfwjs@4.2.1/dist/browser.min.js https://cdn.jsdelivr.net/npm/nsfwjs@2.4.2/dist/nsfwjs.min.js 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.min.css; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob: https:; connect-src 'self' blob: data: https: wss:"/>
+<title>Slipstream</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M5.6 12.2 12 6.4l6.4 5.8' fill='none' stroke='%23eaf2ff' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/><path d='M6.6 16.6 12 11.7l5.4 4.9' fill='none' stroke='%237fb2e8' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round' opacity='.75'/><path d='M7.6 20.6 12 16.6l4.4 4' fill='none' stroke='%233c5871' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round' opacity='.6'/></svg>"/>
+<!-- Warm up the TLS/DNS to the CDNs we hit on first paint: the map library +
+     the basemap tile hosts. Boot fonts are self-hosted since cycle 19 (T2.5,
+     preloaded below); the CSP still allows the Google Fonts hosts for
+     js/themes.js's lazy alternate-theme fonts, which are off this path. -->
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="preconnect" href="https://basemaps.cartocdn.com" crossorigin>
+<link rel="preconnect" href="https://tiles.openfreemap.org" crossorigin>
+<link rel="preload" as="font" type="font/woff2" crossorigin href="fonts/chakra-petch-v13-latin-400.woff2">
+<link rel="preload" as="font" type="font/woff2" crossorigin href="fonts/share-tech-mono-v16-latin-400.woff2">
+<link href="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.min.css" rel="stylesheet"/>
+<link rel="stylesheet" href="css/styles.css?v=cy142"/>
+</head>
+<body>
+
+<div id="map"></div>
+
+<!-- ======================= HUD ATMOSPHERE OVERLAYS ======================= -->
+<!-- faint scanlines + tech grid + edge vignette over the whole viewport. pointer-events:none
+     so they never block the map. Pure CSS, no shaders — cheap on a WebView. -->
+<div id="hud-scan" class="hud-overlay" aria-hidden="true"></div>
+<div id="hud-grid" class="hud-overlay" aria-hidden="true"></div>
+<div id="hud-vignette" class="hud-overlay" aria-hidden="true"></div>
+<div id="hud-boot" class="hud-boot" aria-hidden="true"></div>
+
+<!-- ======================= TOP BAR ======================= -->
+<header id="topbar">
+  <div class="brand" id="brand" title="Slipstream">
+    <svg class="brand-logo" viewBox="0 0 32 32" aria-hidden="true">
+      <rect x="1.5" y="1.5" width="29" height="29" rx="9" fill="#0E1319"/>
+      <rect x="1.5" y="1.5" width="29" height="29" rx="9" fill="none" stroke="#1B2530" stroke-width="1.2"/>
+      <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9.4 14.6 16 9.2l6.6 5.4" stroke="#eaf2ff" stroke-width="2.7"/>
+        <path d="M10.4 19.1 16 14.5l5.6 4.6" stroke="#7fb2e8" stroke-width="2.4" opacity=".72"/>
+        <path d="M11.4 23.4 16 19.5l4.6 3.9" stroke="#3c5871" stroke-width="2.1" opacity=".55"/>
+      </g>
+    </svg>
+    <span class="brand-name">SLIPSTREAM</span>
+  </div>
+
+  <div class="searchwrap" id="searchwrap">
+    <span class="search-icon">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16.6 16.6 4 4"/></svg>
+    </span>
+    <input id="search-input" type="text" placeholder="Search a destination…" autocomplete="off" spellcheck="false"
+           role="combobox" aria-expanded="false" aria-controls="search-results" aria-autocomplete="list"
+           aria-label="Search a destination"/>
+    <button type="button" id="search-clear" class="search-clear" hidden aria-label="Clear search">
+      <svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>
+    </button>
+    <!-- Deliberately a div[role=listbox], not <select>: js/ui.js drives real
+         ArrowUp/ArrowDown highlight + aria-activedescendant + Enter-to-choose
+         keyboard handling against the paired #search-input[role=combobox]
+         above. That's a working ARIA combobox pattern; swapping to a native
+         <select> would need to rebuild the keyboard/highlight logic for no
+         accessibility gain (html-validate's prefer-native-element is generic
+         lint advice, not a defect here — kept per cycle-0 stage-5 review). -->
+    <div id="search-results" class="search-results" role="listbox" aria-label="Search results" hidden></div>
+  </div>
+
+  <div class="top-right">
+    <span id="gps-dot" class="gps-dot gps-none" title="GPS"></span>
+    <button type="button" id="btn-avatar" class="avatar-btn" title="Your profile" aria-label="Your profile"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 20 7.5 20 16.5 12 21 4 16.5 4 7.5Z"/><path d="M12 8 16 10.3 16 14.7 12 17 8 14.7 8 10.3Z"/></svg></button>
+  </div>
+</header>
+
+<!-- ======================= STATUS CHIPS ======================= -->
+<div id="chips" class="chips">
+  <button type="button" class="chip chip-live" id="chip-live" title="Riders near you · live">
+    <span class="dot dot-live"></span><span id="chip-live-text">LIVE · …</span>
+  </button>
+  <button type="button" class="chip chip-global" id="chip-global" title="Toggle global drivers (delayed feed)" aria-pressed="false">
+    <span class="dot dot-global"></span><span>Global · ~5 min delay</span>
+  </button>
+</div>
+
+<!-- ======================= MAP CONTROLS ======================= -->
+<div class="map-controls">
+  <div class="ctl-group">
+    <button type="button" class="ctl" id="ctl-zoom-in" title="Zoom in" aria-label="Zoom in">
+      <svg viewBox="0 0 24 24"><path d="M12 5.5v13M5.5 12h13"/></svg>
+    </button>
+    <button type="button" class="ctl" id="ctl-zoom-out" title="Zoom out" aria-label="Zoom out">
+      <svg viewBox="0 0 24 24"><path d="M5.5 12h13"/></svg>
+    </button>
+  </div>
+  <button type="button" class="ctl" id="ctl-compass" title="Reset north" aria-label="Reset north">
+    <svg viewBox="0 0 24 24" id="compass-svg">
+      <circle cx="12" cy="12" r="9.2" fill="none"/>
+      <g id="compass-needle">
+        <path d="M12 4.6 14.4 12H9.6Z" fill="#f87171" stroke="none"/>
+        <path d="M12 19.4 9.6 12h4.8Z" fill="currentColor" opacity=".55" stroke="none"/>
+      </g>
+    </svg>
+  </button>
+  <button type="button" class="ctl" id="ctl-locate" title="Use my location" aria-label="Use my location">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7.2"/><circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none"/><path d="M12 1.8v3M12 19.2v3M1.8 12h3M19.2 12h3"/></svg>
+  </button>
+  <button type="button" class="ctl" id="ctl-global" title="Toggle global drivers" aria-label="Toggle global drivers">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.8 2.6 4.2 5.6 4.2 9S14.8 18.4 12 21M12 3C9.2 5.6 7.8 8.6 7.8 12s1.4 6.4 4.2 9"/></svg>
+  </button>
+  <button type="button" class="ctl ctl-accent" id="ctl-recenter" title="Resume follow camera" aria-label="Resume follow camera" hidden>
+    <svg viewBox="0 0 24 24"><path d="M12 3.5 18.5 20 12 16.2 5.5 20Z" fill="currentColor" stroke="none"/></svg>
+  </button>
+</div>
+
+<!-- ======================= PANELS ======================= -->
+<section class="panel" data-panel="nearby" id="panel-nearby" aria-label="Nearby riders">
+  <header class="panel-head">
+    <div class="panel-titles"><h2>Nearby</h2><span class="panel-sub" id="nearby-sub">riders in range</span></div>
+    <button type="button" class="icon-btn panel-close" data-close aria-label="Close panel"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  </header>
+  <div class="panel-body" id="nearby-body"></div>
+</section>
+
+<section class="panel" data-panel="convoy" id="panel-convoy" aria-label="Convoy">
+  <header class="panel-head">
+    <div class="panel-titles"><h2>Convoy</h2><span class="panel-sub" id="convoy-sub">no active convoy</span></div>
+    <button type="button" class="icon-btn panel-close" data-close aria-label="Close panel"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  </header>
+  <div class="panel-body panel-body-flush" id="convoy-body"></div>
+</section>
+
+<section class="panel" data-panel="profile" id="panel-profile" aria-label="Profile">
+  <header class="panel-head">
+    <div class="panel-titles"><h2>Profile</h2><span class="panel-sub">you · garage · settings</span></div>
+    <button type="button" class="icon-btn" id="profile-settings-btn" aria-label="Open settings" title="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.1"/><path d="M12 2.8v2.5M12 18.7v2.5M21.2 12h-2.5M5.3 12H2.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8M18.4 18.4l-1.8-1.8M7.4 7.4 5.6 5.6"/></svg></button>
+    <button type="button" class="icon-btn panel-close" data-close aria-label="Close panel"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  </header>
+  <div class="panel-body" id="profile-body"></div>
+</section>
+
+<!-- ======================= ROUTE / TRIP CARD ======================= -->
+<div id="eta-card" class="eta-card" hidden></div>
+
+<!-- ======================= DOCK ======================= -->
+<nav id="dock" aria-label="Main navigation">
+  <button type="button" class="dock-btn active" data-dock="map" aria-label="Map" aria-current="page">
+    <svg viewBox="0 0 24 24"><path d="M9 4 3.5 6v14L9 18l6 2 5.5-2V4L15 6 9 4Z"/><path d="M9 4v14M15 6v14"/></svg>
+    <span>Map</span>
+  </button>
+  <button type="button" class="dock-btn" data-dock="nearby" aria-label="Nearby riders">
+    <svg viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.4 19.2c.6-3.1 2.9-4.7 5.6-4.7s5 1.6 5.6 4.7"/><circle cx="17" cy="9.6" r="2.6"/><path d="M16.2 14.6c2.3.2 4 1.7 4.4 4.4"/></svg>
+    <span>Nearby</span>
+  </button>
+  <button type="button" class="dock-btn" data-dock="convoy" aria-label="Convoy">
+    <svg viewBox="0 0 24 24"><path d="M5 21V4"/><path d="M5 4.6c2-1.3 4-1.3 6 0s4 1.3 6 0v8.8c-2 1.3-4 1.3-6 0s-4-1.3-6 0"/></svg>
+    <span>Convoy</span>
+    <em id="dock-convoy-badge" class="dock-badge" hidden></em>
+  </button>
+  <button type="button" class="dock-btn" data-dock="profile" aria-label="Profile">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M4.6 20c1-3.7 4-5.5 7.4-5.5s6.4 1.8 7.4 5.5"/></svg>
+    <span>Profile</span>
+  </button>
+</nav>
+
+<!-- ======================= WALKIE-TALKIE (voice overlay: convoy + proximity voice) ======================= -->
+<div id="wt-overlay" hidden>
+  <button type="button" id="wt-ptt" class="wt-btn" data-mode="ptt" aria-label="Push to talk">
+    <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+  </button>
+  <div class="wt-meta">
+    <span id="wt-mode" class="wt-mode">PTT</span>
+    <button type="button" id="wt-cycle" class="wt-cycle" aria-label="Switch mic mode">
+      <svg viewBox="0 0 24 24"><path d="M6 6 18 6 18 18 6 18Z" fill="none"/><path d="M9 9h6v6H9z"/></svg>
+    </button>
+    <button type="button" id="wt-mute" class="wt-cycle wt-mute" aria-label="Mute microphone" aria-pressed="false">
+      <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/><path class="wt-slash" d="M4 4 20 20"/></svg>
+    </button>
+  </div>
+</div>
+
+<div id="toasts" aria-live="polite"></div>
+<div id="onboarding" class="modal-backdrop" role="dialog" aria-modal="true" aria-label="Welcome to Slipstream" hidden></div>
+
+<noscript>
+  <div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0e1116;color:#e6e9ef;font-family:system-ui,sans-serif;text-align:center;padding:24px">
+    <div>
+      <h1 style="font-size:22px;margin:0 0 8px">Slipstream needs JavaScript</h1>
+      <p style="margin:0;opacity:.7">This map app runs entirely in your browser. Please enable JavaScript to continue.</p>
+    </div>
+  </div>
+</noscript>
+
+<!-- defer everything: scripts download in parallel during parse and execute in
+     order right before DOMContentLoaded (which app.js waits on), so nothing is
+     render-blocking. maplibre stays first so its global is ready for mapview. -->
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.min.js" defer crossorigin="anonymous"></script>
+<script src="js/config.js?v=cy142" defer></script>
+<!-- Second, and deliberately so. telemetry.js installs the global error and
+     unhandledrejection handlers at load time, so it has to run before every
+     module it is supposed to be watching — a crash reporter that boots after
+     state.js cannot report the crash IN state.js. It depends on nothing but
+     config.js, and its release stamp is read off its own ?v= below. -->
+<script src="js/telemetry.js?v=cy142" defer></script>
+<script src="js/util.js?v=cy142" defer></script>
+<script src="js/state.js?v=cy142" defer></script>
+<script src="js/themes.js?v=cy142" defer></script>
+<script src="js/space.js?v=cy142" defer></script>
+<script src="js/mapview.js?v=cy142" defer></script>
+<script src="js/sim.js?v=cy142" defer></script>
+<script src="js/net.js?v=cy142" defer></script>
+<script src="js/routing.js?v=cy142" defer></script>
+<script src="js/wake.js?v=cy142" defer></script>
+<script src="js/party.js?v=cy142" defer></script><script src="js/ui.js?v=cy142" defer></script>
+<script src="js/auth.js?v=cy142" defer></script>
+<script src="js/native.js?v=cy142" defer></script>
+<script src="js/packs.js?v=cy142" defer></script>
+<script src="js/ota.js?v=cy142" defer></script>
+<script src="js/app.js?v=cy142" defer></script>
+</body>
+</html>
