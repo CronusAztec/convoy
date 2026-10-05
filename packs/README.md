@@ -88,6 +88,8 @@ Packs never edit core files. Everything they need is reachable through these:
 |---|---|
 | `A.packs.register(id, { init })` | `init()` runs once, after the whole pack has loaded. |
 | `A.packs.has(id)` / `holds(id)` / `state()` | Is it loaded / granted / the full picture. |
+| `A.packs.authHeaders(json)` | Bearer (and JSON) headers for the pack's own routes. |
+| `A.packs.token(id)` / `tokenAgeMs()` | The pack's signed file token, for URLs that cannot carry a header (raster tiles, media); the server accepts it on routes declared `{ auth: 'token' }`. Re-read before each refresh; `A.packs.sync()` fetches fresh ones. |
 | `A.store.registerSettings({ key: default, … })` | Adds settings keys. `setSetting()` then accepts them; a value the rider saved earlier wins over the default. |
 | `A.store.on(evt, fn)` / `emit` | The event bus (`setting`, `gpsfix`, `route`, `party`, `packs`, `pack:loaded`, …). |
 | `A.store.featureAcked(key)` / `ackFeature(key)` | Legality-notice state, scoped to the Terms version. |
@@ -130,7 +132,10 @@ module.exports = {
 
 * Every route is reached only with a bearer for an account holding the pack
   (401 / 403 otherwise); a killed pack's routes 404. GET and POST both
-  dispatch; a POST route receives the parsed body as its sixth argument.
+  dispatch; a POST route receives the parsed body as its sixth argument. A
+  route declared `[method, regex, fn, { auth: 'token' }]` accepts the signed
+  file token on `?t=` instead of a bearer — for a URL a header cannot ride on
+  (a tile template) — with the same per-request grant check.
 * `ws` handler names must not collide with the core's or another pack's —
   boot refuses the pack if they do.
 * `ctx` is `packCtx` in `server/server.js`: the live `clients`/`parties`/

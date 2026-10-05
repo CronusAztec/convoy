@@ -40,6 +40,7 @@
   var ST = A.store, S = A.state, U = A.util;
 
   var manifest = null;        // last /api/packs answer for the signed-in account
+  var manifestAt = 0;         // when it was fetched — the tokens inside age from here
   var catalog = null;         // /api/packs/catalog — what exists, for the redeem screen
   var loaded = {};            // id -> true once its scripts have run
   var inFlight = null;        // the sync() in progress, shared by concurrent callers
@@ -143,6 +144,7 @@
     if (!token()) { manifest = null; ST.emit('packs', state()); return Promise.resolve(state()); }
     inFlight = getJSON('/api/packs').then(function (m) {
       manifest = m && Array.isArray(m.packs) ? m : { packs: [], available: [] };
+      manifestAt = Date.now();
       return manifest.packs.reduce(function (p, pack) {
         return p.then(function () { return loadPack(pack); });
       }, Promise.resolve());
@@ -191,6 +193,26 @@
     runInit(id);
   }
 
+  /* A pack's signed file token — the `t` the server put on its script URLs —
+     for requests that cannot carry a bearer header: MapLibre raster tiles,
+     an <img>, an <audio>. The server accepts it on routes declared
+     { auth: 'token' } (server/packs/index.js). It expires with the manifest
+     (tokenAgeMs says how old it is; sync() fetches fresh ones), so a pack
+     that uses it re-reads it before each refresh. */
+  function fileToken(id) {
+    if (!manifest) return null;
+    for (var i = 0; i < manifest.packs.length; i++) {
+      var p = manifest.packs[i];
+      if (p.id !== id || !p.scripts || !p.scripts.length) continue;
+      var m = /[?&]t=([^&]+)/.exec(p.scripts[0]);
+      return m ? decodeURIComponent(m[1]) : null;
+    }
+    return null;
+  }
+  function tokenAgeMs() { return manifestAt ? Date.now() - manifestAt : Infinity; }
+  // Bearer headers for a pack's own JSON routes.
+  function authHeaders(json) { return headers(json); }
+
   function init() {
     ST.on('auth', function (a) {
       if (a && a.token) sync(); else { manifest = null; ST.emit('packs', state()); }
@@ -201,6 +223,7 @@
   A.packs = {
     init: init, sync: sync, redeem: redeem, state: state, has: has, holds: holds,
     register: register, onWelcome: onWelcome, ensureCatalog: ensureCatalog,
+    token: fileToken, tokenAgeMs: tokenAgeMs, authHeaders: authHeaders,
     // test surface
     _loadPack: loadPack, _mountFragment: mountFragment
   };

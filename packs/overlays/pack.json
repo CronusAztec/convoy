@@ -1,0 +1,10 @@
+{
+  "id": "overlays",
+  "title": "Map overlays",
+  "blurb": "Weather radar, live traffic flow and incidents, and hazards reported by riders near you, as layers on the map.",
+  "legal": null,
+  "order": 40,
+  "scripts": ["overlays.js", "ui.js"],
+  "styles": ["overlays.css"],
+  "fragments": [{ "file": "controls.html", "mount": "#ctl-global", "position": "after" }]
+}

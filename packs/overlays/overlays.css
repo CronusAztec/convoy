@@ -1,0 +1,34 @@
+/* Convoy — overlays pack: the hazard report picker (the layers themselves are
+   MapLibre layers and need no CSS). The modal reuses the core's .modal-backdrop
+   so the glass/blur budget stays the core theme's; nothing here blurs. */
+.ctl-hazard:hover { color: #ffd23f; }
+.hazard-modal {
+  width: 100%; max-width: 420px;
+  display: flex; flex-direction: column;
+  border-radius: var(--radius);
+  clip-path: polygon(var(--cut) 0, 100% 0, 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, 0 100%, 0 var(--cut));
+  background: var(--surface-solid);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.hazard-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 18px 12px; border-bottom: 1px solid var(--line);
+}
+.hazard-head h2 { font-size: 17px; font-weight: 700; letter-spacing: .02em; }
+.hazard-sub { display: block; margin-top: 2px; font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; }
+.hazard-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 14px; }
+.hazard-btn {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 14px 8px; border-radius: var(--radius-sm);
+  background: var(--surface-2); border: 1px solid var(--line);
+  color: var(--text); cursor: pointer;
+  transition: border-color 140ms var(--ease), background 140ms var(--ease), transform 140ms var(--ease);
+}
+.hazard-btn:hover { border-color: var(--line-strong); background: rgba(var(--accent-rgb), .08); }
+.hazard-btn:active { transform: scale(.96); }
+.hz-ic { display: grid; place-items: center; width: 30px; height: 30px; }
+.hz-ic svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.hz-lb { font-size: 12px; font-weight: 600; text-align: center; letter-spacing: .02em; }
+@media (max-width: 760px) { .hazard-grid { grid-template-columns: repeat(2, 1fr); } }

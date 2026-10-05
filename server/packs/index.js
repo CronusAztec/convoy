@@ -37,7 +37,7 @@
                                      module.exports = {
                                        id: '<id>',
                                        init(ctx) {},                 // optional
-                                       routes: [[method, regex, fn]], // fn(req, res, match, user, ctx, body)
+                                       routes: [[method, regex, fn, opts?]], // fn(req, res, match, user, ctx, body); opts { auth: 'token' } = ?t= file token instead of a bearer
                                        ws: { 'type'(c, m, ctx) {} },  // c.packs has <id>, guaranteed
                                        onHello(c, ctx), onClose(c, ctx), // optional
                                        onBlock(c, targetUserId, targetSocket, ctx) // optional
@@ -152,6 +152,7 @@ function load(coreHandlers) {
       }
       (mod.routes || []).forEach((r, i) => {
         if (!Array.isArray(r) || typeof r[0] !== 'string' || !(r[1] instanceof RegExp) || typeof r[2] !== 'function') throw new Error('server/packs/' + id + '.js: routes[' + i + '] must be [method, regex, fn]');
+        if (r[3] !== undefined && (!r[3] || typeof r[3] !== 'object' || (r[3].auth !== undefined && r[3].auth !== 'token' && r[3].auth !== 'bearer'))) throw new Error('server/packs/' + id + '.js: routes[' + i + '] opts must be { auth: "bearer" | "token" }');
       });
       serverMods.set(id, mod);
     }
@@ -253,16 +254,45 @@ function staticOk(req, urlPath) {
 }
 
 /* ---------------- HTTP + socket dispatch ---------------- */
+// The signed token off the query string, if any (?t=…).
+function queryToken(req) {
+  const q = String(req.url || '').indexOf('?');
+  if (q < 0) return null;
+  for (const kv of req.url.slice(q + 1).split('&')) {
+    if (kv.indexOf('t=') === 0) { try { return decodeURIComponent(kv.slice(2)); } catch (e) { return null; } }
+  }
+  return null;
+}
+
+// A fresh file token for an account that holds the pack, for a server half that
+// hands out URLs of its own (a tile template, say).
+function tokenFor(user, id) {
+  if (!user || !holds(user.id, id)) return null;
+  return sign({ u: user.id, p: id, e: Date.now() + TOKEN_TTL_MS });
+}
+
 // Returns true when a pack route answered (or refused) the request. `body` is
 // the parsed JSON body for a POST (server.js reads it first), null otherwise.
+// A route is [method, regex, fn] or [method, regex, fn, { auth: 'token' }]: the
+// default wants a bearer for an account holding the pack; 'token' accepts the
+// signed file token on ?t= instead, for requests that cannot carry a header
+// (raster tiles, media) — the same token, the same per-request grant check.
 async function handleApi(req, res, urlPath, body) {
   for (const [id, mod] of serverMods) {
-    for (const [method, re, fn] of (mod.routes || [])) {
+    for (const [method, re, fn, opts] of (mod.routes || [])) {
       const m = urlPath.match(re);
       if (!m || req.method !== method) continue;
       if (!enabled(id)) return false;        // killed: fall through to the 404
-      const user = ctx.userFromToken(ctx.bearer(req));
-      if (!user) { ctx.json(res, 401, { error: 'unauthorized' }); return true; }
+      let user = null;
+      if (opts && opts.auth === 'token') {
+        const p = verify(queryToken(req));
+        if (!p || p.p !== id) { ctx.json(res, 401, { error: 'unauthorized' }); return true; }
+        user = ctx.store.getById ? ctx.store.getById(p.u) : { id: p.u };
+        if (!user) { ctx.json(res, 401, { error: 'unauthorized' }); return true; }
+      } else {
+        user = ctx.userFromToken(ctx.bearer(req));
+        if (!user) { ctx.json(res, 401, { error: 'unauthorized' }); return true; }
+      }
       if (!holds(user.id, id)) { ctx.json(res, 403, { error: 'pack-required', pack: id }); return true; }
       await fn(req, res, m, user, ctx, body === undefined ? null : body);
       return true;
@@ -317,7 +347,7 @@ function holders(id) { return ctx && ctx.store && ctx.store.packHolders ? ctx.st
 
 module.exports = {
   init, load, has, get, enabled, list, catalog, manifestFor, staticOk,
-  handleApi, wsHandler, onHello, onClose, onBlock, packsForSocket, holders, packIds,
+  handleApi, wsHandler, onHello, onClose, onBlock, packsForSocket, holders, packIds, tokenFor,
   PACKS_DIR, SERVER_DIR, TOKEN_TTL_MS,
   // test surface
   _sign: sign, _verify: verify, _validateManifest: validateManifest, _registry: registry,

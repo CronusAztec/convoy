@@ -53,7 +53,10 @@ fs.writeFileSync(path.join(SERVER, 'demo.js'), `
   module.exports = {
     id: 'demo',
     init(ctx) { ctx._demoInit = (ctx._demoInit || 0) + 1; },
-    routes: [['GET', /^\\/api\\/demo\\/ping$/, async (req, res, m, user, ctx, body) => ctx.json(res, 200, { pong: user.username, body: body })]],
+    routes: [
+      ['GET', /^\\/api\\/demo\\/ping$/, async (req, res, m, user, ctx, body) => ctx.json(res, 200, { pong: user.username, body: body })],
+      ['GET', /^\\/api\\/demo\\/tile$/, async (req, res, m, user, ctx) => ctx.json(res, 200, { tile: user.id }), { auth: 'token' }]
+    ],
     ws: { 'demo:hi'(c, m, ctx) { c._hi = (c._hi || 0) + 1; } },
     onHello(c) { c._hello = true; },
     onClose(c) { c._closed = true; }
@@ -200,6 +203,23 @@ const packs = require('../server/packs');
     ok('handleApi: an account without the pack → 403 pack-required', r.handled && r.res.status === 403 && r.res.body.pack === 'demo');
     r = await call('tok-held', '/api/nothing');
     ok('handleApi: an unmatched path is not handled (server.js falls through to its 404)', r.handled === false);
+    {
+      // A route declared { auth: 'token' } takes the signed file token on ?t= (a raster tile cannot carry a bearer).
+      const tok = packs.tokenFor(users['tok-held'], 'demo');
+      const hit = async (url) => { const res = {}; const handled = await packs.handleApi({ method: 'GET', url, headers: {} }, res, '/api/demo/tile'); return { handled, res }; };
+      const good = await hit('/api/demo/tile?t=' + encodeURIComponent(tok));
+      const none = await hit('/api/demo/tile');
+      const other = await hit('/api/demo/tile?t=' + encodeURIComponent(packs._sign({ u: 'u-held', p: 'other', e: Date.now() + 60000 })));
+      const stale = await hit('/api/demo/tile?t=' + encodeURIComponent(packs._sign({ u: 'u-held', p: 'demo', e: Date.now() - 1 })));
+      ok('a token-auth route: the pack\'s own fresh token → 200 as that account; no token, another pack\'s token or an expired one → 401',
+        good.handled && good.res.status === 200 && good.res.body.tile === 'u-held' && none.res.status === 401 && other.res.status === 401 && stale.res.status === 401,
+        JSON.stringify([good.res.status, none.res.status, other.res.status, stale.res.status]));
+      ok('tokenFor() refuses an account that does not hold the pack', packs.tokenFor(users['tok-none'], 'demo') === null);
+      grants['u-held'] = [];
+      const revoked = await hit('/api/demo/tile?t=' + encodeURIComponent(tok));
+      grants['u-held'] = ['demo'];
+      ok('…and a token outlives its grant by nothing: revoked → 403 on the next request', revoked.res.status === 403);
+    }
     overrides['pack:demo'] = false;
     r = await call('tok-held', '/api/demo/ping');
     ok('handleApi: a killed pack\'s route is not handled either (404 like any unknown path)', r.handled === false);
