@@ -101,12 +101,13 @@ function query(text, params) { return pool.query(text, params); }
    rows; if this ever outgrows memory the store's read API is the thing to
    change, not this. */
 async function loadAll() {
-  const [profiles, friendships, requests, blocks] = await Promise.all([
+  const [profiles, friendships, requests, blocks, grants] = await Promise.all([
     query('select id, username, profile, email, email_verified, auth_provider, ' +
       'extract(epoch from created_at) * 1000 as created_ms from public.profiles'),
     query('select user_a, user_b from public.friendships'),
     query('select from_id, to_id from public.friend_requests'),
-    query('select blocker_id, blocked_id from public.blocks')
+    query('select blocker_id, blocked_id from public.blocks'),
+    query('select user_id, pack from public.pack_grants')
   ]);
 
   const byId = new Map();
@@ -129,6 +130,8 @@ async function loadAll() {
       // app that broadcasts live location.
       blocked: [],
       blockedBy: [],
+      // Feature packs this account has unlocked (migrations/004_feature_packs.sql).
+      packs: [],
       createdAt: Number(r.created_ms) || Date.now()
     });
   });
@@ -150,8 +153,86 @@ async function loadAll() {
     // side rather than a scan of every account's block list.
     if (t) t.blockedBy.push(r.blocker_id);
   });
+  grants.rows.forEach((r) => {
+    const u = byId.get(r.user_id);
+    if (u && u.packs.indexOf(r.pack) < 0) u.packs.push(r.pack);
+  });
 
   return [...byId.values()];
+}
+
+/* ---------------- feature packs ----------------
+   Codes and grants (migrations/004_feature_packs.sql). All awaited: a redeem
+   is on the request path and the rider is told the outcome; the admin writes
+   are rare. */
+
+/* Redeem in ONE transaction: lock the code row, check it, grant, count the
+   use. The use is only counted when the account actually gained something —
+   redeeming a code you already fully hold is a no-op, not a burnt seat. */
+async function redeemPackCode(codeHash, userId) {
+  const client = await pool.connect();
+  try {
+    await client.query('begin');
+    const r = await client.query(
+      'select id, label, packs, max_uses, uses, expires_at, revoked from public.pack_codes where code_hash = $1 for update',
+      [codeHash]);
+    const row = r.rows[0];
+    let out;
+    if (!row) out = { error: 'unknown' };
+    else if (row.revoked) out = { error: 'revoked' };
+    else if (row.expires_at && new Date(row.expires_at).getTime() <= Date.now()) out = { error: 'expired' };
+    else if (row.uses >= row.max_uses) out = { error: 'exhausted' };
+    if (out) { await client.query('rollback'); return out; }
+    const granted = [];
+    for (const pack of row.packs) {
+      const g = await client.query(
+        'insert into public.pack_grants (user_id, pack, source) values ($1, $2, $3) on conflict do nothing returning pack',
+        [userId, pack, 'code:' + row.id]);
+      if (g.rows.length) granted.push(pack);
+    }
+    if (granted.length) await client.query('update public.pack_codes set uses = uses + 1 where id = $1', [row.id]);
+    await client.query('commit');
+    return { ok: true, id: row.id, label: row.label, packs: row.packs.slice(), granted };
+  } catch (e) {
+    try { await client.query('rollback'); } catch (e2) { /* connection already gone */ }
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+async function insertPackCode(c) {
+  const r = await query(
+    `insert into public.pack_codes (code_hash, label, packs, max_uses, expires_at, created_by)
+     values ($1, $2, $3, $4, $5, $6) returning id`,
+    [c.hash, c.label || '', c.packs, c.maxUses, c.expiresAt ? new Date(c.expiresAt) : null, c.createdBy || '']);
+  return r.rows[0].id;
+}
+async function listPackCodes() {
+  const r = await query(
+    `select id, label, packs, max_uses, uses, revoked, created_by,
+            extract(epoch from expires_at) * 1000 as expires_ms,
+            extract(epoch from created_at) * 1000 as created_ms
+       from public.pack_codes order by created_at desc limit 500`);
+  return r.rows.map((x) => ({
+    id: Number(x.id), label: x.label, packs: x.packs, maxUses: x.max_uses, uses: x.uses,
+    revoked: !!x.revoked, createdBy: x.created_by,
+    expiresAt: x.expires_ms ? Number(x.expires_ms) : null, createdAt: Number(x.created_ms)
+  }));
+}
+async function revokePackCode(id) {
+  const r = await query('update public.pack_codes set revoked = true where id = $1 and revoked = false returning id', [id]);
+  return r.rows.length > 0;
+}
+async function insertPackGrant(userId, pack, source) {
+  const r = await query(
+    'insert into public.pack_grants (user_id, pack, source) values ($1, $2, $3) on conflict do nothing returning pack',
+    [userId, pack, source || '']);
+  return r.rows.length > 0;
+}
+async function deletePackGrant(userId, pack) {
+  const r = await query('delete from public.pack_grants where user_id = $1 and pack = $2 returning pack', [userId, pack]);
+  return r.rows.length > 0;
 }
 
 /* ---------------- awaited writes (account lifecycle) ----------------
@@ -473,5 +554,6 @@ module.exports = {
   putEmailToken, takeEmailToken, purgeExpiredTokens,
   queueProfile,
   queueFriendRequest, queueClearRequests, queueFriendship, queueUnfriend,
-  queueBlock, queueUnblock, insertReport, countRecentReports
+  queueBlock, queueUnblock, insertReport, countRecentReports,
+  redeemPackCode, insertPackCode, listPackCodes, revokePackCode, insertPackGrant, deletePackGrant
 };

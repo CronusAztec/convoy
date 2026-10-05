@@ -225,7 +225,30 @@
     // once tiles settle, so the residential filter tracks the new style.
     landuseIds = null;
     needRefilter = true;
+
+    // Feature packs stack their own sources/layers here, after the core's, so
+    // they too survive a style switch.
+    runStyleHooks();
   }
+
+  /* ---------------- extension points (feature packs) ----------------
+     onStyle(fn): fn(map) runs after the core layers on every style.load, and
+     at once if the style is already up — a pack that loads mid-session sees
+     the same sequence as one present from boot. onClick(fn): fn(e, map) runs
+     before the core's own click handling; return true to consume the tap. */
+  var styleHooks = [], clickHooks = [];
+  function runStyleHooks() {
+    for (var i = 0; i < styleHooks.length; i++) {
+      try { styleHooks[i](map); } catch (e) { console.error('[convoy mapview] style hook', e); }
+    }
+  }
+  function onStyle(fn) {
+    styleHooks.push(fn);
+    if (map && typeof map.isStyleLoaded === 'function' && map.isStyleLoaded()) {
+      try { fn(map); } catch (e) { console.error('[convoy mapview] style hook', e); }
+    }
+  }
+  function onClick(fn) { clickHooks.push(fn); }
 
   // zoom-interpolated line width
   function zw(min, max) {
@@ -733,6 +756,10 @@
       return;
     }
 
+    for (var i = 0; i < clickHooks.length; i++) {
+      try { if (clickHooks[i](e, map) === true) return; } catch (err) { console.error('[convoy mapview] click hook', err); }
+    }
+
     if (popupRef) { closePopup(); return; }
     A.routing.promptRoute([e.lngLat.lng, e.lngLat.lat]);
   }
@@ -996,6 +1023,8 @@
   A.mapview = {
     init: init,
     map: function () { return map; },
+    onStyle: onStyle,
+    onClick: onClick,
     applyStyle: applyStyle,
     applyAccent: applyAccent,
     setRouteData: setRouteData,

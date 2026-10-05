@@ -193,9 +193,30 @@
     });
   }
 
+  /* ---------------- extension points (feature packs) ----------------
+     hook('request', fn): fn(req) may add fields to the { from, to } body the
+     route proxy receives (an avoid list, say) before any route is fetched.
+     hook('routes', fn): fn(routes, req) returns the list to use — filter,
+     re-rank or annotate; the first entry is what gets drawn. */
+  var routeHooks = { request: [], routes: [] };
+  function hook(name, fn) { if (routeHooks[name] && typeof fn === 'function') routeHooks[name].push(fn); }
+  function runRequestHooks(req) {
+    routeHooks.request.forEach(function (fn) { try { fn(req); } catch (e) { console.error('[convoy routing] request hook', e); } });
+    return req;
+  }
+  function runRouteHooks(routes, req) {
+    routeHooks.routes.forEach(function (fn) {
+      try { var r = fn(routes, req); if (Array.isArray(r) && r.length) routes = r; }
+      catch (e) { console.error('[convoy routing] routes hook', e); }
+    });
+    return routes;
+  }
+
   function fetchRoutes(from, to) {
     if (lastRoute) { try { lastRoute.abort(); } catch (e) {} }
     var ctrl = new AbortController(); lastRoute = ctrl;
+    var req = runRequestHooks({ from: from, to: to });
+    var done = function (routes) { return runRouteHooks(routes, req); };
     if (useTomTom()) {
       // Server proxy injects the TomTom key; client never sees it. The proxy
       // forwards &traffic=true&maxAlternatives=2 for plain A→B requests. If the
@@ -204,13 +225,13 @@
       return fetchJSON(ROUTE_PROXY, {
         method: 'POST', signal: ctrl.signal,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: from, to: to })
+        body: JSON.stringify(req)
       }).then(function (j) {
         if (!j.routes || !j.routes.length) throw new Error('no route');
         return j.routes.map(ttNormalize);
-      }).catch(function () { return osrmRoutes(from, to, ctrl.signal); });
+      }).catch(function () { return osrmRoutes(from, to, ctrl.signal); }).then(done);
     }
-    return osrmRoutes(from, to, ctrl.signal);
+    return osrmRoutes(from, to, ctrl.signal).then(done);
   }
 
   function parseSteps(route) {
@@ -814,6 +835,9 @@
     geocode: geocode,
     promptRoute: promptRoute,
     setDestination: setDestination,
+    fetchRoutes: fetchRoutes,
+    applyRoute: applyRoute,
+    hook: hook,
     clearRoute: clearRoute,
     startTrip: startTrip,
     endTrip: endTrip,

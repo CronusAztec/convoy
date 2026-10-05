@@ -77,6 +77,7 @@
       if (A.wake) A.wake.init();         // keep-screen-awake setting
       wakeRiderarrowsOnFirstParty();     // edge arrows to off-screen convoy riders, loaded on first real party
       A.auth.boot();   // decide: show auth screen, or enter app + connect (net.connect)
+      if (A.packs) A.packs.init();       // feature packs: fetch what the signed-in account holds
       // OTA handshake, deliberately LAST and only on the success path: the
       // bundle that is running proved it can boot (map up, UI wired, auth
       // decided). A bundle that threw anywhere above must never be confirmed —

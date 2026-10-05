@@ -122,16 +122,18 @@ function world(opts) {
   const store = { blockList: () => [], getById: () => null };
   const quiet = { log: noop, warn: noop, error: noop };
   const onClose = new Function('c', 'seatOwner', 'rememberSeat', 'leaveParty', 'leaveRace', 'clients', 'ipCount', 'online',
-    'store', 'notifyFriendsOf', 'recomputeHumans', 'humans', 'console', 'assignAnchors', 'Date', CLOSE_BODY || '');
+    'store', 'notifyFriendsOf', 'recomputeHumans', 'humans', 'console', 'assignAnchors', 'Date', 'packs', CLOSE_BODY || '');
   const helloFn = new Function('claimSeat', 'restoreSeat', 'userFromToken', 'send', 'online', 'friendsPayload', 'notifyFriendsOf',
     'sanitizeProfile', 'validPos', 'num', 'recomputeHumans', 'assignAnchors', 'syncScope', 'humans', 'store', 'riderRecord',
-    'getRider', 'gated', 'anonymiseGlobal', 'buildGlobalFC', 'console', 'Date',
+    'getRider', 'gated', 'anonymiseGlobal', 'buildGlobalFC', 'console', 'Date', 'packs',
     'return function hello(c, m) {' + (HELLO_BODY || '') + '\n};')(
     api.claimSeat, api.restoreSeat,
     (tok) => (opts.users && opts.users[tok]) || null,
     send, online, () => ({ friends: [], requests: [] }), noop,
     (p) => ({ name: (p && p.name) || 'guest', emoji: 0 }),
-    () => false, () => 0, noop, noop, noop, () => [], store, () => null, getRider, () => false, (x) => x, () => ({}), quiet, FakeDate);
+    () => false, () => 0, noop, noop, noop, () => [], store, () => null, getRider, () => false, (x) => x, () => ({}), quiet, FakeDate,
+    // feature packs (server/packs/index.js): hello fills c.packs; the welcome frame lists it
+    { onHello: (c) => { c.packs = new Set(); }, packsForSocket: (c) => (c.packs ? [...c.packs] : []) });
 
   function mk(id, o) {                              // the connection literal + the handler's registration
     o = o || {};
@@ -146,7 +148,7 @@ function world(opts) {
     return c;
   }
   function hello(c, m) { helloFn(c, Object.assign({ t: 'hello', profile: { name: c.id } }, m || {})); }
-  function close(c) { onClose(c, api.seatOwner, api.rememberSeat, api.leaveParty, noop, clients, ipCount, online, store, noop, noop, () => [], quiet, noop, FakeDate); }
+  function close(c) { onClose(c, api.seatOwner, api.rememberSeat, api.leaveParty, noop, clients, ipCount, online, store, noop, noop, () => [], quiet, noop, FakeDate, { onClose: noop }); }
   function party(id, members, leader) {
     const p = { id, name: 'Night Run', emoji: 0, code: id.toUpperCase(), leader, members: members.map((c) => c.id), chat: [], mode: 'invite', rally: null };
     parties.set(id, p);

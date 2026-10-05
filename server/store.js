@@ -31,6 +31,7 @@ const crypto = require('crypto');
 const db = require('./db');
 const sb = require('./supabase');
 const residue = require('./authresidue');
+const packcodes = require('./packcodes');
 
 // Still exported: hotspots.js keeps its own JSON cache alongside the accounts
 // that used to live here, and honours the VPS DATA_DIR override through it.
@@ -145,6 +146,7 @@ function blank(id, username, profile, email, emailVerified, provider) {
     reqOut: [],
     blocked: [],
     blockedBy: [],
+    packs: [],
     createdAt: Date.now()
   };
 }
@@ -1028,5 +1030,78 @@ module.exports = {
   blockUser, unblockUser, blockedBetween, blockList,
   fileReport, recentReportCount,
   // control panel
-  adminSearch, adminRoster, renameUser, listReports, setReportStatus
+  adminSearch, adminRoster, renameUser, listReports, setReportStatus,
+  // feature packs
+  packsOf, hasPack, packHolders, redeemPack, grantPack, revokePack,
+  mintPackCode, listPackCodes, revokePackCode
 };
+
+/* ---------------- feature packs ----------------
+   Entitlement lives on the account record (u.packs, loaded with everything
+   else at boot) because the realtime path asks "does this socket hold pack X"
+   synchronously on every gated frame. Postgres is the record; see
+   migrations/004_feature_packs.sql and server/packs/index.js. */
+function packsOf(id) {
+  const u = byId[id];
+  return u && Array.isArray(u.packs) ? u.packs.slice() : [];
+}
+function hasPack(id, pack) {
+  const u = byId[id];
+  return !!(u && Array.isArray(u.packs) && u.packs.indexOf(pack) >= 0);
+}
+function packHolders(pack) {
+  let n = 0;
+  for (const id in byId) if (Array.isArray(byId[id].packs) && byId[id].packs.indexOf(pack) >= 0) n++;
+  return n;
+}
+function addPackLocal(u, pack) {
+  if (!Array.isArray(u.packs)) u.packs = [];
+  if (u.packs.indexOf(pack) < 0) u.packs.push(pack);
+}
+
+// Errors are deliberately coarse: 'unknown' and 'unusable' are all the rider
+// is ever told apart, so a guess learns nothing about which codes exist or
+// used to. The precise reason stays in the return for the server log.
+async function redeemPack(id, rawCode) {
+  const u = byId[id];
+  if (!u) return { error: 'no such account' };
+  const norm = packcodes.normalize(rawCode);
+  if (!norm) return { error: 'unknown' };
+  const r = await db.redeemPackCode(packcodes.hash(norm), id);
+  if (r.error) return r;
+  r.packs.forEach((p) => addPackLocal(u, p));
+  return { ok: true, packs: u.packs.slice(), granted: r.granted, label: r.label, code: r.id };
+}
+
+async function grantPack(id, pack, source) {
+  const u = byId[id];
+  if (!u) return { error: 'no such account' };
+  const added = await db.insertPackGrant(id, pack, source);
+  addPackLocal(u, pack);
+  return { ok: true, added, packs: u.packs.slice() };
+}
+async function revokePack(id, pack) {
+  const u = byId[id];
+  if (!u) return { error: 'no such account' };
+  const removed = await db.deletePackGrant(id, pack);
+  if (Array.isArray(u.packs)) u.packs = u.packs.filter((p) => p !== pack);
+  return { ok: true, removed, packs: packsOf(id) };
+}
+
+// Mints a code and returns the plaintext ONCE. It is not stored; an operator
+// who loses it mints another.
+async function mintPackCode(opts) {
+  const packs = Array.isArray(opts.packs) ? opts.packs.filter((p) => typeof p === 'string' && p) : [];
+  if (!packs.length) return { error: 'a code must unlock at least one pack' };
+  const maxUses = Math.max(1, Math.min(100000, Math.floor(Number(opts.maxUses) || 1)));
+  const expiresAt = opts.expiresAt ? Number(opts.expiresAt) : null;
+  if (expiresAt !== null && !(expiresAt > Date.now())) return { error: 'expiry must be in the future' };
+  const code = packcodes.mint();
+  const id = await db.insertPackCode({
+    hash: packcodes.hash(packcodes.normalize(code)), label: String(opts.label || '').slice(0, 80),
+    packs, maxUses, expiresAt, createdBy: String(opts.createdBy || '').slice(0, 80)
+  });
+  return { ok: true, id, code, packs, maxUses, expiresAt };
+}
+function listPackCodes() { return db.listPackCodes(); }
+function revokePackCode(id) { return db.revokePackCode(id); }

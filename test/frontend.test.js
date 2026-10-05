@@ -51,7 +51,7 @@ function atOrBelowBaseline(label, key, count, detail) {
 const MODULE_ORDER = [
   'config', 'telemetry', 'data', 'util', 'state', 'themes', 'space',
   'mapview', 'sim', 'net', 'routing', 'wake', 'riderarrows', 'party',
-  'voice', 'ui', 'auth', 'native', 'ota', 'vitals'
+  'voice', 'ui', 'auth', 'native', 'packs', 'ota', 'vitals'
 ];
 
 // Lifted from testBootCost()'s own scriptTags matcher (cycle 8, directive task

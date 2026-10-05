@@ -155,7 +155,10 @@
       if (ws !== socket) return;
       var m;
       try { m = JSON.parse(ev.data); } catch (e) { return; }
-      var h = handlers[m.t];
+      // The core's handlers, then a feature pack's (A.net.on). Own properties
+      // only: m.t is off the wire and 'constructor' must not resolve.
+      var h = Object.prototype.hasOwnProperty.call(handlers, m.t) ? handlers[m.t]
+        : Object.prototype.hasOwnProperty.call(packHandlers, m.t) ? packHandlers[m.t] : null;
       if (h) {
         try { h(m); } catch (e) { console.error('[convoy net]', m.t, e); }
       }
@@ -276,6 +279,9 @@
       ST.emit('friends');
     }
     probeRoutingCaps();
+    // What the server says this socket's account has unlocked — the loader
+    // fetches anything it has not got yet (js/packs.js).
+    if (A.packs) A.packs.onWelcome(m.packs || []);
     // Re-assert the proximity-voice opt-in so the server relays voice from
     // riders around us (setting persists across sessions/reconnects).
     var pv = S.settings && S.settings.proxVoice;
@@ -375,8 +381,23 @@
   }
 
   /* ---------------- message handlers ---------------- */
+  /* ---------------- extension points (feature packs) ----------------
+     on(type, fn) registers a handler for a socket message type the core does
+     not own; a pack's server half sends them only to sockets that hold the
+     pack. send(obj) is the raw socket send (queued until live). */
+  var packHandlers = {};
+  function on(type, fn) {
+    if (typeof type !== 'string' || typeof fn !== 'function') return;
+    if (Object.prototype.hasOwnProperty.call(handlers, type)) { console.warn('[convoy net] ' + type + ' is a core message'); return; }
+    packHandlers[type] = fn;
+  }
+  function off(type) { delete packHandlers[type]; }
+
   var handlers = {
     welcome: goLive,
+    // The server recomputed what this account holds (a panel grant/revoke, a
+    // redeem elsewhere): resync so the loader fetches or stands down.
+    packs: function (m) { if (A.packs) A.packs.onWelcome(m.packs || []); },
 
     // The server already refuses to send a blocked rider, so this is belt-and-
     // braces for the two cases it cannot cover: a session-only guest hide, and a
@@ -546,6 +567,9 @@
   A.net = {
     init: init,
     connect: connect,
+    on: on,
+    off: off,
+    send: send,
     isLive: function () { return live; },
     // The socket is down but the server may still be holding our seat: party
     // actions queue behind the next hello instead of falling into the solo

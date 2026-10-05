@@ -43,6 +43,9 @@ const ota = require('./ota');
 const flags = require('./flags');
 const audit = require('./audit');
 const admin = require('./admin');
+const packs = require('./packs');   // feature packs: served only to accounts that unlocked them
+const packcodes = require('./packcodes');
+const db = require('./db');          // handed to packs through packCtx only
 const play = require('./play');
 const httpcache = require('./httpcache');
 const wiregate = require('./wiregate');
@@ -689,6 +692,50 @@ async function handleApi(req, res, urlPath) {
   // Anonymous capability probe: tells the client which optional data sources the
   // server has keys for, so it can opt in or fall back to keyless alternatives.
   // Cheap GET, no upstream call — safe to hit on every connect.
+  /* ---- feature packs (server/packs/index.js) ----
+     The catalogue is public and the redeem screen is always visible: a
+     reviewer can read what a code unlocks without holding one. The manifest
+     and the redeem call need an account, because a grant is a row against
+     one. The redeem budget is per account AND per IP so a code cannot be
+     guessed at — the code space is ~79 bits (server/packcodes.js), so the
+     limit is belt-and-braces, not the lock. */
+  if (req.method === 'GET' && urlPath === '/api/packs/catalog') {
+    return json(res, 200, { packs: packs.catalog() });
+  }
+  if (req.method === 'GET' && urlPath === '/api/packs') {
+    const u = userFromToken(bearer(req));
+    if (!u) return json(res, 401, { error: 'unauthorized' });
+    return json(res, 200, packs.manifestFor(u));
+  }
+  if (req.method === 'POST' && urlPath === '/api/packs/redeem') {
+    const u = userFromToken(bearer(req));
+    if (!u) return json(res, 401, { error: 'unauthorized' });
+    if (!rateOk('packs:' + u.id, 10, 15 * 60 * 1000) || !rateOk('packs-ip:' + ip, 30, 15 * 60 * 1000)) {
+      return json(res, 429, { error: 'Too many attempts. Try again in a few minutes' });
+    }
+    return readBody(req, res, async (body) => {
+      try {
+        if (!body || !packcodes.looksValid(body.code)) return json(res, 400, { error: 'That doesn\'t look like a Convoy code' });
+        const r = await store.redeemPack(u.id, body.code);
+        if (r.error === 'unknown') return json(res, 404, { error: 'That code isn\'t valid' });
+        if (r.error) {
+          console.log('[packs] ' + u.username + ' tried a code that is ' + r.error);
+          return json(res, 410, { error: 'That code can\'t be used any more' });
+        }
+        console.log('[packs] ' + u.username + ' redeemed code #' + r.code + (r.label ? ' (' + r.label + ')' : '') +
+          ' → ' + (r.granted.length ? r.granted.join(', ') : 'nothing new'));
+        // A live socket picks the new packs up on its next hello; tell this
+        // one now so the loader can fetch without a reconnect.
+        const live = online.get(u.id);
+        if (live) packs.onHello(live, u);
+        return json(res, 200, Object.assign({ ok: true, granted: r.granted, label: r.label || '' }, packs.manifestFor(u)));
+      } catch (e) {
+        console.error('[packs redeem]', e.message);
+        return json(res, 500, { error: 'Server error' });
+      }
+    });
+  }
+
   if (req.method === 'GET' && urlPath === '/api/route/caps') {
     // The cap flows through the runtime flag store (flags.js): env/key state
     // is the DEFAULT, the admin panel can force it on/off live, and riders see
@@ -1616,6 +1663,10 @@ async function handleApi(req, res, urlPath) {
         return;
       }
 
+      // A pack's own HTTP routes (server/packs/<id>.js), each gated on the
+      // account holding that pack. Nothing here is reachable without one.
+      if (await packs.handleApi(req, res, urlPath)) return;
+
       return json(res, 404, { error: 'not found' });
     } catch (e) {
       console.error('[api ' + urlPath + ']', e.message);
@@ -2259,8 +2310,10 @@ const handlers = {
       online.set(u.id, c);
       friendData = friendsPayload(u);
       notifyFriendsOf(u, { t: 'friend:status', id: u.id, online: true });
+      packs.onHello(c, u);                 // c.packs = what this account has unlocked
     } else {
       c.profile = sanitizeProfile(m.profile); // guest
+      packs.onHello(c, null);              // guests hold nothing
     }
     if (validPos(m.pos)) c.pos = m.pos;
     c.heading = num(m.heading, 0, 360, 0);
@@ -2289,7 +2342,10 @@ const handlers = {
       riders: [...c.known].map((id) => riderRecord(getRider(id), c)),
       // Anonymised here as well when the gate applies — this frame is the
       // rider's first sight of the global layer.
-      global: gated(c) ? anonymiseGlobal(buildGlobalFC(c)) : buildGlobalFC(c)
+      global: gated(c) ? anonymiseGlobal(buildGlobalFC(c)) : buildGlobalFC(c),
+      // Feature packs this socket is entitled to: the client loader compares
+      // it with what it has loaded and fetches the rest (js/packs.js).
+      packs: packs.packsForSocket(c)
     });
     if (seat) restoreSeat(c, seat);
     console.log(`[join] ${c.profile.name}${c.userId ? ' @' + c.username : ' (guest)'} — ${humans().length} online`);
@@ -2980,7 +3036,7 @@ const ROOT = path.resolve(__dirname, '..');
 // Explicit allowlist of top-level paths that may be served. Anything else 404s.
 // (Formerly a denylist, which silently served any new file added at the repo root —
 // a path-traversal-class bug waiting for the next config/backup file to land here.)
-const ALLOWED_TOP = ['/', '/index.html', '/js', '/css', '/legal', '/convoy.apk', '/fonts', '/landing'];
+const ALLOWED_TOP = ['/', '/index.html', '/js', '/css', '/legal', '/convoy.apk', '/fonts', '/landing', '/packs'];
 
 /* ---- landing page ----
    The marketing page lives under landing/ (index.html + img/) and is reached
@@ -3343,6 +3399,16 @@ const httpServer = http.createServer((req, res) => {
   }
 
   if (urlPath === '/') urlPath = '/index.html';
+  // Feature packs (/packs/<id>/<file>) are the one static tree that is NOT
+  // public: a file leaves this server only for a request carrying a signed,
+  // unexpired token for that pack whose account still holds it. Decided before
+  // the allowlist and before any stat, so a probe learns nothing about what is
+  // on disk. See server/packs/index.js (staticOk) for the rule.
+  if (urlPath === '/packs' || urlPath.indexOf('/packs/') === 0) {
+    // A bare 403: browsers never heuristically cache one, and the cache policy
+    // (server/httpcache.js) stays the only place that writes caching headers.
+    if (!packs.staticOk(req, urlPath)) { res.writeHead(403); res.end('Forbidden'); return; }
+  }
   // Resolve first so traversal (e.g. /js/../server/x) is normalized away, THEN
   // check the allowlist against the resolved top-level segment. Checking the
   // raw path before resolving let /js/../server/... slip through into /server.
@@ -3508,6 +3574,7 @@ wss.on('connection', (ws, req) => {
     lastPosAt: 0,
     micActive: false,
     ghost: false,
+    packs: new Set(),  // feature packs this socket holds — filled by packs.onHello
     isAlive: true
   };
   // Per-IP ceiling: a single source can't exhaust MAX_CLIENTS on its own.
@@ -3557,12 +3624,16 @@ wss.on('connection', (ws, req) => {
     // Own properties only, and only callables: m.t comes off the wire, and a
     // bare lookup would hand back inherited Object.prototype members
     // ('constructor', 'toString', …) as if they were message handlers.
-    const h = Object.prototype.hasOwnProperty.call(handlers, m.t) ? handlers[m.t] : null;
+    // The core's own handlers first; then a pack's (server/packs/<id>.js),
+    // which packs.wsHandler() wraps so it only runs for a socket whose account
+    // holds that pack — for anyone else the frame is as unknown as a typo.
+    const h = Object.prototype.hasOwnProperty.call(handlers, m.t) ? handlers[m.t] : packs.wsHandler(m.t);
     if (typeof h === 'function') {
       try { h(c, m); } catch (e) { console.error('[handler ' + m.t + ']', e.message); }
     }
   });
   ws.on('close', () => {
+    packs.onClose(c);
     seatOwner.delete(c.resume);
     // Hold the seat FIRST: a held seat makes the leave silent and posts "lost
     // signal" instead of "left the convoy" (server-035).
@@ -3597,6 +3668,22 @@ setInterval(() => {
    memory, and (b) the JWKS needed to verify access tokens. Coming up without
    either would mean every sign-in 500s and every existing session is rejected —
    a loud failed boot is far better than a server that looks healthy and isn't. */
+/* What a pack's server half (server/packs/<id>.js) may reach. Deliberately a
+   named surface rather than the module scope: a pack that needs something
+   not listed here adds it HERE, in one line, where the next reader can see
+   what the packs lean on. Everything is live (the Maps are the real ones). */
+const packCtx = {
+  clients, parties, online, bots,
+  humans, getRider, riderRecord, riderName, clientByUserId,
+  send, defer, rateOk, validPos, num, cleanText, sanitizeProfile, clientIp,
+  blockedPair, scopeFor, syncScope, ensureKnown, liteOf, sendPartyState, partySys,
+  joinParty, leaveParty, friendsPayload, notifyFriendsOf, buildGlobalFC, anonymiseGlobal, gated,
+  json, readBody, bearer, userFromToken, liveClaims, CORS_HEADERS,
+  store, db, flags, tomtom, B,
+  MAX_PARTY, NEARBY_KM, TICK_MS, FAST_MS,
+  packs
+};
+
 (async function boot() {
   if (!sb.configured()) {
     console.error('[boot] Supabase Auth is not configured.');
@@ -3673,6 +3760,11 @@ setInterval(() => {
   // request, so hotfix pushes land without a restart). Never fatal — no
   // manifest just means the channel is off and APKs keep their bundled assets.
   try { ota.init(); } catch (e) { console.error('[boot] OTA channel unavailable:', e.message); }
+
+  // Feature packs: read packs/*/pack.json and server/packs/*.js. Fatal on a
+  // malformed pack — a pack that half-loads is a rider-visible feature that
+  // errors, and the fix is a file name away.
+  try { packs.init(packCtx, handlers); } catch (e) { console.error('[boot] feature packs: ' + e.message); process.exit(1); }
 
   // Runtime flag overrides, read from DATA_DIR/flags.json. Must come up BEFORE
   // the listener: booting with the master switch forced off and then serving
@@ -3760,6 +3852,17 @@ setInterval(() => {
       return out;
     },
     sanitizeProfile, validUsername, validPassword, validEmail,
+    // A grant or revoke from the panel reaches a live socket now: its pack set
+    // is recomputed and the client told to resync (js/packs.js) — a revoked
+    // pack's frames are dropped from this moment, loaded code or not.
+    kickPacks: (userId) => {
+      const c = online.get(userId);
+      const u = store.getById(userId);
+      if (!c || !u) return 0;
+      packs.onHello(c, u);
+      send(c, { t: 'packs', packs: packs.packsForSocket(c) });
+      return 1;
+    },
     tomtomKeyed: () => tomtom.hasKey(),
     telemetryOn: () => TELEMETRY_ON,
     // Cookies get Secure only on an https deployment; setting it on a plain

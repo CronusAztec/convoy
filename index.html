@@ -23,7 +23,7 @@
 <link rel="preload" as="font" type="font/woff2" crossorigin href="/fonts/chakra-petch-v13-latin-400.woff2">
 <link rel="preload" as="font" type="font/woff2" crossorigin href="/fonts/share-tech-mono-v16-latin-400.woff2">
 <link href="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.min.css" rel="stylesheet"/>
-<link rel="stylesheet" href="css/styles.css?v=cy140"/>
+<link rel="stylesheet" href="css/styles.css?v=cy141"/>
 </head>
 <body>
 
@@ -200,26 +200,27 @@
      order right before DOMContentLoaded (which app.js waits on), so nothing is
      render-blocking. maplibre stays first so its global is ready for mapview. -->
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.24.0/dist/maplibre-gl.min.js" defer crossorigin="anonymous"></script>
-<script src="js/config.js?v=cy140" defer></script>
+<script src="js/config.js?v=cy141" defer></script>
 <!-- Second, and deliberately so. telemetry.js installs the global error and
      unhandledrejection handlers at load time, so it has to run before every
      module it is supposed to be watching — a crash reporter that boots after
      state.js cannot report the crash IN state.js. It depends on nothing but
      config.js, and its release stamp is read off its own ?v= below. -->
-<script src="js/telemetry.js?v=cy140" defer></script>
-<script src="js/util.js?v=cy140" defer></script>
-<script src="js/state.js?v=cy140" defer></script>
-<script src="js/themes.js?v=cy140" defer></script>
-<script src="js/space.js?v=cy140" defer></script>
-<script src="js/mapview.js?v=cy140" defer></script>
-<script src="js/sim.js?v=cy140" defer></script>
-<script src="js/net.js?v=cy140" defer></script>
-<script src="js/routing.js?v=cy140" defer></script>
-<script src="js/wake.js?v=cy140" defer></script>
-<script src="js/party.js?v=cy140" defer></script><script src="js/ui.js?v=cy140" defer></script>
-<script src="js/auth.js?v=cy140" defer></script>
-<script src="js/native.js?v=cy140" defer></script>
-<script src="js/ota.js?v=cy140" defer></script>
-<script src="js/app.js?v=cy140" defer></script>
+<script src="js/telemetry.js?v=cy141" defer></script>
+<script src="js/util.js?v=cy141" defer></script>
+<script src="js/state.js?v=cy141" defer></script>
+<script src="js/themes.js?v=cy141" defer></script>
+<script src="js/space.js?v=cy141" defer></script>
+<script src="js/mapview.js?v=cy141" defer></script>
+<script src="js/sim.js?v=cy141" defer></script>
+<script src="js/net.js?v=cy141" defer></script>
+<script src="js/routing.js?v=cy141" defer></script>
+<script src="js/wake.js?v=cy141" defer></script>
+<script src="js/party.js?v=cy141" defer></script><script src="js/ui.js?v=cy141" defer></script>
+<script src="js/auth.js?v=cy141" defer></script>
+<script src="js/native.js?v=cy141" defer></script>
+<script src="js/packs.js?v=cy141" defer></script>
+<script src="js/ota.js?v=cy141" defer></script>
+<script src="js/app.js?v=cy141" defer></script>
 </body>
 </html>

@@ -62,7 +62,20 @@ const store = require('./store');
 const DATA_DIR = store.DATA_DIR;
 const FLAGS_FILE = path.join(DATA_DIR, 'flags.json');
 
-const KNOWN = ['app', 'routing', 'telemetry', 'registration', 'login', 'ota'];
+/* Feature packs get a switch each, 'pack:<id>', named from the packs/
+   directory on disk (server/packs/index.js owns the manifests; this is a
+   directory listing so the two modules do not require each other). Forced
+   off, a pack disappears from every manifest, its files 403 and its handlers
+   go silent — grants are untouched, so restoring it restores everyone. */
+function packFlags() {
+  const dir = process.env.CONVOY_PACKS_DIR || path.join(__dirname, '..', 'packs');
+  try {
+    return fs.readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && /^[a-z][a-z0-9-]{1,31}$/.test(d.name) && fs.existsSync(path.join(dir, d.name, 'pack.json')))
+      .map((d) => 'pack:' + d.name).sort();
+  } catch (e) { return []; }
+}
+const KNOWN = ['app', 'routing', 'telemetry', 'registration', 'login', 'ota'].concat(packFlags());
 
 // The master switch is first in KNOWN so the panel's board renders it at the
 // top, and named here so nothing has to hardcode the string 'app'.

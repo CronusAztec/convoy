@@ -496,7 +496,7 @@ function bootRealUi(opts) {
   // real A.data.ensure() / A.voiceLoader.ensure() calls under test.
   const MODULE_ORDER = ['config', 'telemetry', 'util', 'state', 'themes', 'space',
     'mapview', 'sim', 'net', 'routing', 'wake', 'riderarrows', 'party',
-    'ui', 'auth', 'native', 'ota'];
+    'ui', 'auth', 'native', 'packs', 'ota'];
   MODULE_ORDER.forEach(function (name) {
     win.eval(fs.readFileSync(path.join(ROOT, 'js', name + '.js'), 'utf8'));
   });

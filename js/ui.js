@@ -62,8 +62,10 @@
     if (name === 'convoy') renderConvoy();
     if (name === 'profile') {
       profileView = 'main'; // panel always reopens on the profile page (garage is a sub-page)
+      // The main page (and the Settings box inside it, so toggles reflect the
+      // current state) renders on the next microtask inside buildProfilePanel —
+      // #settings-host does not exist until then, so it cannot be built here.
       buildProfilePanel();
-      buildSettings(document.getElementById('settings-host')); // rebuild so toggles reflect current state
     }
   }
   function closePanels() { openPanel(null); }
@@ -1255,6 +1257,7 @@
         act.appendChild(friendBtn);
       }
     }
+    runHooks('profile-overlay', act, subject, card);
     card.appendChild(act);
 
     // Safety row — deliberately separated from the social actions above and
@@ -1502,8 +1505,7 @@
   var profileView = 'main';
   function showProfileView(v) {
     profileView = v;
-    buildProfilePanel();
-    if (v === 'main') buildSettings(document.getElementById('settings-host'));
+    buildProfilePanel(); // builds the Settings box too when v === 'main'
   }
 
   // Bumped on every buildProfilePanel() call; a pending ensure().then()/.catch()
@@ -1524,7 +1526,7 @@
     Promise.all(deps).then(function () {
       if (gen !== profileGen || document.getElementById('profile-body') !== body) return;
       if (profileView === 'garage') buildGaragePage(body);
-      else buildProfileMain(body);
+      else { buildProfileMain(body); buildSettings(document.getElementById('settings-host')); }
     }).catch(function () {
       if (gen !== profileGen || document.getElementById('profile-body') !== body) return;
       if (profileView === 'garage') {
@@ -1536,11 +1538,36 @@
         showProfileView('main');
       } else {
         buildProfileMain(body);
+        buildSettings(document.getElementById('settings-host'));
       }
     });
   }
 
   /* ---- page 1: the profile ---- */
+  /* ---------------- extension points (feature packs) ----------------
+     Packs (js/packs.js) arrive after the core has booted and add to screens
+     the core owns. Each named point is run where the core builds that screen:
+       'settings'         (body, kit)            after Units, before Feature packs
+       'profile'          (body)                 after Awards on the profile page
+       'profile-overlay'  (actions, subject, card) the public-profile action row
+       'init'             ()                     once ui.init() has run (at once
+                                                 if it already has)
+     A hook that throws is logged and skipped; it never takes the screen down. */
+  var hooks = {}, uiInited = false;
+  function addHook(name, fn) {
+    if (typeof fn !== 'function') return;
+    (hooks[name] = hooks[name] || []).push(fn);
+    if (name === 'init' && uiInited) { try { fn(); } catch (e) { console.error('[convoy ui] init hook', e); } }
+  }
+  function runHooks(name, a, b, c) {
+    var list = hooks[name] || [];
+    for (var i = 0; i < list.length; i++) {
+      try { list[i](a, b, c); } catch (e) { console.error('[convoy ui] ' + name + ' hook', e); }
+    }
+  }
+  // The builders a pack's settings section is made of, so it looks like ours.
+  var settingsKit = { row: mkRow, toggle: mkToggle, field: mkField, segmented: mkSegmented, select: mkSelect, swatches: mkSwatches };
+
   function buildProfileMain(body) {
     var pfCard = U.el('div', 'pf-card');
     pfCard.id = 'pf-card';
@@ -1571,6 +1598,8 @@
     awards.id = 'pf-awards';
     body.appendChild(awards);
     renderAwards();
+
+    runHooks('profile', body);
 
     appendGearbox(body);
   }
@@ -2043,6 +2072,11 @@
       { label: 'Miles', value: 'mi' },
       { label: 'Kilometers', value: 'km' }
     ], S.settings.units, function (v) { ST.setUnits(v); })));
+
+    // Sections contributed by feature packs the account holds, then the packs
+    // screen itself — always present, so what exists is never a secret.
+    runHooks('settings', body, settingsKit);
+    buildPackSection(body);
 
     /* ---- Legal & data ----
        The disclosure surface. Everything the consent gate said at sign-up has to
@@ -2879,6 +2913,161 @@
      have to resolve against the deployed site, which is exactly what
      A.config.base is for. Every legal link in the app goes through here. */
   function legalUrl(p) { return ((A.config && A.config.base) || '') + p; }
+
+  /* ---------------- feature legality notices ----------------
+     Some of what a feature pack adds is lawful in one place and an offence a
+     border away — enforcement markers, scanner audio in a moving car, a timed
+     run. Terms §5 says so, but a feature someone taps on impulse deserves the
+     notice at that moment, in plain words. Packs register their notice with
+     registerFeatureNotice(key, { title, lede, points }) and call
+     legalGate(key, proceed, cancel) before switching the feature on.
+
+     Once per feature per Terms version (ST.featureAcked), not every time: a
+     notice that fires on every tap gets dismissed unread, which is worse than
+     no notice at all. */
+  var FEATURE_NOTICES = {};
+  function registerFeatureNotice(key, spec) {
+    if (typeof key !== 'string' || !spec || typeof spec !== 'object') return;
+    FEATURE_NOTICES[key] = {
+      title: String(spec.title || 'Before you turn this on'),
+      lede: String(spec.lede || ''),
+      points: Array.isArray(spec.points) ? spec.points.map(String) : []
+    };
+  }
+  // Runs `onProceed` once the rider has acknowledged — immediately if they
+  // already have. `onCancel` is optional: callers that toggled something on
+  // before asking use it to put the control back.
+  function legalGate(key, onProceed, onCancel) {
+    var spec = FEATURE_NOTICES[key];
+    if (!spec || (ST.featureAcked && ST.featureAcked(key))) { onProceed(); return; }
+
+    var card = U.el('div', 'modal-card');
+    card.appendChild(U.el('div', 'auth-title', spec.title));
+    if (spec.lede) card.appendChild(U.el('div', 'ob-note', spec.lede));
+
+    var warn = U.el('div', 'consent-warn');
+    warn.innerHTML = '<b>Where you are decides whether this is legal.</b>' +
+      '<span>Convoy makes it available. Knowing the rule is on you.</span>';
+    card.appendChild(warn);
+
+    if (spec.points.length) {
+      var list = U.el('ul', 'legal-list');
+      spec.points.forEach(function (p) { list.appendChild(U.el('li', '', p)); });
+      card.appendChild(list);
+    }
+
+    card.appendChild(U.el('div', 'ob-note',
+      'Full detail in <a href="' + legalUrl('/terms#features') + '" target="_blank" rel="noopener">Terms &sect;5</a>.'));
+
+    var ok = U.el('button', 'btn btn-primary btn-block btn-lg', 'I understand — it\'s legal where I am');
+    ok.addEventListener('click', function () {
+      ST.ackFeature(key);
+      closeOverlay();
+      onProceed();
+    });
+    card.appendChild(ok);
+
+    var no = U.el('button', 'btn btn-ghost btn-block', 'Not now');
+    no.addEventListener('click', function () {
+      closeOverlay();
+      if (onCancel) onCancel();
+    });
+    card.appendChild(no);
+
+    openOverlay(card);
+  }
+
+  /* ---------------- Settings → Feature packs ----------------
+     The one screen that explains the pack system to a rider (and to a store
+     reviewer): what packs exist, which this account holds, and where a code
+     goes. Packs are served by our server to the account that unlocked them;
+     nothing in a pack is in the app you installed. Always rendered, signed in
+     or not, so there is nothing hidden about it. */
+  function buildPackSection(body) {
+    body.appendChild(U.el('div', 'section-label', 'Feature packs'));
+    var host = U.el('div', 'packs-host');
+    body.appendChild(host);
+    renderPackSection(host);
+    // Re-render while this box is on screen: a redeem on this device, a sign-in
+    // or sign-out, or a pack finishing its load all change what it shows.
+    var off = ST.on('packs', function () {
+      if (!host.isConnected) { off(); return; }
+      renderPackSection(host);
+    });
+    if (A.packs && !(A.auth && A.auth.isLoggedIn())) {
+      A.packs.ensureCatalog().then(function () { if (host.isConnected) renderPackSection(host); });
+    }
+  }
+
+  function renderPackSection(host) {
+    host.innerHTML = '';
+    var P = A.packs;
+    var st = P ? P.state() : { signedIn: false, held: [], loaded: [], packs: [], available: [] };
+    var signedIn = !!(A.auth && A.auth.isLoggedIn());
+
+    host.appendChild(U.el('div', 'hint-card',
+      'Packs add features that are not part of the app you installed — they are sent to your ' +
+      'account by our server once you redeem a code, and load when you sign in. ' +
+      'A pack can stop at any time if its code is withdrawn.'));
+
+    var list = U.el('div', 'packs-list');
+    var rows = st.packs.map(function (p) { return { p: p, held: true, loaded: st.loaded.indexOf(p.id) >= 0 }; })
+      .concat((st.available || []).map(function (p) { return { p: p, held: false, loaded: false }; }));
+    if (!rows.length) list.appendChild(U.el('div', 'packs-empty', 'No packs are offered right now.'));
+    rows.forEach(function (r) {
+      var row = U.el('div', 'pack-row' + (r.held ? ' pack-row-held' : ''));
+      var txt = U.el('div', 'pack-txt');
+      txt.appendChild(U.el('b', '', r.p.title || r.p.id));
+      if (r.p.blurb) txt.appendChild(U.el('i', '', r.p.blurb));
+      row.appendChild(txt);
+      row.appendChild(U.el('span', 'pack-badge' + (r.held ? ' on' : ''),
+        r.held ? (r.loaded ? 'Unlocked' : 'Loading…') : 'Locked'));
+      list.appendChild(row);
+    });
+    host.appendChild(list);
+
+    var form = U.el('form', 'packs-redeem');
+    form.setAttribute('autocomplete', 'off');
+    var lab = U.el('label', 'packs-redeem-label', 'Redeem a code');
+    var inp = U.el('input', 'input packs-code');
+    inp.type = 'text'; inp.placeholder = 'CONVOY-XXXX-XXXX-XXXX-XXXX'; inp.maxLength = 32;
+    inp.setAttribute('spellcheck', 'false'); inp.setAttribute('autocapitalize', 'characters');
+    inp.setAttribute('aria-label', 'Feature pack code');
+    var btn = U.el('button', 'btn btn-primary', 'Redeem');
+    btn.type = 'submit';
+    form.appendChild(lab);
+    var rowf = U.el('div', 'packs-redeem-row');
+    rowf.appendChild(inp); rowf.appendChild(btn);
+    form.appendChild(rowf);
+    if (!signedIn) {
+      inp.disabled = true; btn.disabled = true;
+      form.appendChild(U.el('div', 'packs-note', 'Sign in to redeem a code — a pack is unlocked on an account, not a device.'));
+    }
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      if (!P || !signedIn) return;
+      var code = inp.value.trim();
+      if (!code) { inp.focus(); return; }
+      btn.disabled = true; btn.textContent = 'Checking…';
+      P.redeem(code).then(function (r) {
+        inp.value = '';
+        toast(r.granted.length
+          ? 'Unlocked: ' + r.granted.join(', ')
+          : 'That code adds nothing new to this account', r.granted.length ? 'success' : 'info');
+        if (A.telemetry) A.telemetry.track('pack_unlock', { n: r.granted.length });
+      }).catch(function (e) {
+        toast((e && e.message) || 'Could not redeem that code', 'warn');
+      }).then(function () {
+        btn.disabled = false; btn.textContent = 'Redeem';
+        if (host.isConnected) renderPackSection(host);
+      });
+    });
+    host.appendChild(form);
+
+    host.appendChild(U.el('div', 'packs-note',
+      'Some packs cover features that are regulated in some places. Each one explains the rules ' +
+      'before it switches on, and Terms &sect;5 applies to all of them.'));
+  }
 
   /* ---------------- the consent gate ----------------
      Three separate confirmations, deliberately not one blanket "I agree":
@@ -3928,6 +4117,8 @@
       renderAwards();      // "Crew" badge
     });
     // auth.boot() decides whether to show the auth screen or enter the app
+    uiInited = true;
+    runHooks('init');
   }
 
   function updateNearbyDockBadge() {
@@ -3978,6 +4169,12 @@
     openProfileOverlay: openProfileOverlay, // Instagram-style profile view
     // Raw overlay access for modules that build their own modal card.
     openOverlayRaw: openOverlay,
+    openOverlay: openOverlay,
+    // Feature-pack extension points (see the hooks block above legalGate).
+    addHook: addHook,
+    legalGate: legalGate,
+    registerFeatureNotice: registerFeatureNotice,
+    settingsKit: settingsKit,
     closeOverlay: closeOverlay,
     nearbyFilter: function () { return nearbyFilter; }, // mapview reads this to color dots by active filter
     // Does this rider match the active Nearby filter right now? (mapview uses

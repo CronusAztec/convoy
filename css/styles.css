@@ -2515,3 +2515,32 @@ button svg, .ctl svg, .search-icon svg {
 @media (max-width: 360px) {
   .chip { padding: 7px 9px; gap: 6px; }
 }
+
+/* ---------------- Settings → Feature packs ----------------
+   The screen that explains the pack system: what exists, what this account
+   holds, and where a code goes. Packs themselves ship their own stylesheets
+   (packs/<id>/*.css), loaded by js/packs.js beside their scripts. */
+.packs-host { display: flex; flex-direction: column; gap: 10px; }
+.packs-list { display: flex; flex-direction: column; gap: 6px; }
+.packs-empty { font-size: 12.5px; color: var(--text-dim); padding: 6px 2px; }
+.pack-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: 12px;
+  background: var(--surface-2, rgba(255, 255, 255, .04));
+  border: 1px solid var(--line, rgba(255, 255, 255, .08));
+}
+.pack-row-held { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.pack-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pack-txt b { font-size: 13.5px; color: var(--text); }
+.pack-txt i { font-style: normal; font-size: 12px; line-height: 1.4; color: var(--text-dim); }
+.pack-badge {
+  flex: none; font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+  padding: 3px 8px; border-radius: 999px;
+  color: var(--text-dim); border: 1px solid var(--line, rgba(255, 255, 255, .12));
+}
+.pack-badge.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+.packs-redeem { display: flex; flex-direction: column; gap: 6px; }
+.packs-redeem-label { font-size: 12px; font-weight: 600; color: var(--text-dim); letter-spacing: .02em; }
+.packs-redeem-row { display: flex; gap: 8px; }
+.packs-redeem-row .packs-code { flex: 1; min-width: 0; font-family: var(--mono, ui-monospace, monospace); letter-spacing: .06em; text-transform: uppercase; }
+.packs-note { font-size: 12px; line-height: 1.45; color: var(--text-dim); }

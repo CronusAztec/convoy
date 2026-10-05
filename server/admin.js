@@ -71,6 +71,7 @@ const path = require('path');
 
 const store = require('./store');
 const flags = require('./flags');
+const packs = require('./packs');
 const audit = require('./audit');
 const ota = require('./ota');
 const play = require('./play');
@@ -201,7 +202,7 @@ function page(actor, title, body, flashEntry, headExtra) {
   const nav = actor
     ? '<nav><a href="/admin/home">Home</a><a href="/admin/map">Map</a>' +
       '<a href="/admin/accounts">Accounts</a>' +
-      '<a href="/admin/reports">Reports</a><a href="/admin/flags">Flags</a>' +
+      '<a href="/admin/reports">Reports</a><a href="/admin/packs">Packs</a><a href="/admin/flags">Flags</a>' +
       '<a href="/admin/ota">OTA</a><a href="/admin/play">Play</a>' +
       '<a href="/admin/telemetry">Telemetry</a>' +
       '<form method="post" action="/admin/logout" class="inline"><button>Sign out ' +
@@ -293,12 +294,17 @@ const ROUTES = [
   ['GET', /^\/admin\/accounts$/, accountsPage],
   ['GET', /^\/admin\/account\/([0-9a-f-]{36})$/, accountPage],
   ['GET', /^\/admin\/reports$/, reportsPage],
+  ['GET', /^\/admin\/packs$/, packsPage],
   ['GET', /^\/admin\/flags$/, flagsPage],
   ['GET', /^\/admin\/ota$/, otaPage],
   ['GET', /^\/admin\/play$/, playPage],
   ['GET', /^\/admin\/telemetry$/, telemetryPage],
   ['POST', /^\/admin\/login$/, loginAction],
   ['POST', /^\/admin\/logout$/, logoutAction],
+  ['POST', /^\/admin\/packs\/mint$/, packMintAction],
+  ['POST', /^\/admin\/packs\/revoke$/, packRevokeAction],
+  ['POST', /^\/admin\/account\/([0-9a-f-]{36})\/pack-grant$/, packGrantAction],
+  ['POST', /^\/admin\/account\/([0-9a-f-]{36})\/pack-revoke$/, packRevokeGrantAction],
   ['POST', /^\/admin\/flags\/set$/, flagsSetAction],
   ['POST', /^\/admin\/flags\/panic$/, flagsPanicAction],
   ['POST', /^\/admin\/flags\/restore$/, flagsRestoreAction],
@@ -405,11 +411,135 @@ function loginPage(req, res, m, actor) {
 
    `app` defaults ON: the server serving is not a feature you configure. */
 function envDefaults() {
-  return {
+  const d = {
     app: true,
     routing: CTX.tomtomKeyed(),
     telemetry: CTX.telemetryOn(), registration: true, login: true, ota: true
   };
+  // One switch per feature pack on disk; the env default is simply "on".
+  packs.packIds().forEach((id) => { d['pack:' + id] = true; });
+  return d;
+}
+
+/* ---------------- feature packs ----------------
+   Codes are minted here and shown ONCE (the plaintext is never stored — see
+   server/packcodes.js). The account page carries the grant/revoke controls;
+   the kill switch per pack lives on the Flags board as pack:<id>. */
+function packLabel(id) {
+  const p = packs.get(id);
+  return p ? p.title : id;
+}
+async function packsPage(req, res, m, actor) {
+  const all = packs.list();
+  let codes = [];
+  let codesErr = '';
+  try { codes = await store.listPackCodes(); } catch (e) { codesErr = e.message; }
+  const fmtDate = (ms) => (ms ? new Date(ms).toISOString().slice(0, 10) : '—');
+  let h = '<h1>Feature packs</h1>' +
+    '<p class="muted">Packs are the features withdrawn from the store build. They live under ' +
+    '<span class="mono">packs/</span> on this server and are served only to accounts that redeemed a code; ' +
+    'nothing in a pack is inside the app binary. Kill a pack for everyone from the ' +
+    '<a href="/admin/flags">Flags</a> board (<span class="mono">pack:&lt;id&gt;</span>).</p>' +
+    '<h2>On disk</h2><div class="card"><table><tr><th>Pack</th><th>Title</th><th>Legal notice</th><th>Switch</th><th>Accounts holding it</th></tr>';
+  if (!all.length) h += '<tr><td colspan="5" class="muted">No packs on disk — nothing under packs/ has a pack.json</td></tr>';
+  for (const p of all) {
+    h += '<tr><td class="mono">' + esc(p.id) + '</td><td>' + esc(p.title) + '</td>' +
+      '<td>' + (p.legal ? '<span class="mono">' + esc(p.legal) + '</span>' : '<span class="muted">none</span>') + '</td>' +
+      '<td>' + (packs.enabled(p.id) ? '<span class="on">ON</span>' : '<span class="off">KILLED</span>') + '</td>' +
+      '<td>' + packs.holders(p.id) + '</td></tr>';
+  }
+  h += '</table></div>' +
+    '<h2>Mint a code</h2><div class="card"><form method="post" action="/admin/packs/mint">' +
+    '<label>Label (who it is for — "App Review", "Club night", …)</label><input name="label" maxlength="80" placeholder="App Review 2026-10">' +
+    '<label>Unlocks</label>' +
+    all.map((p) => '<label class="inline"><input type="checkbox" name="pack:' + esc(p.id) + '" value="1"> ' + esc(p.title) + ' <span class="mono muted">' + esc(p.id) + '</span></label>').join('<br>') +
+    (all.length ? '' : '<span class="muted">no packs to unlock</span>') +
+    '<label>Max uses (accounts)</label><input name="maxUses" value="1" style="max-width:120px">' +
+    '<label>Expires in days (blank = never)</label><input name="days" placeholder="30" style="max-width:120px">' +
+    '<p><button>Mint code</button></p>' +
+    '<p class="muted">The code is shown once, on the next page. A reviewer code should be single-use and expire; ' +
+    'put the plaintext in the App Review notes (STORE-RELEASE.md).</p></form></div>' +
+    '<h2>Codes</h2><div class="card">' +
+    (codesErr ? '<p class="flash err">could not list codes: ' + esc(codesErr) + '</p>' : '') +
+    '<table><tr><th>#</th><th>Label</th><th>Unlocks</th><th>Uses</th><th>Expires</th><th>Made</th><th>State</th><th></th></tr>';
+  if (!codes.length) h += '<tr><td colspan="8" class="muted">none yet</td></tr>';
+  for (const c of codes) {
+    const dead = c.revoked || (c.expiresAt && c.expiresAt <= Date.now()) || c.uses >= c.maxUses;
+    h += '<tr><td class="mono">' + c.id + '</td><td>' + esc(c.label || '') + '</td>' +
+      '<td>' + c.packs.map((id) => esc(packLabel(id))).join(', ') + '</td>' +
+      '<td>' + c.uses + ' / ' + c.maxUses + '</td><td>' + fmtDate(c.expiresAt) + '</td>' +
+      '<td>' + fmtDate(c.createdAt) + (c.createdBy ? ' <span class="muted">by ' + esc(c.createdBy) + '</span>' : '') + '</td>' +
+      '<td>' + (c.revoked ? '<span class="off">revoked</span>' : dead ? '<span class="muted">spent</span>' : '<span class="on">live</span>') + '</td>' +
+      '<td>' + (c.revoked ? '' : '<form class="g" method="post" action="/admin/packs/revoke"><input type="hidden" name="id" value="' + c.id + '"><button class="danger">revoke</button></form>') + '</td></tr>';
+  }
+  h += '</table><p class="muted">Revoking a code stops further redemptions; accounts that already redeemed it keep their packs ' +
+    '(take those away on the account page).</p></div>';
+  send(res, 200, renderPage(req, actor, 'Feature packs', h));
+}
+
+function packMintAction(req, res, m, actor, ip) {
+  return (async () => {
+    const form = await readForm(req);
+    // readForm keeps one value per key, so each checkbox has its own: pack:<id>.
+    const want = Object.keys(form).filter((k) => k.indexOf('pack:') === 0 && form[k]).map((k) => k.slice(5)).filter((id) => packs.has(id));
+    if (!want.length) return redirect(res, '/admin/packs?f=' + flash('err', 'pick at least one pack'));
+    const days = String(form.days || '').trim();
+    const expiresAt = days ? Date.now() + Math.max(1, Math.min(3650, Number(days) || 0)) * 86400000 : null;
+    if (days && !(Number(days) > 0)) return redirect(res, '/admin/packs?f=' + flash('err', 'expiry must be a number of days'));
+    let r;
+    try {
+      r = await store.mintPackCode({ label: form.label, packs: want, maxUses: form.maxUses, expiresAt, createdBy: actor });
+    } catch (e) { return redirect(res, '/admin/packs?f=' + flash('err', e.message)); }
+    if (r.error) return redirect(res, '/admin/packs?f=' + flash('err', r.error));
+    audit.log(actor, ip, 'pack-code', String(r.id), want.join(',') + ' ×' + r.maxUses + (expiresAt ? ' until ' + new Date(expiresAt).toISOString().slice(0, 10) : ''));
+    send(res, 200, renderPage(req, actor, 'Code minted',
+      '<h1>Code minted</h1><div class="card"><p>Copy it now — it is not stored and cannot be shown again.</p>' +
+      '<p class="mono" style="font-size:22px;letter-spacing:.08em">' + esc(r.code) + '</p>' +
+      '<p>Unlocks ' + want.map((id) => esc(packLabel(id))).join(', ') + ' · ' + r.maxUses + ' use' + (r.maxUses === 1 ? '' : 's') +
+      (expiresAt ? ' · expires ' + new Date(expiresAt).toISOString().slice(0, 10) : ' · never expires') + '</p>' +
+      '<p><a href="/admin/packs">Back to packs</a></p></div>'));
+  })();
+}
+
+function packRevokeAction(req, res, m, actor, ip) {
+  return (async () => {
+    const form = await readForm(req);
+    const id = Math.floor(Number(form.id));
+    if (!(id > 0)) return redirect(res, '/admin/packs?f=' + flash('err', 'bad code id'));
+    let ok = false;
+    try { ok = await store.revokePackCode(id); } catch (e) { return redirect(res, '/admin/packs?f=' + flash('err', e.message)); }
+    audit.log(actor, ip, 'pack-code-revoke', String(id), ok ? 'revoked' : 'already revoked / unknown');
+    redirect(res, '/admin/packs?f=' + flash(ok ? 'ok' : 'err', ok ? 'code #' + id + ' revoked' : 'code #' + id + ' was not live'));
+  })();
+}
+
+function packGrantAction(req, res, m, actor, ip) {
+  return (async () => {
+    const u = store.getById(m[1]);
+    const form = await readForm(req);
+    if (!u) return redirect(res, '/admin/accounts?f=' + flash('err', 'no such account'));
+    const id = String(form.pack || '');
+    if (!packs.has(id)) return redirect(res, '/admin/account/' + u.id + '?f=' + flash('err', 'no such pack'));
+    try { await store.grantPack(u.id, id, 'admin:' + actor); }
+    catch (e) { return redirect(res, '/admin/account/' + u.id + '?f=' + flash('err', e.message)); }
+    const live = CTX.kickPacks ? CTX.kickPacks(u.id) : 0;
+    audit.log(actor, ip, 'pack-grant', u.username, id);
+    redirect(res, '/admin/account/' + u.id + '?f=' + flash('ok', 'granted ' + packLabel(id) + (live ? ' (live socket told)' : '')));
+  })();
+}
+
+function packRevokeGrantAction(req, res, m, actor, ip) {
+  return (async () => {
+    const u = store.getById(m[1]);
+    const form = await readForm(req);
+    if (!u) return redirect(res, '/admin/accounts?f=' + flash('err', 'no such account'));
+    const id = String(form.pack || '');
+    try { await store.revokePack(u.id, id); }
+    catch (e) { return redirect(res, '/admin/account/' + u.id + '?f=' + flash('err', e.message)); }
+    if (CTX.kickPacks) CTX.kickPacks(u.id);
+    audit.log(actor, ip, 'pack-revoke', u.username, id);
+    redirect(res, '/admin/account/' + u.id + '?f=' + flash('ok', 'revoked ' + packLabel(id) + ' — their next load will not get it'));
+  })();
 }
 
 async function homePage(req, res, m, actor) {
@@ -498,6 +628,13 @@ async function accountPage(req, res, m, actor) {
   const friends = (u.friends || []).map((id) =>
     '<li>' + esc(nameOf(id)) + ' <form class="g" method="post" action="/admin/account/' + u.id + '/friend-remove">' +
     '<input type="hidden" name="other" value="' + esc(id) + '"><button class="danger">remove</button></form></li>').join('') || '<li class="muted">none</li>';
+  const held = store.packsOf ? store.packsOf(u.id) : [];
+  const heldPacks = held.map((id) =>
+    '<li>' + esc(packLabel(id)) + ' <span class="mono muted">' + esc(id) + '</span>' +
+    (packs.has(id) ? '' : ' <span class="off">(not on disk)</span>') +
+    ' <form class="g" method="post" action="/admin/account/' + u.id + '/pack-revoke">' +
+    '<input type="hidden" name="pack" value="' + esc(id) + '"><button class="warn">revoke</button></form></li>').join('') || '<li class="muted">none</li>';
+  const grantable = packs.list().filter((p) => held.indexOf(p.id) < 0);
   const blocks = store.blockList(u.id).map((o) =>
     '<li>' + esc(o.username || o.id) + ' <form class="g" method="post" action="/admin/account/' + u.id + '/unblock">' +
     '<input type="hidden" name="other" value="' + esc(o.id) + '"><button class="warn">unblock</button></form></li>').join('') || '<li class="muted">none</li>';
@@ -538,6 +675,14 @@ async function accountPage(req, res, m, actor) {
 
     '<h2>Social</h2><div class="card"><b>Friends</b><ul>' + friends + '</ul>' +
     '<b>Blocking</b><ul>' + blocks + '</ul></div>' +
+
+    '<h2>Feature packs</h2><div class="card"><ul>' + heldPacks + '</ul>' +
+    (grantable.length
+      ? '<form class="g" method="post" action="/admin/account/' + u.id + '/pack-grant"><select name="pack">' +
+        grantable.map((p) => '<option value="' + esc(p.id) + '">' + esc(p.title) + '</option>').join('') +
+        '</select> <button>Grant without a code</button></form>'
+      : '<span class="muted">' + (packs.list().length ? 'holds every pack' : 'no packs on disk') + '</span>') +
+    '</div>' +
 
     '<h2>Danger</h2><div class="card"><form class="g" method="post" action="/admin/account/' + u.id + '/ban">' +
     (banned

@@ -98,6 +98,9 @@
     // that can be offered is "not for the rest of this session", and the UI says
     // exactly that rather than implying more.
     hiddenRiders: [],
+    // Feature legality notices acknowledged, key -> timestamp. Scoped to the
+    // Terms version (featureAcked): a new Terms means every notice shows again.
+    featureAck: {},
     auth: null,            // { token, username } when signed in
     friends: [],           // [{id, username, name, emoji, paint, online}] (server-synced)
     friendReqs: [],        // incoming friend requests [{id, username, name, emoji, paint}]
@@ -165,6 +168,8 @@
       if (saved.consent && saved.consent.version) state.consent = saved.consent;
       if (Array.isArray(saved.blocked)) state.blocked = saved.blocked;
       if (saved.auth && saved.auth.token) state.auth = saved.auth;
+      if (saved.featureAck && typeof saved.featureAck === 'object') state.featureAck = saved.featureAck;
+      savedSettings = saved.settings || null;
     } catch (e) { console.warn('[convoy] could not load saved state', e); }
   }
 
@@ -179,7 +184,8 @@
         // meaningful for the life of that socket, so keeping it would hide a
         // stranger who happened to be assigned the same id later.
         blocked: state.blocked,
-        auth: state.auth
+        auth: state.auth,
+        featureAck: state.featureAck
       }));
     } catch (e) { /* storage full/blocked — non-fatal */ }
   }
@@ -349,6 +355,21 @@
   // Generic setter for the toggle/value settings (voice chat, camera, scenery).
   // All do the same thing: set, persist, emit a 'setting' event (plus an
   // optional specific one) so any interested module can react.
+  /* ---------------- feature packs: late settings ----------------
+     A pack (js/packs.js) arrives after load() has run, so its defaults land in
+     two places: DEFAULT_SETTINGS, so setSetting() accepts the keys, and the live
+     settings — where a value this rider saved earlier wins over the default. */
+  var savedSettings = null;   // the raw saved settings block, for late registrations
+  function registerSettings(defaults) {
+    if (!defaults || typeof defaults !== 'object') return;
+    Object.keys(defaults).forEach(function (k) {
+      if (!(k in DEFAULT_SETTINGS)) DEFAULT_SETTINGS[k] = U.deepClone(defaults[k]);
+      if (!(k in state.settings)) {
+        state.settings[k] = savedSettings && (k in savedSettings) ? savedSettings[k] : U.deepClone(defaults[k]);
+      }
+    });
+  }
+
   function setSetting(key, val, evt) {
     if (!(key in DEFAULT_SETTINGS)) return;   // refuse unknown keys
     state.settings[key] = val;
@@ -378,6 +399,19 @@
   function hasConsent() {
     var c = state.consent;
     return !!(c && c.version === LEGAL_VERSION && c.passenger && c.age && c.terms);
+  }
+
+  /* A feature legality notice (A.ui.legalGate) counts as read once per Terms
+     version — an acknowledgement given under an older Terms is void. */
+  function featureAcked(key) {
+    var c = state.consent;
+    if (!c || c.version !== LEGAL_VERSION) return false;
+    return !!(state.featureAck && state.featureAck[key]);
+  }
+  function ackFeature(key) {
+    if (!state.featureAck || typeof state.featureAck !== 'object') state.featureAck = {};
+    state.featureAck[key] = Date.now();
+    save();
   }
 
   function setConsent(rec) {
@@ -537,6 +571,7 @@
     setUnits: setUnits, setShowGlobal: setShowGlobal, setAnim: setAnim,
     setFollowCam: setFollowCam, setVoiceNav: setVoiceNav, setNavVoice: setNavVoice, setGhost: setGhost,
     setSetting: setSetting, setDotColor: setDotColor, resetDotColors: resetDotColors,
+    registerSettings: registerSettings, featureAcked: featureAcked, ackFeature: ackFeature,
     saveProfile: saveProfile, setOnboarded: setOnboarded,
     LEGAL_VERSION: LEGAL_VERSION,
     hasConsent: hasConsent, setConsent: setConsent,
