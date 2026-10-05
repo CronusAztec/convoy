@@ -129,7 +129,11 @@
     if (!list.length) delete subs[evt];
   }
   function emit(evt, data) {
-    var list = subs[evt] || [];
+    // A snapshot, not the live array: a subscriber that calls off() on itself
+    // mid-emit (the Feature packs box does, once its host leaves the DOM)
+    // would otherwise shift the array under the loop and skip the next
+    // subscriber — a pack's stand-down listener, say.
+    var list = (subs[evt] || []).slice();
     for (var i = 0; i < list.length; i++) {
       // A throwing subscriber is a real bug that used to be invisible: the bus
       // swallowed it into console.error, where nobody on a phone will ever read

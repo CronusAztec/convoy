@@ -1,0 +1,370 @@
+/* Convoy — enforcement pack stylesheet.
+   Everything the radar HUD, the enforcement controls, the hotspot legend and
+   the aircraft settings rows need, restored from the pre-cut css/styles.css.
+   Loaded beside the pack's scripts; never part of the shipped bundle.
+
+   Discipline (packs/README.md): no blur filter anywhere (the old HUD blurred
+   the map behind it; it now sits on the solid surface token), no font below
+   12px, and the only infinite animation (the sweep) runs on transform. */
+
+/* ---- the two map controls (right-hand column, after #ctl-global) ---- */
+.ctl-radar.active {
+  color: #b07dff;
+  border-color: #9b4dff;
+  box-shadow: 0 0 14px rgba(155, 77, 255, .55), var(--shadow-sm);
+}
+.ctl-radar.active:hover { color: #c39cff; border-color: #b07dff; }
+
+/* ============================== RADAR HUD ============================== */
+/* Highway-Radar-style takeover. Visible only while body.radar-on (the pack's
+   `radar` setting). It hides the normal Convoy chrome but keeps the map. */
+body.radar-on #topbar,
+body.radar-on #chips,
+body.radar-on #dock { display: none !important; }
+/* The HUD takes over the screen — the bar would sit on top of it. */
+body.radar-on .verify-banner { display: none; }
+
+body.radar-on .eta-card { bottom: calc(116px + env(safe-area-inset-bottom)); }
+
+#radar-alerts, #radar-side, #radar-dock { display: none; }
+body.radar-on #radar-alerts,
+body.radar-on #radar-side,
+body.radar-on #radar-dock { display: flex; }
+
+/* ---- top alert stack ---- */
+#radar-alerts {
+  position: fixed;
+  top: calc(8px + env(safe-area-inset-top));
+  left: 8px; right: 8px; margin: 0 auto;
+  max-width: 600px;
+  flex-direction: column; gap: 3px;
+  z-index: 10;
+  pointer-events: none;
+}
+.ralert {
+  position: relative;
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  text-align: left; color: #f3f7ff;
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, .08);
+  pointer-events: auto; overflow: hidden;
+  font-family: var(--font-body);
+}
+.ralert-air    { background: linear-gradient(100deg, #1d5598, #143a68); }
+.ralert-heli   { background: linear-gradient(100deg, #235ca0, #16406f); }
+.ralert-police { background: linear-gradient(100deg, #8a4421, #5c2c13); }
+.ralert-station { background: linear-gradient(100deg, #3f4654, #272b33); } /* static building — muted slate */
+.ralert-camera { background: linear-gradient(100deg, #8a6d1e, #5a4711); }
+.ralert-alpr   { background: linear-gradient(100deg, #8a2a2a, #5a1414); }
+.ralert.far { opacity: .82; }
+.ralert.far::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(45deg, rgba(0, 0, 0, .26) 0 9px, transparent 9px 18px);
+}
+.ralert-empty { background: var(--surface-solid); color: var(--text-dim); justify-content: center; }
+.ralert-empty .ralert-type { color: var(--text); }
+
+.ralert-sig { display: flex; flex-direction: column; gap: 2px; flex: none; width: 8px; }
+.ralert-sig i { width: 6px; height: 4px; border-radius: 1px; background: rgba(255, 255, 255, .18); }
+.ralert-sig i.on.cool { background: #46e08a; box-shadow: 0 0 5px #46e08a; }
+.ralert-sig i.on.hot  { background: #ff5a3c; box-shadow: 0 0 5px #ff5a3c; }
+
+.ralert-arr { flex: none; width: 26px; height: 26px; color: #fff; opacity: .96; }
+.ralert-arr svg { width: 26px; height: 26px; }
+
+.ralert-mid { flex: 1 1 auto; min-width: 0; }
+.ralert-type {
+  display: block; font-weight: 700; font-size: 16px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ralert-type em { font-style: normal; font-weight: 500; opacity: .82; font-size: 13px; }
+.ralert-sub {
+  display: block; font-size: 12px; opacity: .8;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ralert-right { flex: none; text-align: right; }
+.ralert-dist { display: block; font-weight: 700; font-size: 16px; font-variant-numeric: tabular-nums; }
+.ralert-stat { display: block; font-size: 12px; opacity: .8; font-family: var(--font-mono); }
+
+.ralert-foot {
+  pointer-events: auto; width: 100%; padding: 7px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-solid);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  font-family: var(--font-mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase;
+  text-align: center;
+}
+.ralert-foot:hover { color: var(--text); border-color: var(--line-strong); }
+
+/* ---- left stat cluster ---- */
+#radar-side {
+  position: fixed;
+  left: 8px; top: 38%;
+  flex-direction: column; gap: 8px;
+  z-index: 10; pointer-events: none;
+}
+.rstat {
+  pointer-events: auto; min-width: 88px; padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-solid);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-sm);
+}
+.rstat-k {
+  display: block; font-family: var(--font-mono);
+  font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--text-dim);
+}
+.rstat-v { display: block; font-weight: 700; font-size: 20px; color: var(--text); font-variant-numeric: tabular-nums; }
+.rstat-v small { font-size: 12px; font-weight: 500; color: var(--text-dim); }
+.rrisk { display: block; margin-top: 5px; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, .12); overflow: hidden; }
+.rrisk-fill { display: block; height: 100%; width: 100%; transform: scaleX(0); transform-origin: left center; border-radius: 2px; transition: transform .4s var(--ease); }
+.rrisk-fill.lo  { background: var(--good); }
+.rrisk-fill.mid { background: var(--warn); }
+.rrisk-fill.hi  { background: var(--bad); }
+.rstat-icons { display: flex; gap: 8px; margin-top: 4px; }
+.rst { width: 18px; height: 18px; color: var(--text-dim); opacity: .5; }
+.rst svg { width: 18px; height: 18px; }
+.rst.on { color: var(--good); opacity: 1; filter: drop-shadow(0 0 4px rgba(0, 255, 156, .55)); }
+
+/* ---- bottom radar dock ---- */
+#radar-dock {
+  position: fixed;
+  left: 50%; bottom: calc(14px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  align-items: center; gap: 10px; padding: 8px 12px;
+  border-radius: var(--radius);
+  clip-path: polygon(var(--cut) 0, calc(100% - var(--cut)) 0, 100% var(--cut), 100% 100%, calc(100% - var(--cut)) 100%, var(--cut) 100%, 0 calc(100% - var(--cut)), 0 var(--cut));
+  background: var(--surface-solid);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow), inset 0 1px 0 rgba(255, 255, 255, .04);
+  z-index: 10;
+}
+.rd-btn {
+  width: 44px; height: 44px;
+  display: grid; place-items: center;
+  border-radius: var(--radius-sm); color: var(--text);
+  transition: color 160ms var(--ease), background 160ms var(--ease), transform 160ms var(--ease);
+}
+.rd-btn svg { width: 24px; height: 24px; }
+.rd-btn:hover { color: var(--accent); background: rgba(var(--accent-rgb), .1); }
+.rd-btn:active { transform: scale(.92); }
+#radar-mute.muted { color: var(--bad); }
+#radar-mute .spk-x { display: none; }
+#radar-mute.muted .spk-on { display: none; }
+#radar-mute.muted .spk-x { display: block; }
+.rd-stop { color: var(--warn); }
+.rd-stop:hover { color: var(--warn); background: rgba(255, 176, 0, .14); }
+#radar-report:hover { color: #7db8ff; }
+
+.rd-speed { text-align: center; min-width: 52px; }
+.rd-speed b { display: block; font-size: 26px; font-weight: 700; line-height: 1; color: var(--text); font-variant-numeric: tabular-nums; }
+.rd-speed span { display: block; font-family: var(--font-mono); font-size: 12px; letter-spacing: .1em; color: var(--text-dim); }
+.rd-limit {
+  text-align: center; min-width: 46px;
+  background: #fff; color: #0a1018;
+  border-radius: 6px; padding: 3px 8px 4px; border: 2px solid #d6dde6;
+}
+.rd-limit b { display: block; font-size: 20px; font-weight: 800; line-height: 1.05; }
+.rd-limit span { display: block; font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: #4a5566; }
+
+/* ---- floating map labels ---- */
+.rlabel {
+  pointer-events: none; padding: 3px 7px;
+  border-radius: 4px;
+  background: rgba(8, 13, 24, .86);
+  border: 1px solid rgba(255, 255, 255, .14);
+  font-family: var(--font-mono); white-space: nowrap;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .5);
+}
+.rl-d { display: block; font-size: 12px; font-weight: 600; color: #eaf2ff; }
+.rl-t { display: block; font-size: 12px; font-weight: 700; }
+.rlabel-air .rl-t, .rlabel-heli .rl-t { color: #7db8ff; }
+.rlabel-police .rl-t { color: #ffae6a; }
+.rlabel-station .rl-t { color: #aab4c4; } /* muted slate — static police station */
+.rlabel-camera .rl-t { color: #ffd84d; }
+.rlabel-alpr .rl-t { color: #ff7a7a; }
+
+/* ---- activation flourish: one-shot radar power-on overlay ---- */
+#radar-fx {
+  position: fixed; inset: 0; z-index: 13;
+  pointer-events: none; display: none; overflow: hidden;
+}
+#radar-fx.fire { display: block; }
+#radar-fx.fire::before {
+  content: ''; position: absolute; inset: 0;
+  background: radial-gradient(ellipse at center, rgba(155, 77, 255, .2), transparent 60%);
+  animation: rfxWash 1.2s var(--ease) forwards;
+}
+@keyframes rfxWash { 0% { opacity: 0; } 15% { opacity: 1; } 100% { opacity: 0; } }
+.rfx-sweep {
+  position: absolute; left: 50%; top: 50%;
+  width: 150vmax; height: 150vmax; border-radius: 50%;
+  transform: translate(-50%, -50%) rotate(0deg);
+  background: conic-gradient(from 0deg,
+    rgba(155, 77, 255, .38),
+    rgba(155, 77, 255, .33) 5%,
+    rgba(155, 77, 255, .27) 10%,
+    rgba(155, 77, 255, .21) 15%,
+    rgba(155, 77, 255, .15) 20%,
+    rgba(155, 77, 255, .09) 25%,
+    rgba(155, 77, 255, .04) 29%,
+    rgba(155, 77, 255, 0) 32%,
+    transparent 100%);
+  opacity: 0;
+}
+#radar-fx.fire .rfx-sweep { animation: rfxSweep 1.25s linear forwards; }
+@keyframes rfxSweep {
+  0% { opacity: 0; transform: translate(-50%, -50%) rotate(0deg); }
+  12% { opacity: .85; }
+  100% { opacity: 0; transform: translate(-50%, -50%) rotate(540deg); }
+}
+.rfx-pulse {
+  position: absolute; left: 50%; top: 50%;
+  width: 40px; height: 40px; margin: -20px;
+  border: 2px solid rgba(155, 77, 255, .85); border-radius: 50%;
+  opacity: 0;
+}
+#radar-fx.fire .rfx-pulse { animation: rfxPulse 1.1s var(--ease) forwards; }
+#radar-fx.fire .rfx-pulse2 { animation-delay: .26s; }
+@keyframes rfxPulse {
+  0% { opacity: 0; transform: scale(.2); }
+  18% { opacity: .9; }
+  100% { opacity: 0; transform: scale(26); }
+}
+.rfx-title {
+  position: absolute; left: 0; right: 0; top: 42%;
+  text-align: center; font-family: var(--font-disp);
+  font-weight: 700; font-size: 30px; letter-spacing: .34em;
+  color: #cbb0ff; text-shadow: 0 0 18px rgba(155, 77, 255, .85);
+  opacity: 0;
+}
+.rfx-title small {
+  display: block; margin-top: 7px;
+  font-family: var(--font-mono); font-size: 12px; letter-spacing: .5em; color: #e8d8ff;
+}
+#radar-fx.fire .rfx-title { animation: rfxTitle 1.35s var(--ease) forwards; }
+@keyframes rfxTitle {
+  0% { opacity: 0; transform: translateY(10px) scale(.96); }
+  18% { opacity: 1; transform: none; }
+  72% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* ---- HUD pieces slide in on each activation (one-shot) ---- */
+body.radar-on #radar-alerts { animation: rEnterTop .5s var(--ease) both; }
+body.radar-on #radar-side   { animation: rEnterLeft .55s var(--ease) .1s both; }
+body.radar-on #radar-dock   { animation: rEnterBottom .5s var(--ease) .06s both; }
+@keyframes rEnterTop { from { opacity: 0; transform: translateY(-18px); } to { opacity: 1; transform: none; } }
+@keyframes rEnterLeft { from { opacity: 0; transform: translateX(-22px); } to { opacity: 1; transform: none; } }
+@keyframes rEnterBottom { from { opacity: 0; transform: translateX(-50%) translateY(24px); } to { opacity: 1; transform: translateX(-50%); } }
+@keyframes rEnterBottomM { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: none; } }
+
+@media (max-width: 760px) {
+  #radar-alerts { left: 6px; right: 6px; top: calc(6px + env(safe-area-inset-top)); }
+  #radar-side { top: auto; bottom: calc(88px + env(safe-area-inset-bottom)); }
+  .rstat { min-width: 78px; padding: 6px 8px; }
+  .rstat-v { font-size: 17px; }
+  #radar-dock { left: 6px; right: 6px; transform: none; justify-content: space-between; gap: 6px; padding: 7px 8px; }
+  .rd-btn { width: 40px; height: 40px; }
+  /* mobile dock isn't centered, so its entrance must not use translateX(-50%) */
+  body.radar-on #radar-dock { animation: rEnterBottomM .5s var(--ease) .06s both; }
+
+  /* Phone radar takeover: the dock already carries locate + report + mic, so
+     the regular right control column only duplicates them while colliding with
+     the hotspot legend — hide it (pinch zooms; exit radar to reach compass/global). */
+  body.radar-on .map-controls { display: none; }
+  /* Convoy voice during radar: right side, stacked ABOVE the hotspot legend
+     (which sits right/bottom on phones — see .hot-legend) and the eta card. */
+  body.radar-on #wt-overlay {
+    left: auto; right: 12px;
+    bottom: calc(270px + env(safe-area-inset-bottom, 0px));
+  }
+  /* Navigating while in radar mode: the eta card (bottom ~116-250px, full width)
+     claims the lower band — lift the status stack above it and drop the legend
+     (the hour scrubber is a planning tool, not a driving tool). */
+  body.radar-on:has(#eta-card.show) #radar-side { bottom: calc(266px + env(safe-area-inset-bottom, 0px)); }
+  body.radar-on:has(#eta-card.show) .hot-legend { display: none; }
+}
+
+/* ---- continuous rotating sweep line (visible the whole time radar is on) ----
+   A thin conic-gradient wedge pinned to the driver's projected position by
+   radar.js. pointer-events:none so the map stays draggable. The ONE infinite
+   animation in this pack, and it is a transform. */
+#radar-sweep {
+  position: fixed; left: 50%; top: 50%;
+  width: 200vmax; height: 200vmax; margin: -100vmax 0 0 -100vmax;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 6;                 /* above the map, below the HUD chrome (#radar-* are 10) */
+  opacity: 0;                 /* hidden unless radar is engaged */
+  transform: rotate(0deg);
+  background: conic-gradient(from 0deg,
+    rgba(155, 77, 255, 0) 0deg,
+    rgba(155, 77, 255, 0) 318deg,
+    rgba(155, 77, 255, .42) 350deg,
+    rgba(185, 140, 255, .66) 360deg);
+  mix-blend-mode: screen;     /* glow over the map without darkening it */
+}
+body.radar-on #radar-sweep {
+  opacity: 1;
+  animation: rsRotate 3.6s linear infinite;
+}
+@keyframes rsRotate {
+  to { transform: rotate(360deg); }
+}
+[data-anim="off"] #radar-sweep { animation: none; opacity: 0; }
+
+/* ============================== police-hotspot legend + hour scrubber ============================== */
+.hot-legend {
+  position: fixed; left: 12px; bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  z-index: 5; width: 184px; max-width: calc(100vw - 24px); padding: 10px 12px;
+  background: var(--surface-solid);
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .42); color: var(--text);
+  font-family: var(--font-mono); pointer-events: auto;
+}
+.hot-legend[hidden] { display: none; }
+/* Phones: the bottom-left corner belongs to #radar-side (radar status stack) and
+   the radar dock spans the full bottom — park the legend on the RIGHT, lifted
+   above the dock, so the two never stack. Slimmed so it fits beside the stack. */
+@media (max-width: 760px) {
+  .hot-legend {
+    left: auto; right: 12px;
+    bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+    width: 158px; padding: 8px 10px;
+  }
+}
+.hl-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 7px; }
+.hl-title { font-size: 12px; font-weight: 600; letter-spacing: .03em; }
+.hl-hour { font-size: 12px; color: var(--accent); }
+.hl-bar { height: 8px; border-radius: 4px; background: linear-gradient(90deg, #22c55e, #f59e0b, #ef4444); }
+.hl-scale { display: flex; justify-content: space-between; margin-top: 3px; font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .05em; }
+.hl-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; }
+.hl-count { font-size: 12px; color: var(--text-dim); }
+.hl-scrub { display: inline-flex; align-items: center; gap: 4px; }
+.hl-btn, .hl-now {
+  font: inherit; color: var(--text); background: var(--surface-2); cursor: pointer;
+  border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
+}
+.hl-btn { width: 22px; height: 22px; display: grid; place-items: center; font-size: 14px; line-height: 1; }
+.hl-now { height: 22px; padding: 0 8px; font-size: 12px; color: var(--accent); }
+.hl-btn:hover, .hl-now:hover { background: rgba(var(--accent-rgb), .14); }
+
+/* ============================== settings rows ============================== */
+/* Aircraft category legend + filter rows. */
+.air-cat { display: flex; align-items: center; gap: 8px; }
+.air-dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  flex: none;
+  box-shadow: 0 0 6px currentColor;
+  background: currentColor;
+}
+
+/* ============================== phone in landscape ============================== */
+@media (max-width: 760px) and (max-height: 560px) {
+  /* The short-viewport block in the core hides the control column while a
+     panel is open; the HUD's own chrome has nothing to add there. */
+  body.radar-on #radar-side { display: none; }
+}

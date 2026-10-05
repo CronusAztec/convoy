@@ -86,7 +86,8 @@ function readOr(file) {
 }
 const isStr = (n) => n && n.type === 'Literal' && typeof n.value === 'string';
 function parse(src, file) {
-  try { return acorn.parse(src, { ecmaVersion: 2022, sourceType: 'script', locations: true }); }
+  // allowHashBang: a server-side collector may be a #!/usr/bin/env node script.
+  try { return acorn.parse(src, { ecmaVersion: 2022, sourceType: 'script', locations: true, allowHashBang: true }); }
   catch (e) { ok(rel(file) + ' parses', false, e.message); return null; }
 }
 const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
@@ -218,7 +219,7 @@ for (const id of ids) {
     if (css === null) continue;
     const small = (css.match(/font-size:\s*([0-9.]+)px/g) || []).map((m) => parseFloat(m.match(/[0-9.]+/)[0])).filter((px) => px < 12);
     ok(id + '/' + f + ': no font-size below the 12px floor (' + small.length + ' found)', small.length === 0, small.join(', '));
-    ok(id + '/' + f + ': no backdrop-filter (the glass budget belongs to the core theme)', !/backdrop-filter/.test(css));
+    ok(id + '/' + f + ': no backdrop-filter (the glass budget belongs to the core theme)', !/backdrop-filter/.test(css.replace(/\/\*[\s\S]*?\*\//g, '')));
   }
 }
 
@@ -250,7 +251,11 @@ for (const id of ids) {
     try { free = findGlobals(ast).map((g) => g.name); } catch (e) { ok(rel(f) + ': acorn-globals', false, e.message); }
     const bad = free.filter((n) => !NODE_ALLOW.has(n));
     ok(rel(f) + ': every free identifier is a Node global (' + free.length + ' seen)', bad.length === 0, 'defined nowhere: ' + bad.join(', '));
-    ok(rel(f) + ": never requires the core server, never exits the process", !/require\((['"])\.\.\/server(\.js)?\1\)/.test(src) && !/process\.exit\(/.test(src));
+    // A #! script is a standalone collector run under its own unit: it may
+    // exit. Anything the server require()s may not.
+    const cli = /^#!/.test(src);
+    ok(rel(f) + ": never requires the core server" + (cli ? ' (a #! collector; may exit)' : ', never exits the process'),
+      !/require\((['"])\.\.\/server(\.js)?\1\)/.test(src) && (cli || !/process\.exit\(/.test(src)));
   }
   let mod;
   try { mod = require(file); } catch (e) { ok(id + ': server/packs/' + id + '.js loads', false, e.message); continue; }

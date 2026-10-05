@@ -1,0 +1,59 @@
+<!-- ======================= RADAR HUD (enforcement pack) =======================
+     Appended to <body> by the pack loader. Shown only while body.radar-on (the
+     pack's `radar` setting is on). Containers ignore pointer events; their
+     inner cards/buttons re-enable them so the map stays pannable in the gaps. -->
+<section id="radar-alerts" aria-live="polite" aria-label="Radar alerts"></section>
+
+<aside id="radar-side" aria-label="Radar status">
+  <div class="rstat">
+    <span class="rstat-k">Scan</span>
+    <span class="rstat-v" id="radar-clock">--:--</span>
+  </div>
+  <div class="rstat">
+    <span class="rstat-k">Risk</span>
+    <span class="rstat-v"><b id="radar-risk">0</b><small>/25</small></span>
+    <span class="rrisk"><span class="rrisk-fill lo" id="radar-risk-bar"></span></span>
+  </div>
+  <div class="rstat">
+    <span class="rstat-k">Status</span>
+    <span class="rstat-icons">
+      <i id="rst-gps" class="rst" title="GPS fix"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="6.4"/><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/><path d="M12 2.4v3M12 18.6v3M2.4 12h3M18.6 12h3"/></svg></i>
+      <i id="rst-sat" class="rst" title="Satellites"><svg viewBox="0 0 24 24"><path d="M5 13 11 7M7 5 9 7M17 15l2 2M4.5 19.5a6 6 0 0 0 0-8.5M2.5 21.5a9 9 0 0 0 0-12.5"/><rect x="9.5" y="9.5" width="5" height="5" rx="1" transform="rotate(45 12 12)"/></svg></i>
+      <i id="rst-link" class="rst" title="Network link"><svg viewBox="0 0 24 24"><path d="M5 12.5a10 10 0 0 1 14 0M8 15.5a6 6 0 0 1 8 0"/><circle cx="12" cy="19" r="1.4" fill="currentColor" stroke="none"/></svg></i>
+      <i id="rst-voice" class="rst" title="Voice"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></i>
+    </span>
+  </div>
+</aside>
+
+<section id="radar-dock" aria-label="Radar controls">
+  <button type="button" class="rd-btn" id="radar-locate" title="Recenter on me" aria-label="Recenter on me">
+    <svg viewBox="0 0 24 24"><path d="M12 21s-6.5-6-6.5-10.5a6.5 6.5 0 0 1 13 0C18.5 15 12 21 12 21Z"/><circle cx="12" cy="10.4" r="2.3"/></svg>
+  </button>
+  <button type="button" class="rd-btn" id="radar-mute" title="Mute radar audio (proximity pings)" aria-label="Mute radar audio">
+    <svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9Z" fill="currentColor" stroke="none"/><g class="spk-on"><path d="M16 9a4 4 0 0 1 0 6"/></g><g class="spk-x"><path d="m17 9.5 4 5M21 9.5l-4 5"/></g></svg>
+  </button>
+  <div class="rd-speed"><b id="radar-speed">--</b><span id="radar-speed-unit">MPH</span></div>
+  <div class="rd-limit"><b id="radar-limit">65</b><span>limit</span></div>
+  <button type="button" class="rd-btn rd-stop" id="radar-stop" title="Exit radar" aria-label="Exit radar">
+    <svg viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor" stroke="none"/></svg>
+  </button>
+  <button type="button" class="rd-btn" id="radar-mic" title="Convoy voice" aria-label="Convoy voice">
+    <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+  </button>
+  <button type="button" class="rd-btn" id="radar-report" title="Report police here" aria-label="Report police here">
+    <svg viewBox="0 0 24 24"><path d="M4 7.5h16l-1.5 5H5.5Z"/><path d="M6 12.5v6M18 12.5v6M8.5 18.5h7"/><circle cx="12" cy="4.5" r="1.2" fill="currentColor" stroke="none"/></svg>
+  </button>
+</section>
+
+<!-- radar activation flourish (one-shot; plays when the radar engages) -->
+<div id="radar-fx" aria-hidden="true">
+  <div class="rfx-sweep"></div>
+  <div class="rfx-pulse"></div>
+  <div class="rfx-pulse rfx-pulse2"></div>
+  <div class="rfx-title">RADAR<small>ENFORCEMENT ACTIVE</small></div>
+</div>
+
+<!-- continuous rotating sweep line (persistent while radar is engaged; ties the
+     proximity sonar to a visible "scanning" motion. pointer-events:none so the
+     map stays pannable. hidden unless body.radar-on, and frozen by data-anim=off) -->
+<div id="radar-sweep" aria-hidden="true"></div>

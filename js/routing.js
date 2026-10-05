@@ -838,6 +838,11 @@
     fetchRoutes: fetchRoutes,
     applyRoute: applyRoute,
     hook: hook,
+    // The pieces a pack's own planner (a detour, a loop) is made of, so it
+    // never has to duplicate them.
+    parseSteps: parseSteps,
+    ttNormalize: ttNormalize,
+    osrmRoutes: osrmRoutes,
     clearRoute: clearRoute,
     startTrip: startTrip,
     endTrip: endTrip,

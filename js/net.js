@@ -570,6 +570,7 @@
     on: on,
     off: off,
     send: send,
+    sendQueued: sendQueued,
     isLive: function () { return live; },
     // The socket is down but the server may still be holding our seat: party
     // actions queue behind the next hello instead of falling into the solo

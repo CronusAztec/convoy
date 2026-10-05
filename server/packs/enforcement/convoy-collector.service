@@ -1,0 +1,35 @@
+[Unit]
+Description=Convoy enforcement pack — Waze hotspot collector (standalone)
+# SAMPLE unit for the Waze-only collector as its own process. In-process is
+# simpler: ENFORCEMENT_COLLECTOR=waze (or all) in convoy.service's environment.
+# Standalone, it drops one JSON file per sweep into ENFORCEMENT_INBOX_DIR for the
+# server half to ingest — set the SAME directory on convoy.service. The finder
+# (convoy-police-finder.service) supersedes this for a server that wants every
+# source; this one is the gentle, Waze-only option.
+After=network.target convoy.service
+Wants=convoy.service
+
+[Service]
+Type=simple
+User=convoy
+WorkingDirectory=/opt/convoy/server/packs/enforcement
+ExecStart=/usr/bin/node /opt/convoy/server/packs/enforcement/collect-hotspots.js
+Environment=ENFORCEMENT_INBOX_DIR=/var/lib/convoy/enforcement-inbox
+# 30-min sweeps, 6s apart — gentle on the OpenWeb Ninja free tier.
+Environment=COLLECT_INTERVAL_MS=1800000
+Environment=COLLECT_STEP_MS=6000
+# Edit collect-regions.json (beside this file) to choose which areas to cover.
+# Environment=COLLECT_REGIONS=/opt/convoy/server/packs/enforcement/collect-regions.json
+# OPENWEBNINJA_KEY — required, or there is nothing to collect.
+EnvironmentFile=-/var/lib/convoy/enforcement.env
+Restart=always
+RestartSec=10
+
+# hardening (optional but free)
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/var/lib/convoy/enforcement-inbox
+
+[Install]
+WantedBy=multi-user.target

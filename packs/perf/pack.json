@@ -1,0 +1,13 @@
+{
+  "id": "perf",
+  "title": "Performance timers",
+  "blurb": "GPS drag timer (0–60, ¼ mile, 60–130…), side-by-side racing with nearby riders, the top-speed quest, and best times on your profile.",
+  "legal": "race",
+  "order": 20,
+  "scripts": ["racetimer.js", "dragy.js", "race.js", "quest.js"],
+  "styles": ["perf.css"],
+  "fragments": [
+    { "file": "chip.html", "mount": "#chips", "position": "append" },
+    { "file": "hud.html", "mount": "body", "position": "append" }
+  ]
+}

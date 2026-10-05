@@ -94,16 +94,18 @@ Packs never edit core files. Everything they need is reachable through these:
 | `A.ui.addHook('settings', fn(body, kit))` | Add a settings section. `kit` = `{ row, toggle, field, segmented, select, swatches }`, the core's own builders. Runs after Units, before the Feature packs section. |
 | `A.ui.addHook('profile', fn(body))` | Add to the profile page, after Awards. |
 | `A.ui.addHook('profile-overlay', fn(actions, subject, card))` | Add a button to a rider's public-profile action row. |
+| `A.ui.addHook('awards', fn(list))` / `addHook('profile-counters', fn(cells))` | Push `{ name, desc, icon, got }` badges onto the Awards grid / `{ value, label }` counters onto the profile header. |
+| `A.ui.settingsKit.setToggle(btn, on)` | Put a `kit.toggle` back after a declined legality notice. |
 | `A.ui.addHook('init', fn)` | Runs once the UI is up (immediately if it already is). |
 | `A.ui.registerFeatureNotice(key, { title, lede, points })` + `A.ui.legalGate(key, proceed, cancel)` | Show the plain-words legality notice **before** a regulated feature switches on; once per Terms version. |
 | `A.ui.toast`, `openOverlay(card)`, `closeOverlay`, `openPanel`, `closePanels`, `openProfileOverlay` | The core's chrome. |
 | `A.mapview.onStyle(fn(map))` | Add sources/layers after the core's, on every `style.load` (and at once if the style is up). |
 | `A.mapview.onClick(fn(e, map))` | Run before the core's click handling; return `true` to consume the tap. |
 | `A.mapview.map()` | The MapLibre instance. |
-| `A.net.on(type, fn)` / `off` / `send(obj)` | Socket messages your server half sends / receives. A core type cannot be claimed. |
+| `A.net.on(type, fn)` / `off` / `send(obj)` / `sendQueued(obj)` | Socket messages your server half sends / receives. A core type cannot be claimed. `sendQueued` holds a control frame through a reconnect. |
 | `A.routing.hook('request', fn(req))` | Add fields to the route request (an avoid list, …) before it is sent. |
 | `A.routing.hook('routes', fn(routes, req))` | Filter / re-rank the routes; the first is drawn. |
-| `A.routing.fetchRoutes`, `applyRoute`, `setDestination`, `say`, … | The routing surface. |
+| `A.routing.fetchRoutes`, `applyRoute`, `parseSteps`, `ttNormalize`, `osrmRoutes`, `setDestination`, `say`, … | The routing surface, including the pieces a pack's own planner is made of. |
 | `A.sim.playerPos()`, `getNpc`, `proximityIds`, `externalFix`, … | Live positions. |
 | `A.util.fetchT(url, opts, ms)` | **Every** fetch goes through this (a deadline is mandatory). `U.poll`/`unpoll` for visual-only pollers that must pause on a hidden page. |
 
@@ -116,17 +118,19 @@ document it here — a pack must never reach into a module's private scope.
 module.exports = {
   id: 'example',
   init(ctx) {},                               // optional, once at boot
-  routes: [                                   // fn(req, res, match, user, ctx)
+  routes: [                                   // fn(req, res, match, user, ctx, body) — body: the parsed JSON of a POST, else null
     ['GET', /^\/api\/example\/thing$/, async (req, res, m, user, ctx) => ctx.json(res, 200, {})]
   ],
   ws: { 'example:ping'(c, m, ctx) {} },       // only for a socket whose c.packs has 'example'
   onHello(c, ctx) {},                         // optional: the socket just said hello and holds this pack
-  onClose(c, ctx) {}                          // optional: it is gone
+  onClose(c, ctx) {},                         // optional: it is gone
+  onBlock(c, targetUserId, targetSocket, ctx) {} // optional: c just blocked targetUserId — end what they share
 };
 ```
 
 * Every route is reached only with a bearer for an account holding the pack
-  (401 / 403 otherwise); a killed pack's routes 404.
+  (401 / 403 otherwise); a killed pack's routes 404. GET and POST both
+  dispatch; a POST route receives the parsed body as its sixth argument.
 * `ws` handler names must not collide with the core's or another pack's —
   boot refuses the pack if they do.
 * `ctx` is `packCtx` in `server/server.js`: the live `clients`/`parties`/

@@ -1,0 +1,12 @@
+<!-- Performance timers pack: the two fixed elements the pre-cut index.html
+     carried, appended to <body>.
+       #race-hud   the live per-racer board race.js paints during a run
+       #hud-quest  the Top Speed Quest card quest.js keeps up to date (it used
+                   to be a card on the instrument HUD rail, which is no longer
+                   in the core, so the pack hosts the card itself) -->
+<section id="race-hud" class="race-hud" hidden aria-label="Live race"></section>
+<div id="hud-quest" class="hud-card hud-quest" hidden title="Top Speed Quest · all-time top speed &amp; fastest 60–100 mph">
+  <b class="hc-v" id="qs-v">—</b>
+  <span class="hc-l" id="qs-l">top speed</span>
+  <i class="hc-s" id="qs-s">60–100: —</i>
+</div>

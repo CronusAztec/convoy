@@ -1,0 +1,13 @@
+{
+  "id": "enforcement",
+  "title": "Enforcement awareness",
+  "blurb": "Live aircraft, police stations and cameras, usually-here hotspots, the radar HUD with sonar, police-avoiding routes and the cruise-loop planner.",
+  "legal": "radar",
+  "order": 10,
+  "scripts": ["settings.js", "maplayers.js", "ghost.js", "radar.js", "routing.js", "ui.js", "boot.js"],
+  "styles": ["enforcement.css"],
+  "fragments": [
+    { "file": "controls.html", "mount": "#ctl-global", "position": "after" },
+    { "file": "hud.html", "mount": "body", "position": "append" }
+  ]
+}

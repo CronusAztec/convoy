@@ -781,7 +781,13 @@ async function handleApi(req, res, urlPath) {
     return json(res, 200, stats);
   }
 
-  if (req.method !== 'POST') return json(res, 404, { error: 'not found' });
+  // A pack's own GET (or any non-POST) routes — server/packs/<id>.js — each
+  // gated on the account holding that pack. POST pack routes are tried below,
+  // once the body has been read, so they receive it.
+  if (req.method !== 'POST') {
+    if (await packs.handleApi(req, res, urlPath, null)) return;
+    return json(res, 404, { error: 'not found' });
+  }
 
   // Flood tier (server-017): every anonymous credential-shaped endpoint —
   // each one either checks a secret or spends an outbound email — shares one
@@ -1663,9 +1669,10 @@ async function handleApi(req, res, urlPath) {
         return;
       }
 
-      // A pack's own HTTP routes (server/packs/<id>.js), each gated on the
-      // account holding that pack. Nothing here is reachable without one.
-      if (await packs.handleApi(req, res, urlPath)) return;
+      // A pack's own POST routes (server/packs/<id>.js), each gated on the
+      // account holding that pack, handed the parsed body. Nothing here is
+      // reachable without a grant.
+      if (await packs.handleApi(req, res, urlPath, body)) return;
 
       return json(res, 404, { error: 'not found' });
     } catch (e) {
@@ -2007,6 +2014,8 @@ function ensureKnown(c, id) {
    chat backlogs are rebuilt with the other party filtered out. */
 function applyBlockNow(c, targetUserId) {
   const tc = online.get(targetUserId);
+  // Packs with shared state between the two (a race they are both in) end it.
+  packs.onBlock(c, targetUserId, tc || null);
   if (tc) {
     // ORDER MATTERS. The client refuses a rider:remove for anyone still flagged
     // as a convoy member ("party members stay visible", net.js) — a guard that

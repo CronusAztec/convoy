@@ -53,7 +53,7 @@ fs.writeFileSync(path.join(SERVER, 'demo.js'), `
   module.exports = {
     id: 'demo',
     init(ctx) { ctx._demoInit = (ctx._demoInit || 0) + 1; },
-    routes: [['GET', /^\\/api\\/demo\\/ping$/, async (req, res, m, user, ctx) => ctx.json(res, 200, { pong: user.username })]],
+    routes: [['GET', /^\\/api\\/demo\\/ping$/, async (req, res, m, user, ctx, body) => ctx.json(res, 200, { pong: user.username, body: body })]],
     ws: { 'demo:hi'(c, m, ctx) { c._hi = (c._hi || 0) + 1; } },
     onHello(c) { c._hello = true; },
     onClose(c) { c._closed = true; }
@@ -189,6 +189,11 @@ const packs = require('../server/packs');
     };
     let r = await call('tok-held', '/api/demo/ping');
     ok('handleApi: a holder reaches the pack route (200, the fn ran with the user)', r.handled && r.res.status === 200 && r.res.body.pong === 'holder');
+    {
+      const res = {};
+      await packs.handleApi({ method: 'GET', url: '/api/demo/ping', headers: { authorization: 'Bearer tok-held' } }, res, '/api/demo/ping', { hello: 'body' });
+      ok('handleApi: the parsed body is handed to the route as its sixth argument (null when there is none)', res.body.body && res.body.body.hello === 'body' && r.res.body.body === null, JSON.stringify(res.body));
+    }
     r = await call(null, '/api/demo/ping');
     ok('handleApi: no bearer → 401, handled (the route is not a 404 probe)', r.handled && r.res.status === 401);
     r = await call('tok-none', '/api/demo/ping');
@@ -321,9 +326,12 @@ const packs = require('../server/packs');
     ok('a refused pack file is a bare 403 (no body, no caching header of its own)', /if \(!packs\.staticOk\(req, urlPath\)\) \{ res\.writeHead\(403\); res\.end\('Forbidden'\); return; \}/.test(SRC));
     ok('the socket dispatcher falls back to packs.wsHandler(m.t) only AFTER the core\'s own-property lookup',
       /hasOwnProperty\.call\(handlers, m\.t\) \? handlers\[m\.t\] : packs\.wsHandler\(m\.t\)/.test(SRC));
-    const apiPackAt = SRC.indexOf('if (await packs.handleApi(req, res, urlPath)) return;');
+    const apiGetAt = SRC.indexOf("if (req.method !== 'POST') {\n    if (await packs.handleApi(req, res, urlPath, null)) return;\n    return json(res, 404, { error: 'not found' });");
+    ok('non-POST pack routes are tried right before the non-POST API 404 (GET pack routes are reachable)', apiGetAt > 0);
+    const apiPackAt = SRC.indexOf('if (await packs.handleApi(req, res, urlPath, body)) return;');
     const api404At = SRC.indexOf("return json(res, 404, { error: 'not found' });", apiPackAt);
-    ok('pack HTTP routes are tried immediately before the API 404', apiPackAt > 0 && api404At > apiPackAt && api404At - apiPackAt < 200);
+    ok('POST pack routes are tried, with the parsed body, immediately before the API 404', apiPackAt > 0 && api404At > apiPackAt && api404At - apiPackAt < 200);
+    ok('a block reaches the packs (applyBlockNow → packs.onBlock) before the core\'s own teardown', /function applyBlockNow\(c, targetUserId\) \{\s*const tc = online\.get\(targetUserId\);[\s\S]{0,200}packs\.onBlock\(c, targetUserId, tc \|\| null\);/.test(SRC));
     ok('hello fills c.packs for accounts (packs.onHello(c, u)) and clears it for guests (packs.onHello(c, null))',
       /packs\.onHello\(c, u\);/.test(SRC) && /packs\.onHello\(c, null\);/.test(SRC));
     ok('the client record starts with an empty packs Set', /packs: new Set\(\),/.test(SRC));

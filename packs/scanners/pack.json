@@ -1,0 +1,12 @@
+{
+  "id": "scanners",
+  "title": "Police scanners",
+  "blurb": "Live police and sheriff scanner audio near you, streamed in-app from OpenMHz.",
+  "legal": "scanners",
+  "order": 30,
+  "scripts": ["scanners.js"],
+  "styles": ["scanners.css"],
+  "fragments": [
+    { "file": "chip.html", "mount": "#chips", "position": "append" }
+  ]
+}

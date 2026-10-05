@@ -1,0 +1,14 @@
+<!-- Enforcement pack: the two map controls it adds, mounted after #ctl-global
+     in the right-hand control column (packs/enforcement/pack.json). Both start
+     hidden; boot.js shows them once the pack is held and hides them again when
+     the grant goes. -->
+<button type="button" class="ctl ctl-radar" id="ctl-radar" title="Radar · enforcement layers" aria-label="Toggle the enforcement radar" aria-pressed="false" hidden>
+  <svg viewBox="0 0 24 24">
+    <path d="M5 21V10a7 7 0 0 1 14 0v11l-2.3-1.8-2.3 1.8-2.4-1.8-2.4 1.8L5 21Z"/>
+    <circle cx="9.5" cy="11" r="1.1" fill="currentColor" stroke="none"/>
+    <circle cx="14.5" cy="11" r="1.1" fill="currentColor" stroke="none"/>
+  </svg>
+</button>
+<button type="button" class="ctl" id="ctl-loop" title="Cruise loop · plan a route that loops back here, avoiding police, stop signs &amp; lights" aria-label="Plan a cruise loop" hidden>
+  <svg viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.6-5.7"/><path d="M17.5 2.8v3.7h3.7"/></svg>
+</button>

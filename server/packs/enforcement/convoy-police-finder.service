@@ -1,0 +1,41 @@
+[Unit]
+Description=Convoy enforcement pack — police finder (multi-source, always-on, standalone)
+# SAMPLE unit for running the finder as its own process. The simpler option is
+# in-process: set ENFORCEMENT_COLLECTOR=finder (or all) in convoy.service's
+# environment and this unit is not needed. Standalone, the finder never talks
+# to the API: it drops one JSON file per sweep into ENFORCEMENT_INBOX_DIR and
+# the server half (server/packs/enforcement.js) ingests the directory every
+# ENFORCEMENT_INBOX_SCAN_MS — set the SAME directory on convoy.service.
+After=network.target convoy.service
+Wants=convoy.service
+
+[Service]
+Type=simple
+User=convoy
+WorkingDirectory=/opt/convoy/server/packs/enforcement
+ExecStart=/usr/bin/node /opt/convoy/server/packs/enforcement/police-finder.js
+Environment=ENFORCEMENT_INBOX_DIR=/var/lib/convoy/enforcement-inbox
+# 15-min sweeps, 5s apart — gentle on the OpenWeb Ninja free tier (waze.js's 429
+# cooldown is the hard safety net) and on Citizen/Overpass. Speed cameras (static)
+# refresh every 24th sweep (~6h). Edit collect-regions.json to choose coverage.
+Environment=FINDER_INTERVAL_MS=900000
+Environment=FINDER_STEP_MS=5000
+Environment=CAMERA_EVERY=24
+# Google Maps incidents (best-effort, self-disabling like keyless-Waze). Idle
+# until pointed at a reachable Maps-incident feed with bbox placeholders:
+# Environment=GOOGLE_INCIDENTS_URL=https://your-maps-incident-proxy.example/incidents?bl={minLat},{minLng}&tr={maxLat},{maxLng}
+# Environment=FINDER_GOOGLE=0   # or turn the source off entirely
+# OPENWEBNINJA_KEY lives here (same value convoy.service uses); the file may be
+# absent, in which case the licensed Waze source simply stays empty.
+EnvironmentFile=-/var/lib/convoy/enforcement.env
+Restart=always
+RestartSec=10
+
+# hardening (optional but free)
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/var/lib/convoy/enforcement-inbox
+
+[Install]
+WantedBy=multi-user.target

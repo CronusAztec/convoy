@@ -37,9 +37,10 @@
                                      module.exports = {
                                        id: '<id>',
                                        init(ctx) {},                 // optional
-                                       routes: [[method, regex, fn]], // fn(req, res, match, user, ctx)
+                                       routes: [[method, regex, fn]], // fn(req, res, match, user, ctx, body)
                                        ws: { 'type'(c, m, ctx) {} },  // c.packs has <id>, guaranteed
-                                       onHello(c, ctx), onClose(c, ctx) // optional
+                                       onHello(c, ctx), onClose(c, ctx), // optional
+                                       onBlock(c, targetUserId, targetSocket, ctx) // optional
                                      }
                                    ctx is the object server.js hands to init()
                                    (clients, parties, send, rateOk, store, …;
@@ -252,8 +253,9 @@ function staticOk(req, urlPath) {
 }
 
 /* ---------------- HTTP + socket dispatch ---------------- */
-// Returns true when a pack route answered (or refused) the request.
-async function handleApi(req, res, urlPath) {
+// Returns true when a pack route answered (or refused) the request. `body` is
+// the parsed JSON body for a POST (server.js reads it first), null otherwise.
+async function handleApi(req, res, urlPath, body) {
   for (const [id, mod] of serverMods) {
     for (const [method, re, fn] of (mod.routes || [])) {
       const m = urlPath.match(re);
@@ -262,7 +264,7 @@ async function handleApi(req, res, urlPath) {
       const user = ctx.userFromToken(ctx.bearer(req));
       if (!user) { ctx.json(res, 401, { error: 'unauthorized' }); return true; }
       if (!holds(user.id, id)) { ctx.json(res, 403, { error: 'pack-required', pack: id }); return true; }
-      await fn(req, res, m, user, ctx);
+      await fn(req, res, m, user, ctx, body === undefined ? null : body);
       return true;
     }
   }
@@ -301,12 +303,21 @@ function onClose(c) {
 }
 function packsForSocket(c) { return c.packs ? [...c.packs] : []; }
 
+// One rider just blocked another (server.js applyBlockNow): a pack with state
+// the two share ends it. `target` is the blocked account's live socket, or null.
+function onBlock(c, targetUserId, target) {
+  for (const [id, mod] of serverMods) {
+    if (typeof mod.onBlock !== 'function') continue;
+    try { mod.onBlock(c, targetUserId, target, ctx); } catch (e) { console.error('[pack ' + id + ' block]', e.message); }
+  }
+}
+
 // Who holds what, for the control panel.
 function holders(id) { return ctx && ctx.store && ctx.store.packHolders ? ctx.store.packHolders(id) : 0; }
 
 module.exports = {
   init, load, has, get, enabled, list, catalog, manifestFor, staticOk,
-  handleApi, wsHandler, onHello, onClose, packsForSocket, holders, packIds,
+  handleApi, wsHandler, onHello, onClose, onBlock, packsForSocket, holders, packIds,
   PACKS_DIR, SERVER_DIR, TOKEN_TTL_MS,
   // test surface
   _sign: sign, _verify: verify, _validateManifest: validateManifest, _registry: registry,

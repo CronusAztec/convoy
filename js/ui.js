@@ -1040,6 +1040,15 @@
   // Instagram-style profile header: photo + friends / convoy counters beside
   // it, then name / handle / car "bio" line. Re-rendered on photo change, save,
   // party and friends updates.
+  // Feature packs push { value, label } counters onto the profile header.
+  function profileCounters() {
+    var cells = [];
+    runHooks('profile-counters', cells);
+    return cells.map(function (x) {
+      return '<span class="pf-stat"><b>' + U.esc(String(x.value)) + '</b>' + U.esc(String(x.label)) + '</span>';
+    }).join('');
+  }
+
   function renderProfileCard() {
     var card = document.getElementById('pf-card');
     if (!card) return;
@@ -1058,6 +1067,7 @@
       '  <div class="pf-ig-stats">' +
       '    <span class="pf-stat"><b>' + st.friends + '</b>friends</span>' +
       '    <span class="pf-stat"><b>' + st.convoy + '</b>in convoy</span>' +
+      profileCounters() +
       '  </div>' +
       '</div>' +
       '<div class="pf-name">' + U.esc(S.profile.name) + '</div>' +
@@ -1085,11 +1095,14 @@
 
   function computeAwards() {
     var st = selfStats();
-    return [
+    var list = [
       { name: 'Crew',           desc: 'Make 5 friends',        icon: 'users',  got: st.friends >= 5 },
       { name: 'Photogenic',     desc: 'Set a profile photo',   icon: 'camera', got: !!S.profile.avatar },
       { name: 'On the Grid',    desc: 'Create an account',     icon: 'shield', got: !!(A.auth && A.auth.isLoggedIn && A.auth.isLoggedIn()) }
     ];
+    // Feature packs push their own { name, desc, icon, got } entries.
+    runHooks('awards', list);
+    return list;
   }
 
   function renderAwards() {
@@ -1550,6 +1563,8 @@
        'settings'         (body, kit)            after Units, before Feature packs
        'profile'          (body)                 after Awards on the profile page
        'profile-overlay'  (actions, subject, card) the public-profile action row
+       'awards'           (list)                 push { name, desc, icon, got } badges
+       'profile-counters' (cells)                push { value, label } header counters
        'init'             ()                     once ui.init() has run (at once
                                                  if it already has)
      A hook that throws is logged and skipped; it never takes the screen down. */
@@ -1566,7 +1581,7 @@
     }
   }
   // The builders a pack's settings section is made of, so it looks like ours.
-  var settingsKit = { row: mkRow, toggle: mkToggle, field: mkField, segmented: mkSegmented, select: mkSelect, swatches: mkSwatches };
+  var settingsKit = { row: mkRow, toggle: mkToggle, field: mkField, segmented: mkSegmented, select: mkSelect, swatches: mkSwatches, setToggle: setToggle };
 
   function buildProfileMain(body) {
     var pfCard = U.el('div', 'pf-card');
