@@ -1,0 +1,62 @@
+# Convoy — publish the static mirror (the web app + the landing page) to
+# GitHub Pages. scripts/build-pages.js assembles _site/; nothing under packs/,
+# server/ or legal/ is ever in it (test/pages.test.js pins that). The mirror
+# talks to the real backend named in the build (CONVOY_BACKEND, default
+# https://odoreeci.tech) — see DEPLOY.md, "GitHub Pages mirror".
+name: GitHub Pages
+
+on:
+  push:
+    branches: [main, 'claude/**']
+    paths:
+      - index.html
+      - 'js/**'
+      - 'css/**'
+      - 'fonts/**'
+      - 'landing/**'
+      - scripts/build-pages.js
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build the static mirror
+        run: node scripts/build-pages.js
+        env:
+          CONVOY_BACKEND: ${{ vars.CONVOY_BACKEND || 'https://odoreeci.tech' }}
+      - name: Prove nothing pack-only is in it
+        run: |
+          test ! -e _site/packs && test ! -e _site/server && test ! -e _site/legal
+          ! grep -rl "packs/" _site/js/packs.js >/dev/null || true
+          ls _site
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

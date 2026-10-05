@@ -2177,7 +2177,7 @@
 
     // Android download — only meaningful on the web; hidden inside the native shell.
     var apkLink = (A.config && A.config.isNative) ? '' :
-      '<a class="apk-link" href="/convoy.apk" download="Convoy.apk">⬇ Get the Android app (.apk)</a><br>';
+      '<a class="apk-link" href="' + legalUrl('/convoy.apk') + '" download="Convoy.apk">⬇ Get the Android app (.apk)</a><br>';
     var about = U.el('div', 'about',
       'Convoy v0.3 · For passengers, never drivers.<br>' + apkLink +
       'Maps © <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a> & ' +

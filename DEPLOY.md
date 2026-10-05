@@ -819,6 +819,38 @@ Then check off:
 > point drafted against what the code actually does — they are not a substitute
 > for a lawyer in your jurisdiction.
 
+## 10. GitHub Pages mirror
+
+`.github/workflows/pages.yml` publishes a **static mirror** of the web app and
+the landing page to GitHub Pages on every push to `main` (and to `claude/**`
+branches) that touches the web files: `https://<owner>.github.io/<repo>/` is
+the app, `…/<repo>/landing/` the landing page. `scripts/build-pages.js`
+assembles it (`npm run build:pages` → `_site/`; `test/pages.test.js` pins it).
+
+What it is and is not:
+
+- It is not the server. The mirror's `index.html` carries
+  `<meta name="convoy-base" content="https://odoreeci.tech">` (the build injects
+  it; the server's own page never has it), so sign-in, settings, routing, the
+  legal pages, the APK link and the feature-pack loader all talk to the real
+  backend — `/api/*` answers with CORS for exactly this. Override the backend
+  with the `CONVOY_BACKEND` repository variable (Settings → Secrets and
+  variables → Actions → Variables) or the env var when building locally.
+- Nothing a code unlocks is in it: `packs/`, `server/` and `legal/` are never
+  copied (the legal text has one home). The workflow fails the build if they
+  are.
+- **Live riders need one server-side line.** The `/ws` socket is accepted only
+  from browser origins in `WS_ORIGINS` (default `odoreeci.tech,www.odoreeci.tech`).
+  Until the Pages host is added — e.g.
+  `WS_ORIGINS=odoreeci.tech,www.odoreeci.tech,cronusaztec.github.io` in the
+  unit's environment, then a restart — the mirror runs in **solo mode**
+  (simulated riders, no live map). Everything else works.
+- First run: GitHub Pages must have **Source: GitHub Actions** (Settings →
+  Pages). The workflow asks for that itself (`configure-pages` with
+  `enablement: true`); if the token is not allowed to, set it once by hand and
+  re-run. The `github-pages` environment may also restrict which branches may
+  deploy — allow the branch, or merge to `main`.
+
 ## Heads-up (current limitations)
 
 - **Accounts exist, guests are open** — register/login/recovery run through Supabase

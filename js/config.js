@@ -23,7 +23,18 @@
   // capacitor://localhost (iOS), so relative /api paths and same-origin
   // websockets would miss the server. Point at the deployed backend instead.
   // On the web this is '' and '' + '/api/x' = '/api/x'.
-  var BASE = isNative ? 'https://odoreeci.tech' : '';
+  //
+  // A static mirror of the web app (GitHub Pages — scripts/build-pages.js) is
+  // not the server either: its index.html names the backend with
+  // <meta name="convoy-base" content="https://odoreeci.tech">, injected by that
+  // build and by nothing else. The page served by server.js carries no such
+  // tag and stays same-origin.
+  function metaBase() {
+    var m = document.querySelector ? document.querySelector('meta[name="convoy-base"]') : null;
+    var v = m && m.getAttribute('content');
+    return v ? String(v).replace(/\/+$/, '') : '';
+  }
+  var BASE = isNative ? 'https://odoreeci.tech' : metaBase();
 
   A.config = {
     isNative: isNative,

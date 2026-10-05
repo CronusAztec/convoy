@@ -79,6 +79,15 @@ otherwise it falls back to solo. Two server dependencies (`ws`, `pg`), no API ke
 - **Spoken nav** uses a self-hosted Piper neural TTS served from `/api/tts`
   (`TTS_DIR`/`TTS_BIN`/`TTS_MODEL` env; absent → text nav cues only).
 
+## Static mirror on GitHub Pages
+
+`npm run build:pages` assembles `_site/` — the web app plus the landing page,
+pointed at the real backend by a `<meta name="convoy-base">` tag the build
+injects — and `.github/workflows/pages.yml` publishes it to GitHub Pages on
+push. It is a mirror, not a server: nothing under `packs/`, `server/` or
+`legal/` is in it, and live riders need the Pages host in the server's
+`WS_ORIGINS` (DEPLOY.md §10). Without that the mirror runs in solo mode.
+
 ## Feature packs
 
 The store build is the core above. The features withdrawn for store review —

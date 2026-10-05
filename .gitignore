@@ -49,6 +49,8 @@ test/.cache/
 
 # Capacitor / Android build artifacts (the android/ source IS tracked; build outputs are not)
 www/
+# GitHub Pages build (scripts/build-pages.js output — reproducible, never commit)
+_site/
 # OTA hotfix bundles (scripts/pack-ota.js output — reproducible from www/, never commit)
 ota-out/
 android/app/build/

@@ -6,7 +6,7 @@ const path = require('path');
 const suites = ['physics.test.js', 'behaviour.test.js', 'auth.test.js', 'supabase.test.js', 'store.test.js',
   'mailer.test.js', 'oauth.test.js', 'serverpolicy.test.js', 'httpcache.test.js', 'globals.test.js', 'net.test.js',
   'routegeo.test.js', 'voice.test.js', 'riderarrows.test.js', 'telemetry.test.js', 'deletion.test.js',
-  'sdk-inventory.test.js', 'ota.test.js', 'admin.test.js', 'bugstats.test.js', 'browser.test.js', 'fetchtimeout.test.js', 'partyresume.test.js', 'visibility.test.js', 'domids.test.js', 'chatlog.test.js', 'frontend.test.js', 'mapboot.test.js', 'perf-bench.js', 'stamp.test.js', 'lazydata.test.js', 'leaks.test.js', 'wire-bench.js', 'wiregate.test.js', 'wsdeflate.test.js', 'simidle.test.js', 'glassbudget.test.js', 'landing.test.js', 'packs.test.js', 'packgates.test.js'];
+  'sdk-inventory.test.js', 'ota.test.js', 'admin.test.js', 'bugstats.test.js', 'browser.test.js', 'fetchtimeout.test.js', 'partyresume.test.js', 'visibility.test.js', 'domids.test.js', 'chatlog.test.js', 'frontend.test.js', 'mapboot.test.js', 'perf-bench.js', 'stamp.test.js', 'lazydata.test.js', 'leaks.test.js', 'wire-bench.js', 'wiregate.test.js', 'wsdeflate.test.js', 'simidle.test.js', 'glassbudget.test.js', 'landing.test.js', 'packs.test.js', 'packgates.test.js', 'pages.test.js'];
 // Feature-pack suites (test/packs-<id>.test.js) register themselves by name:
 // a pack is a self-contained tree, and its tests must not need an edit here.
 const fs = require('fs');

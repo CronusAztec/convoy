@@ -8,6 +8,7 @@
     "test:frontend": "node test/frontend.test.js",
     "serve": "node server/server.js",
     "copy-web": "node scripts/copy-web.js",
+    "build:pages": "node scripts/build-pages.js",
     "android:add": "npm run copy-web && cap add android",
     "android:sync": "npm run copy-web && cap sync android",
     "android:open": "cap open android",
