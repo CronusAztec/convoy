@@ -15,7 +15,10 @@
          leaks a name
      P3  fetch: no bare fetch() — every request goes through A.util.fetchT
      P4  visibility: a bare setInterval whose callback fetches is a hidden-page
-         poller; those go through A.util.poll
+         poller; those go through A.util.poll — unless the line carries a
+         "hidden-page poller: <why it must keep running with the screen off>"
+         comment (audio that must keep streaming, say), the same explicit,
+         reasoned exception test/visibility.test.js's POLL_ALLOW gives the core
      P5  dom ids: every document.getElementById('<literal>') resolves against
          index.html, the pack's own fragments, or an id assigned in pack JS
      P6  css: no font-size below 12px, no backdrop-filter (the glass budget is
@@ -178,7 +181,13 @@ for (const id of ids) {
             const at = src.search(re);
             if (at >= 0) body = src.slice(at, at + 4000);
           }
-          if (/\bfetchT\(|\bfetch\(/.test(body)) pollers.push(node.loc.start.line);
+          if (/\bfetchT\(|\bfetch\(/.test(body)) {
+            // An explicit, reasoned exception on the setInterval line itself.
+            const line = src.split('\n')[node.loc.start.line - 1] || '';
+            const prev = src.split('\n')[node.loc.start.line - 2] || '';
+            const reason = /hidden-page poller:\s*(.{20,})/i.exec(line) || /hidden-page poller:\s*(.{20,})/i.exec(prev);
+            if (!reason) pollers.push(node.loc.start.line);
+          }
         }
         if (prop('getElementById') && isStr(node.arguments[0])) lookups.push({ id: node.arguments[0].value, where: rel(file) + ':' + node.loc.start.line });
         if (prop('setAttribute') && isStr(node.arguments[0]) && node.arguments[0].value === 'id' && isStr(node.arguments[1])) assigned.add(node.arguments[1].value);
@@ -189,7 +198,7 @@ for (const id of ids) {
       }
     });
     ok(rel(file) + ': no bare fetch() — every request goes through A.util.fetchT (' + bareFetch.length + ' found)', bareFetch.length === 0, 'lines ' + bareFetch.join(', '));
-    ok(rel(file) + ': no bare setInterval that fetches — hidden-page pollers go through A.util.poll (' + pollers.length + ' found)', pollers.length === 0, 'lines ' + pollers.join(', '));
+    ok(rel(file) + ': no bare setInterval that fetches — hidden-page pollers go through A.util.poll, or carry a "hidden-page poller: <reason>" comment (' + pollers.length + ' unexplained)', pollers.length === 0, 'lines ' + pollers.join(', '));
   }
   // pass 2: id resolution
   const unresolved = lookups.filter((l) => !staticIds.has(l.id) && !fragIds.has(l.id) && !assigned.has(l.id));
