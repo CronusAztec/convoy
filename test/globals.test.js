@@ -45,11 +45,11 @@ const { group, ok, report, ROOT } = require('./harness');
 
 // Language globals (ECMA-262). Every engine, every tree.
 const ES = ['Array', 'ArrayBuffer', 'Boolean', 'DataView', 'Date', 'Error', 'Float32Array', 'Function',
-  'Infinity', 'Intl', 'JSON', 'Map', 'Math', 'NaN', 'Number', 'Object', 'Promise', 'ReferenceError', 'RegExp', 'Set',
+  'Infinity', 'Intl', 'JSON', 'Map', 'Math', 'NaN', 'Number', 'Object', 'Promise', 'ReferenceError', 'RegExp', 'Set', 'TypeError',
   'String', 'Uint8Array', 'decodeURIComponent', 'encodeURIComponent', 'isFinite', 'isNaN',
   'parseFloat', 'parseInt'];
 // Host globals that Node (>= 18) and every browser both define. Every tree.
-const HOST = ['AbortController', 'AbortSignal', 'PerformanceObserver', 'URL', 'URLSearchParams', 'clearInterval',
+const HOST = ['AbortController', 'AbortSignal', 'PerformanceObserver', 'Response', 'URL', 'URLSearchParams', 'clearInterval',
   'clearTimeout', 'console', 'fetch', 'setInterval', 'setTimeout'];
 // Node only: real globals, plus the CommonJS wrapper's parameters — which are
 // NOT globals at all; they are verified through this module's own wrapper.
