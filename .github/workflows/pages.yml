@@ -3,6 +3,11 @@
 # server/ or legal/ is ever in it (test/pages.test.js pins that). The mirror
 # talks to the real backend named in the build (CONVOY_BACKEND, default
 # https://odoreeci.tech) — see DEPLOY.md, "GitHub Pages mirror".
+#
+# Publishing goes through the classic gh-pages branch: the build is committed
+# there and GitHub Pages serves it (Settings → Pages shows the URL). This needs
+# no Pages API permission (the Actions-source path does, and the workflow token
+# cannot create the site), only `contents: write`.
 name: GitHub Pages
 
 on:
@@ -19,16 +24,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  build:
+  publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -42,21 +45,16 @@ jobs:
       - name: Prove nothing pack-only is in it
         run: |
           test ! -e _site/packs && test ! -e _site/server && test ! -e _site/legal
-          ! grep -rl "packs/" _site/js/packs.js >/dev/null || true
           ls _site
-      - uses: actions/configure-pages@v5
-        with:
-          enablement: true
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Publish _site to the gh-pages branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd _site
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Pages mirror of ${GITHUB_REF_NAME} @ ${GITHUB_SHA}"
+          git push --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
+          echo "Published https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}/"

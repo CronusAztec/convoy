@@ -845,11 +845,11 @@ What it is and is not:
   `WS_ORIGINS=odoreeci.tech,www.odoreeci.tech,cronusaztec.github.io` in the
   unit's environment, then a restart — the mirror runs in **solo mode**
   (simulated riders, no live map). Everything else works.
-- First run: GitHub Pages must have **Source: GitHub Actions** (Settings →
-  Pages). The workflow asks for that itself (`configure-pages` with
-  `enablement: true`); if the token is not allowed to, set it once by hand and
-  re-run. The `github-pages` environment may also restrict which branches may
-  deploy — allow the branch, or merge to `main`.
+- Publishing goes through the classic `gh-pages` branch: the workflow commits
+  the build there (force-pushed, history is not kept) and GitHub Pages serves
+  it from the branch root. GitHub enables the site on the first `gh-pages`
+  push; if Settings → Pages shows no source, pick **Deploy from a branch →
+  gh-pages / (root)** once. The URL is `https://<owner>.github.io/<repo>/`.
 
 ## Heads-up (current limitations)
 

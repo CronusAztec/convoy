@@ -81,8 +81,9 @@ group('G3 — the client honours the tag; the workflow publishes the build');
   ok('without the tag (the server page): base \'\' and a same-origin socket', server.base === '' && server.wsUrl === null);
   ok('with the tag (the mirror): base is the backend origin, the socket is wss on it', mirror.base === 'https://odoreeci.tech' && mirror.wsUrl === 'wss://odoreeci.tech/ws');
   const wf = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'pages.yml'), 'utf8');
-  ok('the workflow builds with scripts/build-pages.js, uploads _site and deploys with the Pages actions',
-    /run: node scripts\/build-pages\.js/.test(wf) && /upload-pages-artifact@v3[\s\S]*path: _site/.test(wf) && /deploy-pages@v4/.test(wf) && /pages: write/.test(wf) && /id-token: write/.test(wf));
+  ok('the workflow builds with scripts/build-pages.js and publishes _site to the gh-pages branch with the workflow token only',
+    /run: node scripts\/build-pages\.js/.test(wf) && /git init -q -b gh-pages/.test(wf) && /git push --force "https:\/\/x-access-token:\$\{GITHUB_TOKEN\}@github\.com\/\$\{GITHUB_REPOSITORY\}\.git" gh-pages/.test(wf) &&
+    /permissions:\n  contents: write/.test(wf) && !/pages: write/.test(wf) && !/deploy-pages/.test(wf));
   ok('the workflow proves no packs/, server/ or legal/ made it into the artifact', /test ! -e _site\/packs && test ! -e _site\/server && test ! -e _site\/legal/.test(wf));
   ok('_site/ is gitignored', /^_site\/$/m.test(fs.readFileSync(path.join(ROOT, '.gitignore'), 'utf8')));
   const copy = fs.readFileSync(path.join(ROOT, 'scripts', 'copy-web.js'), 'utf8');
