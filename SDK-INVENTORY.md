@@ -120,13 +120,17 @@ Listed in full, with terms, in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
 and disclosed in privacy §5.
 
 *Pack-only* (never contacted unless the account holds the pack and the feature
-is switched on; disclosed in privacy §5): `api.openmhz.com` (scanner audio;
-sees the approximate position), `api.open-meteo.com` (weather at the
-position), RainViewer weather tiles (the map area), and — through our server,
-so the device's IP never reaches them — OpenSky (aircraft), the OpenStreetMap
-Overpass service (police stations), OpenWeb Ninja/Waze and TomTom (traffic and
-incidents) for the area around the rider. The core build makes none of these
-requests.
+is switched on; disclosed in privacy §5): `api.openmhz.com` + `media.openmhz.com`
+(scanner directory and audio clips; the directory query carries the US state the
+rider is in), `nominatim.openstreetmap.org` (the scanner pack's reverse
+geocode, the same host the core uses for search), `api.open-meteo.com` (weather
+at the position and at a route's destination), `api.rainviewer.com` +
+`tilecache.rainviewer.com` (radar frames and tiles for the map area),
+`api.weather.gov` (NWS alerts for the map centre, US only), and — through our
+server, so the device's IP never reaches them — OpenSky (aircraft), the
+OpenStreetMap Overpass service (police stations and cameras), OpenWeb Ninja/Waze
+(live police) and TomTom (traffic flow and incidents) for the area around the
+rider. The core build makes none of these requests.
 
 ## 6. Server-side processors
 
