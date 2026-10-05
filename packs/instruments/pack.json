@@ -1,0 +1,10 @@
+{
+  "id": "instruments",
+  "title": "Instrument panel",
+  "blurb": "Speedometer, compass, clock and sun times, tripmeter, g-meter, weather now, battery, coordinates, destination arrow, overspeed alert, night dimmer, a drive log, saved places and a parking pin.",
+  "legal": null,
+  "order": 50,
+  "scripts": ["hud.js", "speedo.js", "compass.js", "clock.js", "tripmeter.js", "gmeter.js", "weathernow.js", "battery.js", "coords.js", "destarrow.js", "speedalert.js", "dimmer.js", "triplog.js", "places.js", "tripextras.js", "ui.js"],
+  "styles": ["instruments.css"],
+  "fragments": [{ "file": "controls.html", "mount": "#ctl-global", "position": "after" }]
+}

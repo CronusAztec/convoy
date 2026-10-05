@@ -1,0 +1,149 @@
+/* Convoy — instruments pack. Restored from css/styles.css (pre-cut tree):
+   speedometer, the HUD rail and its cards, parking pin, ETA-card extras, drive
+   log, night dimmer, overspeed banner. Every instrument is hidden unless the
+   account holds the pack (body.pack-instruments, set by ui.js), and every
+   font sits on the 12px floor. The cards use the core's .glass surface, so
+   the blur budget stays the theme's. */
+body:not(.pack-instruments) .speedo,
+body:not(.pack-instruments) #hud-rail,
+body:not(.pack-instruments) .night-dim,
+body:not(.pack-instruments) .overspeed-banner,
+body:not(.pack-instruments) .m-park,
+body:not(.pack-instruments) #ctl-park { display: none !important; }
+
+/* ---- speedometer (speedo.js) ---- */
+.speedo {
+  position: fixed;
+  left: 14px; bottom: 46px;
+  z-index: 6;
+  min-width: 88px;
+  padding: 8px 12px 7px;
+  text-align: center;
+  cursor: pointer;
+  border-radius: var(--radius);
+  user-select: none;
+  -webkit-user-select: none;
+}
+.speedo b { display: block; font: 700 26px/1 var(--font-mono); color: var(--text); letter-spacing: .02em; }
+.speedo span { display: block; font: 600 12px var(--font-body); color: var(--accent); letter-spacing: .12em; text-transform: uppercase; margin-top: 2px; }
+.speedo i { display: block; font: 400 12px var(--font-mono); font-style: normal; color: var(--text-dim); margin-top: 3px; white-space: nowrap; }
+@media (max-width: 760px) {
+  .speedo { bottom: calc(88px + env(safe-area-inset-bottom, 0px)); }
+  body:has(#eta-card.show) .speedo { bottom: calc(160px + env(safe-area-inset-bottom, 0px)); }
+  body:has(#race-hud.show) .speedo { display: none; }
+  body:has(#race-hud.show) #hud-rail { display: none; }
+}
+@media (max-height: 460px) {
+  .speedo, #hud-rail { display: none; }
+}
+
+/* ---- parking pin (places.js) ---- */
+.m-park {
+  width: 26px; height: 26px;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff;
+  background: #2f6df6;
+  border: 2px solid rgba(255, 255, 255, .92);
+  border-radius: 7px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .45);
+  cursor: pointer;
+}
+.ctl-park.active { color: var(--accent); box-shadow: var(--glow-sm); }
+.park-popup b { display: block; font: 700 13px var(--font-disp); }
+.park-popup i { display: block; font-style: normal; font-size: 12px; color: var(--text-dim); margin: 2px 0 8px; }
+.park-actions { display: flex; gap: 6px; }
+
+/* ---- ETA-card extras (tripextras.js) ---- */
+.eta-wx { font: 500 12px var(--font-body); color: var(--text-dim); margin-top: 3px; }
+#eta-save.saved { color: var(--warn); }
+
+/* ---- drive log + saved places (profile page) ---- */
+.drive-log, .saved-places { display: flex; flex-direction: column; gap: 6px; }
+.dl-odo { font: 600 12px var(--font-body); color: var(--text); }
+.dl-odo b { color: var(--accent); font: 700 14px var(--font-mono); }
+.dl-empty { color: var(--text-dim); font-size: 12px; }
+.dl-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.dl-main { flex: 1; min-width: 0; }
+.dl-main b { display: block; font: 600 12px var(--font-body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dl-main i { display: block; font-style: normal; font: 400 12px var(--font-mono); color: var(--text-dim); margin-top: 2px; }
+.dl-clear { align-self: flex-start; margin-top: 2px; }
+
+/* ---- the HUD rail (hud.js) ---- */
+.hud-rail {
+  position: fixed;
+  top: calc(88px + env(safe-area-inset-top, 0px)); right: 70px;
+  z-index: 6;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+  max-height: calc(100vh - 340px);
+  overflow-y: auto;
+  pointer-events: none;
+  scrollbar-width: none; -ms-overflow-style: none;
+}
+.hud-rail::-webkit-scrollbar { display: none; }
+@media (max-height: 560px) { .hud-rail { top: calc(112px + env(safe-area-inset-top, 0px)); } }
+@media (max-width: 760px) {
+  .hud-rail { top: calc(128px + env(safe-area-inset-top, 0px)); right: 62px; max-height: calc(100vh - 430px); }
+}
+.hud-coords .hc-v { white-space: nowrap; }
+.hud-card {
+  pointer-events: auto;
+  min-width: 96px;
+  padding: 7px 11px 6px;
+  border-radius: var(--radius);
+  text-align: center;
+  line-height: 1.15;
+  user-select: none; -webkit-user-select: none;
+  contain: layout style;
+}
+.hud-card .hc-v { display: block; font: 700 18px/1 var(--font-mono); color: var(--text); letter-spacing: .02em; }
+.hud-card .hc-l { display: block; font: 600 12px var(--font-body); color: var(--accent); letter-spacing: .1em; text-transform: uppercase; margin-top: 3px; }
+.hud-card .hc-s { display: block; font: 400 12px var(--font-mono); font-style: normal; color: var(--text-dim); margin-top: 3px; white-space: nowrap; }
+.hud-compass .cmp-needle { display: block; margin: 0 auto 2px; transition: transform 180ms var(--ease); }
+.hud-dest .dest-arrow { display: block; margin: 0 auto 2px; transition: transform 180ms var(--ease); }
+.hud-gmeter .gm-ring {
+  position: relative;
+  width: 58px; height: 58px; margin: 1px auto 3px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: radial-gradient(circle, rgba(127,127,127,.08), transparent 70%);
+}
+.hud-gmeter .gm-cross-h, .hud-gmeter .gm-cross-v { position: absolute; background: var(--line); }
+.hud-gmeter .gm-cross-h { left: 6px; right: 6px; top: 50%; height: 1px; }
+.hud-gmeter .gm-cross-v { top: 6px; bottom: 6px; left: 50%; width: 1px; }
+.hud-gmeter .gm-dot {
+  position: absolute; left: 50%; top: 50%;
+  width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  transition: transform 120ms linear;
+}
+
+/* ---- night dimmer (dimmer.js): over the map, below all chrome ---- */
+.night-dim { position: fixed; inset: 0; z-index: 4; background: #000; pointer-events: none; transition: opacity 400ms var(--ease); }
+
+/* ---- overspeed banner (speedalert.js) ---- */
+.overspeed-banner {
+  position: fixed;
+  top: calc(132px + env(safe-area-inset-top, 0px)); left: 50%;
+  transform: translate(-50%, -12px);
+  z-index: 9;
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: rgba(220, 38, 38, .92);
+  border: 1px solid rgba(255, 255, 255, .35);
+  box-shadow: 0 6px 22px rgba(220, 38, 38, .5);
+  color: #fff;
+  opacity: 0; pointer-events: none;
+  transition: opacity 200ms var(--ease), transform 200ms var(--ease);
+}
+.overspeed-banner.on { opacity: 1; transform: translate(-50%, 0); }
+.overspeed-banner b { font: 800 12px var(--font-body); letter-spacing: .1em; }
+.overspeed-banner span { font: 700 13px var(--font-mono); }
