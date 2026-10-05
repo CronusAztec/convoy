@@ -217,7 +217,10 @@ for (const id of ids) {
 group('P6 — nothing under packs/ is referenced by what ships');
 {
   const shipped = ['index.html'].concat(listFiles(path.join(ROOT, 'js'), (f) => f.endsWith('.js')).map(rel), listFiles(path.join(ROOT, 'css'), (f) => f.endsWith('.css')).map(rel));
-  const refs = shipped.filter((f) => f !== 'js/packs.js' && /['"(]\/?packs\//.test(fs.readFileSync(path.join(ROOT, f), 'utf8')));
+  // Code only (comments stripped): a comment may well SAY "packs/<id>/*.css";
+  // what must never exist is a URL, a src/href or a string literal naming one.
+  const strip = (t) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+  const refs = shipped.filter((f) => f !== 'js/packs.js' && /(src|href)=["']\/?packs\/|url\(\s*["']?\/?packs\/|['"`]\/?packs\/[\w-]+\/[\w.-]+['"`]/.test(strip(fs.readFileSync(path.join(ROOT, f), 'utf8'))));
   ok('no shipped file names a packs/ path (' + shipped.length + ' files checked)', refs.length === 0, refs.join(', '));
   const copy = fs.readFileSync(path.join(ROOT, 'scripts', 'copy-web.js'), 'utf8');
   ok("scripts/copy-web.js still bundles only index.html/js/css/fonts", /const targets = \['index\.html', 'js', 'css', 'fonts'\];/.test(copy));
