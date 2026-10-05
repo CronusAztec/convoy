@@ -679,6 +679,7 @@
       tick();
       // The tick drives the sonar (audio), so it stays a plain interval: a
       // hidden page must keep pinging a rider whose phone is in a pocket.
+      // hidden-page poller: the tick drives the sonar audio, which must not pause with the screen off
       if (!timer) timer = setInterval(tick, TICK_MS);
       var ms = map();
       if (ms) { ms.on('move', positionSweep); ms.on('render', positionSweep); }

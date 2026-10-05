@@ -197,6 +197,7 @@
       }).catch(function () {});
 
     pollCalls(true);
+    // hidden-page poller: live scanner audio must keep streaming with the screen off (U.poll would pause it)
     P.poll = setInterval(function () { pollCalls(false); }, POLL_MS);
   }
 
